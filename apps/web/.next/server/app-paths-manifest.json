@@ -1,0 +1,8 @@
+{
+  "/api/reservations/rooms/route": "app/api/reservations/rooms/route.js",
+  "/app/cadastros/page": "app/app/cadastros/page.js",
+  "/app/cadastros/localidades/page": "app/app/cadastros/localidades/page.js",
+  "/app/page": "app/app/page.js",
+  "/app/cadastros/hospedes/page": "app/app/cadastros/hospedes/page.js",
+  "/app/cadastros/apartamentos/page": "app/app/cadastros/apartamentos/page.js"
+}

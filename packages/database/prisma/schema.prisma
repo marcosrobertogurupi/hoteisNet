@@ -1,0 +1,591 @@
+// Prisma Schema for HoteisNet PMS SaaS
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// SAAS PLATFORM MASTER & MULTI-TENANCY
+// ----------------------------------------------------
+
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  OVERDUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  TENANT_ADMIN
+  RECEPCIONIST
+  GOVERNESS
+  FINANCIAL
+}
+
+model SaaSPlan {
+  id            String             @id @default(uuid())
+  name          String             @unique
+  description   String?
+  priceMonthly  Decimal            @db.Decimal(10, 2)
+  maxRooms      Int
+  maxUsers      Int
+  aiTokenQuota  Int                @default(50000)
+  active        Boolean            @default(true)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  subscriptions SaASSubscription[]
+
+  @@map("saas_plans")
+}
+
+model Tenant {
+  id              String             @id @default(uuid())
+  name            String
+  tradeName       String?
+  cnpj            String?            @unique
+  cadastur        String?
+  status          TenantStatus       @default(TRIAL)
+  email           String
+  phone           String?
+  city            String?
+  state           String?
+  address         String?
+  zipCode         String?
+  logoUrl         String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  users           User[]
+  rooms           Room[]
+  roomCategories  RoomCategory[]
+  guests          Guest[]
+  companies       Company[]
+  reservations    Reservation[]      @relation("TenantReservations")
+  checkins        StayCheckin[]
+  cashRegisters   CashRegister[]     @relation("TenantCashRegisters")
+  products        Product[]
+  posLocations    POSLocation[]
+  subscriptions   SaASSubscription[]
+  aiUsageLogs     AIUsageLog[]
+  activityLogs    TenantActivityLog[]
+  supportTickets  SupportTicket[]
+  uazapiSettings  UazapiSetting?
+  emailSettings   EmailSetting?
+  tariffs         Tariff[]
+  accountPlans    AccountPlan[]
+  suppliers       Supplier[]
+
+  @@map("tenants")
+}
+
+model SaASSubscription {
+  id           String       @id @default(uuid())
+  tenantId     String
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  planId       String
+  plan         SaaSPlan     @relation(fields: [planId], references: [id])
+  startDate    DateTime     @default(now())
+  nextBilling  DateTime
+  amount       Decimal      @db.Decimal(10, 2)
+  active       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@map("saas_subscriptions")
+}
+
+model User {
+  id          String        @id @default(uuid())
+  tenantId    String?
+  tenant      Tenant?       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email       String        @unique
+  name        String
+  role        UserRole      @default(RECEPCIONIST)
+  avatarUrl   String?
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  sentTickets SupportTicket[] @relation("TicketAuthor")
+
+  @@map("users")
+}
+
+model AIUsageLog {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  feature      String
+  tokensInput  Int
+  tokensOutput Int
+  totalCostUsd Decimal  @db.Decimal(10, 6)
+  createdAt    DateTime @default(now())
+
+  @@map("ai_usage_logs")
+}
+
+model TenantActivityLog {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  action     String
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  @@map("tenant_activity_logs")
+}
+
+// ----------------------------------------------------
+// AI SUPPORT & TICKETING SYSTEM (RAG)
+// ----------------------------------------------------
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  AI_ANSWERED
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model SupportTicket {
+  id           String          @id @default(uuid())
+  tenantId     String
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  authorId     String
+  author       User            @relation("TicketAuthor", fields: [authorId], references: [id])
+  subject      String
+  category     String
+  priority     TicketPriority  @default(MEDIUM)
+  status       TicketStatus    @default(OPEN)
+  aiResolved   Boolean         @default(false)
+  confidence   Float?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  messages     TicketMessage[]
+
+  @@map("support_tickets")
+}
+
+model TicketMessage {
+  id         String        @id @default(uuid())
+  ticketId   String
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderType String
+  senderName String
+  content    String
+  createdAt  DateTime      @default(now())
+
+  @@map("ticket_messages")
+}
+
+model SupportKnowledgeBase {
+  id         String   @id @default(uuid())
+  title      String
+  category   String
+  question   String
+  resolution String
+  verified   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("support_knowledge_base")
+}
+
+// ----------------------------------------------------
+// PMS HOTEL CORE (ROOMS, GUESTS, FNRH & CORPORATE)
+// ----------------------------------------------------
+
+enum RoomStatus {
+  VACANT_CLEAN
+  VACANT_DIRTY
+  OCCUPIED
+  MAINTENANCE
+}
+
+model RoomCategory {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  dailyPrice  Decimal  @db.Decimal(10, 2)
+  capacity    Int
+  description String?
+  rooms       Room[]
+
+  @@map("room_categories")
+}
+
+model Room {
+  id            String       @id @default(uuid())
+  tenantId      String
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categoryId    String
+  category      RoomCategory @relation(fields: [categoryId], references: [id])
+  number        String
+  floor         String?
+  status        RoomStatus   @default(VACANT_CLEAN)
+  notes         String?
+  reservations  Reservation[]
+  checkins      StayCheckin[]
+
+  @@map("rooms")
+}
+
+model Company {
+  id            String    @id @default(uuid())
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  tradeName     String?
+  cnpj          String
+  email         String?
+  phone         String?
+  address       String?
+  city          String?
+  state         String?
+  creditLimit   Decimal?  @db.Decimal(10, 2)
+  paymentTerms  Int       @default(15)
+  guests        Guest[]   @relation("GuestCompanyLink")
+  invoices      CorporateInvoice[]
+
+  @@map("companies")
+}
+
+model Guest {
+  id             String             @id @default(uuid())
+  tenantId       String
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  companyId      String?
+  company        Company?           @relation("GuestCompanyLink", fields: [companyId], references: [id])
+  fullName       String
+  cpf            String?
+  passport       String?
+  birthDate      DateTime?
+  gender         String?
+  email          String?
+  phone          String?
+  whatsappPhone  String?
+  nomeUsuarioWpp String?
+  whatsappName   String?
+  hasWhatsapp    Boolean            @default(false)
+  zipCode        String?
+  street         String?
+  number         String?
+  city           String?
+  state          String?
+  country        String             @default("Brasil")
+  fnrhRecords    FNRHRecord[]
+  checkins       StayCheckin[]
+
+  @@map("guests")
+}
+
+// ----------------------------------------------------
+// FNRH (FICHA NACIONAL DE REGISTRO DE HÓSPEDES)
+// ----------------------------------------------------
+
+model FNRHRecord {
+  id                 String       @id @default(uuid())
+  guestId            String
+  guest              Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  stayCheckinId      String?
+  stayCheckin        StayCheckin? @relation(fields: [stayCheckinId], references: [id])
+  travelReason       String
+  transportMode      String
+  lastOriginCity     String
+  lastOriginState    String
+  lastOriginCountry  String       @default("Brasil")
+  nextDestinationCity String
+  nextDestinationState String
+  nextDestinationCountry String   @default("Brasil")
+  signatureUrl       String?
+  transmittedSNRHos  Boolean      @default(false)
+  transmittedAt      DateTime?
+  createdAt          DateTime     @default(now())
+
+  @@map("fnrh_records")
+}
+
+// ----------------------------------------------------
+// RESERVATIONS & CHECK-IN
+// ----------------------------------------------------
+
+enum ReservationStatus {
+  PRE_RESERVATION
+  CONFIRMED
+  CHECKED_IN
+  CANCELLED
+  NO_SHOW
+}
+
+model Reservation {
+  id              String            @id @default(uuid())
+  tenantId        String
+  tenant          Tenant            @relation("TenantReservations", fields: [tenantId], references: [id], onDelete: Cascade)
+  roomId          String
+  room            Room              @relation(fields: [roomId], references: [id])
+  guestName       String
+  guestPhone      String?
+  checkInDate     DateTime
+  checkOutDate    DateTime
+  totalAmount     Decimal           @db.Decimal(10, 2)
+  depositPaid     Decimal           @default(0) @db.Decimal(10, 2)
+  status          ReservationStatus @default(PRE_RESERVATION)
+  preCheckinSent  Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+
+  @@map("reservations")
+}
+
+model StayCheckin {
+  id              String            @id @default(uuid())
+  tenantId        String
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roomId          String
+  room            Room              @relation(fields: [roomId], references: [id])
+  primaryGuestId  String
+  primaryGuest    Guest             @relation(fields: [primaryGuestId], references: [id])
+  checkInDate     DateTime          @default(now())
+  expectedCheckOut DateTime
+  actualCheckOut  DateTime?
+  billingType     String            @default("DIRECT")
+  totalDaily      Decimal           @db.Decimal(10, 2)
+  totalConsumption Decimal          @default(0) @db.Decimal(10, 2)
+  isClosed        Boolean           @default(false)
+  fnrhRecords     FNRHRecord[]
+  consumptions    StayConsumption[]
+
+  @@map("stay_checkins")
+}
+
+model StayConsumption {
+  id            String      @id @default(uuid())
+  stayCheckinId String
+  stayCheckin   StayCheckin @relation(fields: [stayCheckinId], references: [id], onDelete: Cascade)
+  productName   String
+  quantity      Int
+  unitPrice     Decimal     @db.Decimal(10, 2)
+  totalPrice    Decimal     @db.Decimal(10, 2)
+  createdAt     DateTime    @default(now())
+
+  @@map("stay_consumptions")
+}
+
+model CorporateInvoice {
+  id           String    @id @default(uuid())
+  companyId    String
+  company      Company   @relation(fields: [companyId], references: [id])
+  invoiceNumber String   @unique
+  totalAmount  Decimal   @db.Decimal(10, 2)
+  dueDate      DateTime
+  isPaid       Boolean   @default(false)
+  paidAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@map("corporate_invoices")
+}
+
+// ----------------------------------------------------
+// MULTI-POINT STOCK & POS (ESTOQUE GERAL X ESTOQUE PDV)
+// ----------------------------------------------------
+
+model POSLocation {
+  id           String            @id @default(uuid())
+  tenantId     String
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String            // e.g. "Almoxarifado Geral", "Recepção", "Almoxarifado Frigobar", "Restaurante Central", "Bar da Piscina"
+  isCentral    Boolean           @default(false)
+  stocks       POSProductStock[]
+  transfersTo  StockTransfer[]   @relation("TransferToPOS")
+
+  @@map("pos_locations")
+}
+
+model Product {
+  id            String            @id @default(uuid())
+  tenantId      String
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  barcode       String?
+  category      String
+  costPrice     Decimal           @db.Decimal(10, 2)
+  salePrice     Decimal           @db.Decimal(10, 2)
+  generalStock  Int               @default(0) // Estoque Geral / Almoxarifado Central
+  minStock      Int               @default(5)
+  imageUrl      String?
+  posStocks     POSProductStock[]
+  transfers     StockTransfer[]
+
+  @@map("products")
+}
+
+model POSProductStock {
+  id            String      @id @default(uuid())
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  posLocationId String
+  posLocation   POSLocation @relation(fields: [posLocationId], references: [id], onDelete: Cascade)
+  currentStock  Int         @default(0) // Estoque específico no Ponto de Venda
+
+  @@unique([productId, posLocationId])
+  @@map("pos_product_stocks")
+}
+
+model StockTransfer {
+  id              String      @id @default(uuid())
+  productId       String
+  product         Product     @relation(fields: [productId], references: [id])
+  toPosLocationId String
+  toPosLocation   POSLocation @relation("TransferToPOS", fields: [toPosLocationId], references: [id])
+  quantity        Int
+  transferredBy   String
+  createdAt       DateTime    @default(now())
+
+  @@map("stock_transfers")
+}
+
+model CashRegister {
+  id             String            @id @default(uuid())
+  tenantId       String
+  tenant         Tenant            @relation("TenantCashRegisters", fields: [tenantId], references: [id], onDelete: Cascade)
+  operatorName   String
+  openingBalance Decimal           @db.Decimal(10, 2)
+  closingBalance Decimal?          @db.Decimal(10, 2)
+  openedAt       DateTime          @default(now())
+  closedAt       DateTime?
+  isOpen         Boolean           @default(true)
+  transactions   CashTransaction[]
+
+  @@map("cash_registers")
+}
+
+model CashTransaction {
+  id             String       @id @default(uuid())
+  cashRegisterId String
+  cashRegister   CashRegister @relation(fields: [cashRegisterId], references: [id], onDelete: Cascade)
+  type           String
+  amount         Decimal      @db.Decimal(10, 2)
+  description    String
+  paymentMethod  String
+  createdAt      DateTime     @default(now())
+
+  @@map("cash_transactions")
+}
+
+// ----------------------------------------------------
+// UAZAPI WHATSAPP INTEGRATION
+// ----------------------------------------------------
+
+model UazapiSetting {
+  id         String   @id @default(uuid())
+  tenantId   String   @unique
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instanceId String
+  token      String
+  connected  Boolean  @default(false)
+  qrCodeUrl  String?
+  updatedAt  DateTime @updatedAt
+
+  @@map("uazapi_settings")
+}
+
+// ----------------------------------------------------
+// EMAIL INTEGRATION & SMTP CONFIGURATION
+// ----------------------------------------------------
+
+model EmailSetting {
+  id                        String   @id @default(uuid())
+  tenantId                  String   @unique
+  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  smtpHost                  String   @default("smtp.gmail.com")
+  smtpPort                  Int      @default(587)
+  smtpSecure                String   @default("tls") // tls | ssl | none
+  smtpUser                  String   @default("")
+  smtpPass                  String   @default("")
+  fromName                  String   @default("Pousada Sol & Mar - Reservas")
+  fromEmail                 String   @default("reserva@pousada.com.br")
+  footerText                String?
+  sendVoucherEnabled        Boolean  @default(true)
+  sendReceiptEnabled        Boolean  @default(true)
+  sendPaymentConfirmEnabled Boolean  @default(true)
+  updatedAt                 DateTime @updatedAt
+
+  @@map("email_settings")
+}
+
+// ----------------------------------------------------
+// TARIFFS & PRICE TABLES (CADASTRO DE TARIFAS)
+// ----------------------------------------------------
+
+model Tariff {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  adults    Int      @default(1)
+  price     Decimal  @db.Decimal(10, 2)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("tariffs")
+}
+
+// ----------------------------------------------------
+// CHART OF ACCOUNTS / PLANO DE CONTAS
+// ----------------------------------------------------
+
+model AccountPlan {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code        String   // e.g. "01.01.01.01"
+  description String   // e.g. "SALARIO"
+  type        String   // "DESPESA" | "RECEITA"
+  level       String?  // "Sintética" | "Analítica"
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, code])
+  @@map("account_plans")
+}
+
+// ----------------------------------------------------
+// SUPPLIERS / CADASTRO DE FORNECEDORES
+// ----------------------------------------------------
+
+model Supplier {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String   // Razão Social
+  tradeName   String?  // Nome Fantasia
+  cnpj        String?  // CNPJ / CPF
+  email       String?
+  phone       String?
+  category    String?  // Categoria de fornecimento (ex: Alimentos, Limpeza)
+  city        String?
+  state       String?
+  address     String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("suppliers")
+}
+
+
+
