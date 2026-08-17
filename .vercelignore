@@ -1,0 +1,53 @@
+# Legacy WinDev reference project (not part of the app, thousands of files)
+PROJETO WINDEV/
+Exemplo de impressao/
+
+# Large reference documents not needed for deploy
+*.pdf
+
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# testing
+coverage/
+
+# next.js
+.next/
+out/
+build/
+dist/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# local agent config
+.claude/
+.agents/
+
+# turbo
+.turbo/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# skills (dev tooling, not app code)
+skills/
+
+# git
+.git/
