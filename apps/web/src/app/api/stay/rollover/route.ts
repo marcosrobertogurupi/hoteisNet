@@ -3,13 +3,31 @@ import { prisma } from "@/lib/prisma";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
+// Ancora a meia-noite local de Brasília (UTC-3, sem horário de verão desde 2019) de forma
+// independente do fuso horário do processo Node — em produção (Vercel) o servidor roda em UTC,
+// então usar getFullYear/getMonth/getDate (fuso do processo) gerava referenceDate 3h adiantado
+// em relação ao que era criado em ambiente local, fazendo a diária aparecer no dia errado.
 function dateOnly(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const brDateStr = d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const [y, m, day] = brDateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, day, 3, 0, 0));
 }
 
 function parseLimitTime(limitTime?: string | null) {
   const [h, m] = (limitTime || "14:30").split(":").map(Number);
   return { h: Number.isFinite(h) ? h : 14, m: Number.isFinite(m) ? m : 30 };
+}
+
+function nowBrazilHM(now: Date) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return { h, m };
 }
 
 // POST /api/stay/rollover
@@ -43,7 +61,8 @@ export async function POST(req: NextRequest) {
 
     for (const stay of stays) {
       const { h, m } = parseLimitTime(stay.tenant?.dailyRolloverTime);
-      const limitPassedToday = now.getHours() > h || (now.getHours() === h && now.getMinutes() >= m);
+      const nowHM = nowBrazilHM(now);
+      const limitPassedToday = nowHM.h > h || (nowHM.h === h && nowHM.m >= m);
 
       const lastRollover = dateOnly(stay.lastRolloverDate);
       let daysLate = Math.floor((today.getTime() - lastRollover.getTime()) / 86400000);
@@ -64,7 +83,7 @@ export async function POST(req: NextRequest) {
       let addedAmount = 0;
       for (let i = 1; i <= daysLate; i++) {
         const refDate = new Date(lastRollover);
-        refDate.setDate(refDate.getDate() + i);
+        refDate.setUTCDate(refDate.getUTCDate() + i);
         try {
           await prisma.stayCharge.create({
             data: {
@@ -84,7 +103,7 @@ export async function POST(req: NextRequest) {
 
       if (addedCount > 0) {
         const newLastRollover = new Date(lastRollover);
-        newLastRollover.setDate(newLastRollover.getDate() + daysLate);
+        newLastRollover.setUTCDate(newLastRollover.getUTCDate() + daysLate);
 
         await prisma.stayCheckin.update({
           where: { id: stay.id },
