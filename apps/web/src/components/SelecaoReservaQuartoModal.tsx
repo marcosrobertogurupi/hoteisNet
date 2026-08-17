@@ -24,8 +24,17 @@ export interface ReservaItemQuarto {
   id: string;
   reservationNumber?: string;
   guestName: string;
+  guestCpf?: string;
   cpf?: string;
   phone?: string;
+  email?: string;
+  birthDate?: string;
+  gender?: string;
+  motherName?: string;
+  fatherName?: string;
+  identity?: string;
+  fullAddress?: string;
+  address?: string;
   checkInDate: string;
   checkOutDate: string;
   checkInTime?: string;
@@ -38,6 +47,11 @@ export interface ReservaItemQuarto {
   tariffName?: string;
   notes?: string;
   company?: string;
+  adults?: number;
+  children?: number;
+  observations?: any[];
+  payments?: any[];
+  roomNumber?: string;
 }
 
 interface SelecaoReservaQuartoModalProps {

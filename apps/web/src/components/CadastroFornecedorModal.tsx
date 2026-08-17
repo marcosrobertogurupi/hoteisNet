@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { X, Truck, MapPin, Check } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
 
 export interface FornecedorFormData {
   id?: string;
@@ -36,6 +37,7 @@ export default function CadastroFornecedorModal({
 }: CadastroFornecedorModalProps) {
   const { theme } = useTheme();
   const isDark = theme.isDark;
+  const toast = useToast();
 
   const [formData, setFormData] = useState<FornecedorFormData>({
     cnpjCpf: "",
@@ -80,7 +82,7 @@ export default function CadastroFornecedorModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.razao.trim()) {
-      alert("Por favor, preencha o Nome/Razão Social do Fornecedor.");
+      toast.warning("Por favor, preencha o Nome/Razão Social do Fornecedor.");
       return;
     }
     onSave(formData);

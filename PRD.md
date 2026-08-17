@@ -1,8 +1,14 @@
 # Product Requirement Document (PRD) — HoteisNet PMS SaaS
 
-**Versão:** 1.0.0  
-**Data:** 11 de Agosto de 2026  
-**Status:** Documento Oficial de Referência do Projeto  
+**Versão:** 1.1.0
+**Data:** 15 de Agosto de 2026
+**Status:** Documento Oficial de Referência do Projeto — **atualizado a cada alteração relevante no sistema** (ver regra em `.agents/AGENTS.md`)
+
+### Legenda de Status de Implementação
+Cada funcionalidade abaixo é marcada com o status real observado no código-fonte, não apenas o planejado:
+* ✅ **Implementado e funcional** — conectado ao banco de dados (Prisma/Supabase) ou a uma integração externa real, sem dados mockados.
+* 🟡 **Protótipo de UI (mock)** — tela existe e é navegável, porém funciona com dados/estado local (hardcoded) e não está conectada a nenhuma API real. Viola a regra de "Proibição de Dados Mockados" e precisa ser finalizada.
+* ⏳ **Planejado / não iniciado** — consta no roadmap ou na documentação, mas ainda não há código correspondente (nem tela, nem rota, nem modelo usado).
 
 ---
 
@@ -20,9 +26,9 @@ O **HoteisNet PMS SaaS** é uma plataforma moderna de Gestão Hoteleira (Propert
 ### 1.3. Stack Tecnológico
 * **Estrutura Monorepo:** Turborepo com workspaces (`apps/web`, `apps/api`, `packages/database`).
 * **Frontend Web:** Next.js 15 (App Router), React 19, TypeScript, TailwindCSS, Lucide Icons.
-* **Backend API:** Node.js, Express, TypeScript, Zod.
-* **Banco de Dados & ORM:** PostgreSQL / Supabase, Prisma ORM com suporte nativo a Multi-Tenancy.
-* **Integrações Externas:** Uazapi WhatsApp API, Ministério do Turismo (SNRHos), OpenAI/Gemini para RAG.
+* **Backend API:** Rotas de API do Next.js (`apps/web/src/app/api/*`) sobre Prisma; existe também um workspace Express legado (`apps/api`) em migração.
+* **Banco de Dados & ORM:** PostgreSQL / Supabase, Prisma ORM com suporte nativo a Multi-Tenancy. Algumas rotas legadas (`api/reservations/tariffs`) ainda acessam o Supabase diretamente em paralelo ao Prisma — pendência de unificação.
+* **Integrações Externas:** Uazapi WhatsApp API ✅, Hub do Desenvolvedor (consulta de CPF/Receita Federal) ✅, SMTP via Nodemailer ✅, Ministério do Turismo (SNRHos) ⏳, OpenAI/Gemini para RAG ⏳.
 
 ---
 
@@ -31,18 +37,26 @@ O **HoteisNet PMS SaaS** é uma plataforma moderna de Gestão Hoteleira (Propert
 ### 2.1. Isolamento de Dados por Tenant
 Todas as entidades do banco de dados operacionais (apartamentos, categorias, reservas, check-ins, hóspedes, produtos, caixas, movimentações) contêm o campo obrigatório `tenantId`. O middleware de banco garante que nenhuma consulta cruze dados entre clientes SaaS distintos.
 
-### 2.2. Perfis de Usuários (User Roles)
+### 2.2. Autenticação e Sessão ✅
+* Login por e-mail/senha validado contra `prisma.User` (senha com hash), com emissão de um JWT assinado (`jose`) armazenado em cookie de sessão `httpOnly`.
+* Um segundo cookie, não-`httpOnly`, identifica o terminal/estação de atendimento para fins de auditoria (ex.: "RECEPÇÃO 01").
+* `/api/auth/me` decodifica a sessão no servidor e retorna o usuário autenticado com uma flag `isAdmin`; `/api/auth/logout` limpa a sessão.
+* Todo login/logout gera um registro em `AuditLog` com terminal e IP de origem.
+
+### 2.3. Perfis de Usuários (User Roles)
 * **`SUPER_ADMIN`:** Administrador geral da plataforma SaaS HoteisNet (gestão de tenants, planos, cotas de IA e cobrança).
 * **`TENANT_ADMIN`:** Proprietário ou gerente geral do estabelecimento (acesso total às configurações, tarifários, relatórios e usuários do hotel).
 * **`RECEPCIONIST`:** Operador da recepção (mapa de quartos, mapa de reservas, check-in, check-out, alteração de período, lançamentos de consumo e FNRH).
 * **`GOVERNESS`:** Equipe de governança e limpeza (mudança de status de limpeza dos quartos, conferência de frigobar).
 * **`FINANCIAL`:** Gestor financeiro (controle de caixa geral, contas a pagar/receber, conciliação e faturamento corporativo).
 
+`SUPER_ADMIN` e `TENANT_ADMIN` são tratados como papéis administrativos (`isAdminRole`) para efeito de liberação de telas restritas.
+
 ---
 
 ## 3. Especificação das Funcionalidades (Feature Specifications)
 
-### 3.1. Mapa Visual de Quartos (Room Map)
+### 3.1. Mapa Visual de Quartos (Room Map) ✅
 * **Visão Geral em Grade:** Exibição dinâmica dos apartamentos agrupados por andares ou categorias com indicativos visuais em cores de alto contraste:
   * **Verde (`VACANT_CLEAN`):** Quarto livre e higienizado, pronto para ocupação.
   * **Amarelo/Laranja (`VACANT_DIRTY`):** Quarto vago aguardando higienização pela governança.
@@ -55,46 +69,77 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
   * Para quarto livre: Iniciar Check-in Avulso ou Efetuar Reserva Rápida.
 * **Layout Otimizado:** Sidebar expansível/retrátil para maximizar o espaço de tela durante a operação de recepção.
 
-### 3.2. Gestão de Reservas & Mapa em Grade (Reservation Grid)
+### 3.2. Gestão de Reservas & Mapa em Grade (Reservation Grid) ✅
 * **Grid de Reservas (Estilo Gantt / Linha do Tempo):** Visualização gráfica da ocupação dos quartos ao longo dos dias do mês.
 * **Interatividade:** Duplo clique em células de datas para criar/editar reservas diretamente no mapa.
 * **Prevenção de Overbooking:** Verificação automática em tempo real que bloqueia reservas conflitantes no mesmo apartamento.
-* **Comunicação por WhatsApp:** Envio instantâneo de comprovantes e confirmações de reserva para o WhatsApp do hóspede.
+* **Comunicação por WhatsApp ✅:** Envio de comprovante de reserva em PDF via Uazapi (`api/uazapi/send-reserva`), com fallback de servidor/token padrão embutido no código (pendência de segurança — mover para configuração por tenant).
 
-### 3.3. Check-in, Hospedagem & Alteração de Período
+### 3.3. Check-in, Hospedagem & Alteração de Período ✅
 * **Entrada de Hóspedes (Check-in):** Vinculação do hóspede principal e acompanhantes, aplicação da tabela tarifária vigente e cálculo automático das diárias.
 * **Modal de Alteração de Período (`AlterarPeriodoModal`):**
   * Bloqueio fixo da data de início (check-in já realizado).
   * Flexibilidade na prorrogação ou antecipação do check-out com ajuste automático do saldo devedor.
   * Checagem de colisão com reservas futuras para o mesmo apartamento.
 
-### 3.4. FNRH Eletrônica & SNRHos (Ministério do Turismo)
-* **Ficha Nacional de Registro de Hóspedes:** Coleta completa de dados obrigatórios (Motivo da viagem, Meio de transporte, Última procedência, Próximo destino e documento oficial).
-* **Assinatura Digital:** Suporte a coleta de assinatura em tela touch/mobile.
-* **Transmissão SNRHos:** Envio automatizado dos registros de entrada e saída para a API do governo federal.
+### 3.4. FNRH Eletrônica & SNRHos (Ministério do Turismo) ⏳
+* **Status real:** apenas a intenção do produto. O modelo `FNRHRecord` existe no schema Prisma mas **não é referenciado em nenhum ponto do código**; não existe nenhuma rota de API relacionada a FNRH/SNRHos.
+* O fluxo de **self check-in do hóspede** (`app/self-checkin/[id]/page.tsx`) é hoje um **protótipo de UI 🟡**: formulário de 3 etapas (dados → campos legais da FNRH → assinatura em tela) com dados de hóspede fixos ("Carlos Eduardo Silva"), ignora o parâmetro `[id]` da URL, simula a assinatura com um clique e exibe um protocolo SNRHos fictício ("GOV-894102") ao final. Nenhuma chamada de API é feita; nada é persistido nem enviado à recepção.
+* **Pendente:** persistência real do FNRH, transmissão ao SNRHos, e conexão do wizard de self check-in aos dados reais da reserva/hóspede via `[id]`.
 
-### 3.5. PDV (Ponto de Venda) & Estoque Multi-Local
-* **Separação de Estoques:**
-  * **Almoxarifado Geral:** Estoque central com controle de custo, preço de venda e alerta de estoque mínimo (`minStock`).
-  * **Estoque de PDV (`pos_locations`):** Estoques individualizados por ponto de venda (Recepção, Frigobar dos Quartos, Restaurante Central, Bar da Piscina).
-* **Transferência entre Almoxarifados:** Módulo dedicado para transferência auditada do almoxarifado central para os PDVs.
-* **Lançamento de Consumo em Quarto:** Débito de itens no apartamento ocupado com baixa automática no estoque do PDV de origem.
+### 3.5. PDV (Ponto de Venda) & Estoque Multi-Local ✅ (parcialmente — ver ressalva)
+* **Separação de Estoques (real, banco de dados):**
+  * **Almoxarifado Geral:** Estoque central (`Product.generalStock`) com custo, preço de venda e alerta de estoque mínimo (`minStock`).
+  * **Estoque de PDV (`POSLocation` / `POSProductStock`):** Estoques individualizados por ponto de venda. `/api/stock/pos-locations` semeia automaticamente 3 PDVs padrão por tenant no primeiro uso ("RESTAURANTE", "BAR RECEPCAO", "FRIGOBAR").
+* **Transferência entre Almoxarifados ✅:** `/api/stock/transfer` move quantidade do almoxarifado central para o estoque fracionado de um PDV específico, registrando um `StockTransfer` auditável.
+* **Lançamento de Consumo em Quarto ✅:** O fluxo real está em `LancarConsumoQuartoModal.tsx` (acionado a partir do mapa de quartos/hospedagem), não na página `app/consumption`. Busca produto por código de barras via `/api/stock/lookup`, permite escolher o PDV de origem e a quantidade, e grava via `/api/stay/consumo`, que dentro de uma transação de banco: debita o estoque do PDV (respeitando a flag `allowNegativeStock` por tenant) e cria uma cobrança `StayConsumption` somada ao total da hospedagem. O `DELETE` do mesmo endpoint estorna estoque e cobrança.
+* **Ressalva 🟡:** `app/app/consumption/page.tsx` é uma **página duplicada e desconectada**, com carrinho e produtos mockados em estado local, sem nenhuma chamada de API — duplica (de forma não funcional) o que `LancarConsumoQuartoModal` já faz corretamente. Deve ser removida ou substituída por um atalho para o fluxo real.
 
-### 3.6. Controle Financeiro, Frente de Caixa & Caixa Geral
-* **Caixa da Recepção (Turnos Operacionais):** Abertura de turno com fundo de troco, lançamento de suprimentos/sangrias e fechamento de caixa auditado por operador.
-* **Caixa Geral & Faturamento Corporativo:** Gestão de contas a pagar/receber, emissão de faturas faturadas para empresas parceiras (`Company`) com limites de crédito e prazos personalizados.
+### 3.6. Controle Financeiro, Frente de Caixa & Caixa Geral ✅
+* **Caixa da Recepção (Turnos Operacionais):** `api/caixa/pagamento-checkin` abre automaticamente o caixa do operador se necessário, registra `CashTransaction`, recalcula o saldo devedor da hospedagem (diárias + consumo − pagamentos) e grava log de auditoria.
+* **Pagamento em Lote:** `api/caixa/pagamento-lote` replica o comportamento do WinDev legado ("Finalizar Hospedagem"), aplicando múltiplos lançamentos dentro de uma única transação atômica (`prisma.$transaction`), com rollback total em caso de item inválido.
+* **Extrato da Conta:** `api/caixa/conta-quarto` lista os pagamentos já lançados contra a hospedagem e o total pago.
+* **Estorno:** `api/caixa/remover-pagamento` remove um lançamento de `CashTransaction`.
+* **Caixa Geral & Faturamento Corporativo:** Gestão de contas a pagar/receber, emissão de faturas faturadas para empresas parceiras (`Company`) com limites de crédito e prazos personalizados — cadastro de empresas está implementado (ver 3.11); o módulo de faturamento corporativo consolidado (`CorporateInvoice`) ainda não foi verificado como conectado a telas de UI.
 
-### 3.7. Governança e Manutenção
+### 3.7. Governança e Manutenção ✅
 * **Painel da Governança:** Painel exclusivo para camareiras e supervisão de governança ordenando os quartos por prioridade de limpeza pós check-out.
 * **Controle de Manutenção:** Agendamento de reparos com bloqueio temporário de inventário de quartos.
 
 ### 3.8. Self Check-in & WhatsApp (Uazapi)
-* **Pre-Checkin Antecipado:** Envio automático de formulário via WhatsApp para que o hóspede preencha seus dados de FNRH antes de chegar ao estabelecimento.
-* **QR Code Expresso:** Geração de QR Code para agilizar a validação na recepção.
+* **Pre-Checkin Antecipado ⏳/🟡:** Wizard de UI existe (ver 3.4) mas ainda não está conectado a dados reais nem ao envio/recebimento via WhatsApp.
+* **Envio de Extrato por WhatsApp ✅:** `api/uazapi/send-extrato` envia o extrato de consumo/hospedagem em PDF via Uazapi, com o mesmo padrão de fallback de credencial embutida no código citado em 3.2 — recomenda-se mover para configuração segura por tenant (tabela `UazapiSetting`, hoje não conectada às rotas).
+* **QR Code Expresso:** ⏳ não implementado.
 
-### 3.9. Central de Ajuda & Suporte com Inteligência Artificial (RAG)
-* **Atendimento Inteligente:** Resposta autônoma para dúvidas dos usuários do sistema através de modelo de IA conectado a uma base de conhecimento atualizada.
-* **Escalação de Suporte:** Abertura e acompanhamento de chamados (tickets) quando a resposta da IA for insuficiente.
+### 3.9. Central de Ajuda & Suporte com Inteligência Artificial (RAG) 🟡
+* **Status real:** `app/app/support/page.tsx` é um **mock de chat/ticket**, com tickets, histórico de mensagens e respostas de "IA" gerados por arrays estáticos e `setTimeout`, incluindo percentuais de "confiança" fabricados. Não existe nenhuma rota `/api/support/*`.
+* Os modelos Prisma `SupportTicket`, `TicketMessage` e `SupportKnowledgeBase` existem no schema mas **não são referenciados em nenhum lugar do código de aplicação**.
+* Não há embeddings, banco vetorial ou chamadas a LLM implementadas para esta funcionalidade.
+
+### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡
+* `admin/tenants`, `admin/ai-telemetry` e `admin/support` são **mocks de UI**: dados de tenants, consumo de IA/token e fila de suporte são arrays fixos em React state; nenhuma chamada de API é feita, e nenhum dos modelos `SaaSPlan`, `SaASSubscription` ou `AIUsageLog` é usado no código.
+* O botão "Resolve & Vectorize RAG" em `admin/support` simula (via toast) uma vetorização no Supabase pgvector que não ocorre de fato.
+* **Pendente:** conectar essas três telas aos modelos Prisma correspondentes para virarem um painel real de gestão SaaS.
+
+### 3.11. Módulo Fiscal (NFe/NFSe) 🟡
+* `app/app/fiscal/page.tsx` exibe uma lista fixa de notas "emitidas" em estado local; o botão "Emitir NFSe de Teste" apenas adiciona um objeto fictício com protocolo SEFAZ inventado — sem integração real com prefeitura/SEFAZ.
+* `app/app/stock/nfe-import/page.tsx` simula a importação de XML de NFe com um `setTimeout` que popula uma tabela "De-Para" de produtos com dados fixos; a confirmação não grava nada em estoque ou contas a pagar.
+* Não existem rotas `/api/*fiscal*` ou `/api/*nfe*`. **Módulo inteiro pendente de implementação real.**
+
+### 3.12. Cadastros / Dados Mestres (Master Data)
+Telas existentes em `app/app/cadastros/*`, com status de integração real:
+* ✅ **Conectados ao backend (CRUD real):** Apartamentos, Empresas, Fornecedores, Hóspedes, Usuários, Plano de Contas.
+* 🟡 **Somente UI, sem persistência (pendentes de conexão):** Bancos, Colaboradores, Comandas, Formas de Pagamento, Grupos, Localidades, PDV, Pratos, Serviços.
+* **Tarifas ⚠️:** existem **dois caminhos de leitura paralelos e inconsistentes** — `/api/tariffs` lê a tabela `Tariff` via Prisma; `/api/reservations/tariffs` lê uma tabela `tariffs` via cliente Supabase direto (não Prisma). A tela `app/app/tariffs/page.tsx`, por sua vez, não chama nenhuma das duas — usa `CadastroTarifasModal` com uma constante `INITIAL_TARIFFS` fixa. **Pendente:** unificar em uma única fonte de dados (Prisma) e conectar a tela real à API.
+
+### 3.13. Integração de E-mail ✅
+* `api/email/send` monta e-mails HTML (voucher, recibo, confirmação de pagamento) com anexo PDF opcional em base64, via `nodemailer`/SMTP, usando credenciais informadas pelo chamador (padrão `smtp.gmail.com` quando não especificado).
+* `api/email/test` valida a conexão SMTP (`transporter.verify()`) e envia um e-mail de teste.
+* A tabela `EmailSetting` existe no schema mas ainda não foi confirmada como fonte das credenciais nessas rotas — hoje elas dependem do chamador enviar host/usuário/senha a cada chamada.
+
+### 3.14. Consulta de CPF (Hub do Desenvolvedor) ✅
+* `api/stay/hub-consult-cpf` integra com a API paga do "Hub do Desenvolvedor" (`ws.hubdodesenvolvedor.com.br`) para resolver CPF em dados da Receita Federal (nome, nascimento, filiação, endereço, telefones, e-mails), agilizando o cadastro do hóspede.
+* **Pendências de segurança/robustez:** há um token/contrato padrão **embutido no código-fonte** (`DEFAULT_HUB_TOKEN`/`DEFAULT_HUB_CONTRACT`) usado quando a variável de ambiente não está configurada — deve ser removido do código. O controle de cota por tenant é mantido em **memória do processo** (`TENANT_USAGE_STORE`), sendo perdido a cada reinício/deploy — precisa ser persistido no banco.
 
 ---
 
@@ -104,6 +149,10 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 2. **Desempenho & Baixa Latência:** Renderização rápida de componentes de grade e mapa de quartos sem engasgos, com queries de banco indexadas e caching inteligente no Next.js.
 3. **Disponibilidade & Escalabilidade:** Arquitetura desacoplada em nuvem pronta para suportar múltiplos hotéis em regime SaaS 24/7.
 4. **Segurança & Privacidade:** Criptografia HTTPS/TLS, autenticação segura, isolamento estrito de dados entre hotéis e conformidade com a LGPD.
+5. **Dívida técnica de segurança identificada (a corrigir):**
+   * Credenciais padrão (token Uazapi e token/contrato do Hub do Desenvolvedor) embutidas como fallback no código-fonte — devem ser removidas e exigidas via variável de ambiente/configuração por tenant.
+   * Controle de cota de consulta de CPF em memória de processo, não durável — deve migrar para persistência em banco.
+   * Duas fontes de dados paralelas para tarifas (Prisma vs. Supabase direto) — risco de inconsistência, deve ser unificado.
 
 ---
 
@@ -113,6 +162,8 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * [x] **Fase 2:** Mapa de Quartos (Room Map), Status de Governança e Ações Contextuais.
 * [x] **Fase 3:** Mapa de Reservas em Grade, Duplo clique e Validação de Conflitos.
 * [x] **Fase 4:** Modal de Alteração de Período de Hospedagem e Recálculo Tarifário.
-* [ ] **Fase 5:** Finalização do Fluxo Completo de Consumo PDV e Transferência de Estoque.
-* [ ] **Fase 6:** Integração com Transmissão Automática SNRHos (FNRH Eletrônica).
-* [ ] **Fase 7:** Módulo Completo de Faturamento Corporativo e Contas a Receber Faturadas.
+* [~] **Fase 5:** Fluxo Completo de Consumo PDV e Transferência de Estoque — **núcleo funcional implementado** (transferência de estoque, lançamento de consumo em quarto via `LancarConsumoQuartoModal`/`api/stay/consumo`); pendente remover a página mock `app/consumption` e concluir os cadastros de PDV/produtos ainda não conectados (Pratos, Serviços, PDV).
+* [ ] **Fase 6:** Integração com Transmissão Automática SNRHos (FNRH Eletrônica) — não iniciada; self check-in hoje é apenas protótipo de UI sem persistência.
+* [ ] **Fase 7:** Módulo Completo de Faturamento Corporativo e Contas a Receber Faturadas — cadastro de Empresas pronto; emissão/consolidação de faturas (`CorporateInvoice`) ainda não conectada a UI.
+* [ ] **Fase 8 (nova):** Sair do estágio de protótipo de UI para as telas de Fiscal/NFe, Painel Super Admin (tenants/telemetria IA/suporte) e Central de Ajuda com IA — hoje totalmente mockadas, sem nenhuma chamada de API.
+* [ ] **Fase 9 (nova):** Unificar acesso a dados de Tarifas (eliminar rota paralela via Supabase) e migrar configuração de e-mail/WhatsApp para as tabelas `EmailSetting`/`UazapiSetting` por tenant, removendo credenciais padrão embutidas no código.

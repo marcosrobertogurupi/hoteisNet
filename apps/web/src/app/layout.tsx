@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { ToastProvider } from "@/context/ToastContext";
+import { OperatorProvider } from "@/context/OperatorContext";
+import { ConfirmProvider } from "@/context/ConfirmContext";
+import { PromptProvider } from "@/context/PromptContext";
+import { SessionProvider } from "@/context/SessionContext";
 
 export const metadata: Metadata = {
   title: "HoteisNet PMS SaaS | Gestão Hoteleira Inteligente",
@@ -23,7 +27,15 @@ export default function RootLayout({
       <body className="antialiased bg-[#090D16] text-[#F8FAFC] min-h-screen">
         <ThemeProvider>
           <ToastProvider>
-            {children}
+            <ConfirmProvider>
+              <PromptProvider>
+                <SessionProvider>
+                  <OperatorProvider>
+                    {children}
+                  </OperatorProvider>
+                </SessionProvider>
+              </PromptProvider>
+            </ConfirmProvider>
           </ToastProvider>
         </ThemeProvider>
       </body>

@@ -13,11 +13,13 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useConfirm } from "@/context/ConfirmContext";
 import CadastroEmpresaModal, { EmpresaFormData } from "@/components/CadastroEmpresaModal";
 
 export default function EmpresasPage() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
+  const confirmDialog = useConfirm();
 
   const [empresas, setEmpresas] = useState<EmpresaFormData[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -97,9 +99,15 @@ export default function EmpresasPage() {
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id?: string) => {
+  const handleDelete = async (id?: string) => {
     if (!id) return;
-    if (confirm("Tem certeza que deseja excluir esta empresa conveniada?")) {
+    const ok = await confirmDialog({
+      title: "Excluir Empresa",
+      message: "Tem certeza que deseja excluir esta empresa conveniada?",
+      confirmLabel: "Excluir",
+      variant: "danger",
+    });
+    if (ok) {
       setEmpresas((prev) => prev.filter((e) => e.id !== id));
     }
   };

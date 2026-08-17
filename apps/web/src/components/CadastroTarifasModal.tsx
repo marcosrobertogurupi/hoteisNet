@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import { X, Plus, Trash2, Filter, Search, Edit3, Check } from "lucide-react";
+import { useToast } from "@/context/ToastContext";
+import { useConfirm } from "@/context/ConfirmContext";
 
 export interface TariffItem {
   id: string;
@@ -34,6 +36,8 @@ export default function CadastroTarifasModal({
   onClose,
   onSelectTariff,
 }: CadastroTarifasModalProps) {
+  const toast = useToast();
+  const confirmDialog = useConfirm();
   const [tariffs, setTariffs] = useState<TariffItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filterText, setFilterText] = useState("");
@@ -127,7 +131,7 @@ export default function CadastroTarifasModal({
 
   const handleSaveForm = () => {
     if (!formName.trim()) {
-      alert("Informe o nome da tarifa.");
+      toast.warning("Informe o nome da tarifa.");
       return;
     }
 
@@ -155,15 +159,21 @@ export default function CadastroTarifasModal({
     setShowFormModal(false);
   };
 
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = async () => {
     if (!selectedId) {
-      alert("Selecione uma tarifa para excluir.");
+      toast.warning("Selecione uma tarifa para excluir.");
       return;
     }
     const item = tariffs.find((t) => t.id === selectedId);
     if (!item) return;
 
-    if (confirm(`Tem certeza que deseja excluir a tarifa "${item.name}"?`)) {
+    const ok = await confirmDialog({
+      title: "Excluir Tarifa",
+      message: `Tem certeza que deseja excluir a tarifa "${item.name}"?`,
+      confirmLabel: "Excluir",
+      variant: "danger",
+    });
+    if (ok) {
       setTariffs((prev) => prev.filter((t) => t.id !== selectedId));
       setSelectedId(null);
     }

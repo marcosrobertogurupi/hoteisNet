@@ -20,10 +20,17 @@ import {
   AlertCircle,
   Globe,
   MessageSquare,
-  Star
+  Star,
+  Lock,
+  Moon,
+  ShieldCheck,
+  AlertTriangle
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
+import { useOperator } from "@/context/OperatorContext";
+import DateRangeCalendarPicker from "@/components/DateRangeCalendarPicker";
+import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
 
 export interface VerifiedPhone {
   id: string;
@@ -99,13 +106,30 @@ export interface CheckinHospedagemModalProps {
     reservationNumber?: string;
     origin?: string;
     guestName?: string;
+    guestCpf?: string;
+    cpf?: string;
     phone?: string;
+    email?: string;
+    birthDate?: string;
+    gender?: string;
+    motherName?: string;
+    fatherName?: string;
+    identity?: string;
+    fullAddress?: string;
+    address?: string;
     checkInDate?: string;
     checkOutDate?: string;
     adults?: number;
     children?: number;
     totalAmount?: number;
     depositPaid?: number;
+    tariffName?: string;
+    dailyRate?: number;
+    notes?: string;
+    observations?: ObservationItem[] | string[];
+    payments?: PaymentItem[];
+    roomId?: string;
+    roomNumber?: string;
   };
   onSuccess: (checkinData: any) => void;
 }
@@ -209,11 +233,35 @@ function buildLocalDateTime(datePart: string, timePart: string): string {
   return `${datePart}T${timePart}`;
 }
 
-// Min value for datetime-local (today at current time, seconds zeroed)
-function nowLocalMin(): string {
+// Horário a partir do qual uma chegada é considerada "de madrugada" — ou seja, muito
+// antes do horário padrão de check-in, quando o hóspede efetivamente já dormiu no quarto
+// na noite anterior à diária "oficial". Segue a prática comum de rollover/night-audit dos
+// PMS (tipicamente entre 3h e 5h da manhã) com uma margem de segurança até as 6h.
+export const MADRUGADA_CUTOFF_TIME = "06:00";
+
+function nowHHMM(): string {
   const now = new Date();
   const pad = (n: number) => (n < 10 ? "0" + n : String(n));
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+// Uma chegada é "de madrugada" quando ocorre entre 00:00 e o corte (MADRUGADA_CUTOFF_TIME),
+// isto é, muito antes do horário padrão de check-in — cenário que exige decisão do operador
+// sobre cobrança da noite anterior (ver EarlyArrivalDecisionPanel).
+function isMadrugadaArrival(hhmm: string): boolean {
+  return hhmm < MADRUGADA_CUTOFF_TIME;
+}
+
+// Horário efetivo do check-in:
+// - Chegada de madrugada (antes do corte): grava-se o horário REAL da chegada — nunca o
+//   horário padrão, que ficaria no futuro e mascararia a ocupação real do quarto.
+// - Chegada entre o corte e o horário padrão configurado: assume-se o horário padrão
+//   (normaliza pequenas antecipações comuns, ex: recepção processa às 13h50).
+// - Chegada depois do horário padrão: grava-se o horário real (check-in tardio).
+function resolveCheckinTime(defaultCheckInTime: string): string {
+  const hhmm = nowHHMM();
+  if (isMadrugadaArrival(hhmm)) return hhmm;
+  return hhmm > defaultCheckInTime ? hhmm : defaultCheckInTime;
 }
 
 // Build tomorrow's date string "YYYY-MM-DD"
@@ -229,6 +277,16 @@ function todayDateStr(): string {
   const pad = (n: number) => (n < 10 ? "0" + n : String(n));
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+
+// Add N days to a "YYYY-MM-DD" string using local date parts (avoids the UTC-parsing
+// off-by-one that `new Date("YYYY-MM-DD")` causes in timezones behind UTC).
+function addDaysToYMD(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  const pad = (n: number) => (n < 10 ? "0" + n : String(n));
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
 // ──────────────────────────────────────────────────────────────────────────────
 
 export default function CheckinHospedagemModal({
@@ -238,8 +296,9 @@ export default function CheckinHospedagemModal({
   reservationData,
   onSuccess,
 }: CheckinHospedagemModalProps) {
-  const { defaultCheckOutTime, theme } = useTheme();
+  const { defaultCheckInTime, defaultCheckOutTime, theme } = useTheme();
   const toast = useToast();
+  const { operatorId: activeOperatorId, operatorName: activeOperatorName } = useOperator();
   const isDark = theme.isDark;
 
   // Dynamic Theme Style Helpers
@@ -260,45 +319,251 @@ export default function CheckinHospedagemModal({
   // Document Type selection: CPF | CNPJ | Passaporte
   const [docType, setDocType] = useState<"CPF" | "CNPJ" | "PASSAPORTE">("CPF");
   const [docNumber, setDocNumber] = useState(
-    reservationData?.guestName ? "" : "643.204.301-82"
+    reservationData?.cpf || reservationData?.guestCpf || ""
   );
-  const [guestName, setGuestName] = useState(reservationData?.guestName || "CARLOS DAVI SOUZA FERREIRA");
-  const [phone, setPhone] = useState(reservationData?.phone || "(11) 98765-4321");
+  const [guestName, setGuestName] = useState(reservationData?.guestName || "");
+  const [phone, setPhone] = useState(reservationData?.phone || "");
 
-  // Sincronizar e verificar cadastro do hóspede quando o modal for aberto a partir de uma reserva
+  // Refs para prevenir reset indevido de campos durante re-renders (ex: polling do mapa de quartos)
+  const prevIsOpenRef = useRef<boolean>(false);
+  const prevRoomNumberRef = useRef<string | null>(null);
+  const prevResIdRef = useRef<string | null>(null);
+
+  // Sincronizar dados quando o modal abre (com ou sem reserva de origem)
   useEffect(() => {
-    if (isOpen && reservationData) {
-      if (reservationData.guestName) {
-        const nameUpper = reservationData.guestName.toUpperCase();
-        setGuestName(nameUpper);
+    if (!isOpen) {
+      prevIsOpenRef.current = false;
+      return;
+    }
 
-        // Verificar se este hóspede já possui cadastro verificado no banco
-        const found = mockGuestDB.find(
-          (g) => g.name.toUpperCase() === nameUpper || (g.doc && g.doc === reservationData.phone)
+    const currentResId = reservationData?.reservationNumber || (reservationData as any)?.id || null;
+    const currentRoomNum = roomData?.number || null;
+
+    const justOpened = !prevIsOpenRef.current;
+    const roomChanged = currentRoomNum !== prevRoomNumberRef.current;
+    const resChanged = currentResId !== prevResIdRef.current;
+
+    // Se o modal já está aberto e o quarto/reserva não mudou, ignorar (preserva o que o usuário está digitando)
+    if (!justOpened && !roomChanged && !resChanged) {
+      return;
+    }
+
+    prevIsOpenRef.current = true;
+    prevRoomNumberRef.current = currentRoomNum;
+    prevResIdRef.current = currentResId;
+
+    if (reservationData) {
+      // ── ORIGEM: RESERVA ─────────────────────────────────────────────────────
+      const nameUpper = (reservationData.guestName || "").toUpperCase();
+      setGuestName(nameUpper);
+
+      const resCpf = reservationData.cpf || reservationData.guestCpf || "";
+      const resPhone = reservationData.phone || "";
+      setDocNumber(resCpf);
+      setPhone(resPhone);
+
+      if (resPhone) {
+        setVerifiedPhones([
+          {
+            id: `TEL-1`,
+            number: resPhone,
+            hasWhatsapp: true,
+            nomeUsuarioWpp: (nameUpper || "hospede").toLowerCase().replace(/\s+/g, ".") + ".wpp",
+            whatsappName: nameUpper,
+            isPrimary: true,
+          },
+        ]);
+        setWhatsappPhone(resPhone);
+        setHasWhatsapp(true);
+      } else {
+        setVerifiedPhones([]);
+        setWhatsappPhone("");
+        setHasWhatsapp(false);
+      }
+
+      setBirthDate(reservationData.birthDate || "");
+      setGender(reservationData.gender || "");
+      setMotherName(reservationData.motherName || "");
+      setFatherName(reservationData.fatherName || "");
+      setIdentity(reservationData.identity || "");
+      setFullAddress(reservationData.fullAddress || reservationData.address || "");
+      setEmail(reservationData.email || "");
+
+      // Consultar banco de dados se hóspede já possui cadastro
+      const queryTerm = resCpf.replace(/\D/g, "") || nameUpper;
+      if (queryTerm) {
+        fetch(`/api/cadastros/hospedes?q=${encodeURIComponent(queryTerm)}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.success && Array.isArray(data.guests) && data.guests.length > 0) {
+              const matchedGuest = data.guests[0];
+              setGuestName(matchedGuest.fullName?.toUpperCase() || nameUpper);
+              setDocNumber(matchedGuest.cpf || resCpf);
+              setPhone(matchedGuest.phone || matchedGuest.whatsappPhone || resPhone);
+              setBirthDate(matchedGuest.birthDate || reservationData.birthDate || "");
+              setGender(matchedGuest.gender || reservationData.gender || "");
+              setMotherName(matchedGuest.motherName || reservationData.motherName || "");
+              setFatherName(matchedGuest.fatherName || reservationData.fatherName || "");
+              setIdentity(matchedGuest.identity || reservationData.identity || "");
+              setFullAddress(matchedGuest.address || reservationData.fullAddress || reservationData.address || "");
+              setEmail(matchedGuest.email || reservationData.email || "");
+              setHubGuestSaved(true);
+              setHubMessage(`✓ Hóspede '${matchedGuest.fullName}' localizado e verificado no cadastro com sucesso.`);
+            } else if (resCpf) {
+              setHubGuestSaved(true);
+              setHubMessage(`✓ Hóspede '${nameUpper}' vinculado com documento ${resCpf}.`);
+            } else {
+              setHubGuestSaved(false);
+              setHubMessage(`⚠️ Hóspede '${nameUpper}' selecionado da reserva. Complete os dados do cadastro.`);
+            }
+          })
+          .catch(() => {
+            setHubGuestSaved(!!resCpf);
+            setHubMessage(resCpf ? `✓ Hóspede '${nameUpper}' vinculado.` : `⚠️ Complete o cadastro do hóspede.`);
+          });
+      } else {
+        setHubGuestSaved(false);
+        setHubMessage(`⚠️ Hóspede vindo da reserva. Complete os dados para efetivar.`);
+      }
+
+      // Tarifa escolhida na reserva
+      if (reservationData.tariffName) {
+        const matched = LISTA_TARIFAS.find(
+          (t) => t.name.toLowerCase() === reservationData.tariffName?.toLowerCase()
         );
-
-        if (found) {
-          setDocNumber(found.doc);
-          setPhone(found.phone || reservationData.phone || "");
-          setHubGuestSaved(true);
-          setHubMessage(`✓ Hóspede '${nameUpper}' localizado no banco de dados com cadastro verificado (CPF: ${found.doc}).`);
+        if (matched) {
+          setSelectedTariff(matched);
         } else {
-          setDocNumber("");
-          if (reservationData.phone) setPhone(reservationData.phone);
-          setHubGuestSaved(false);
-          setHubMessage(`⚠️ ATENÇÃO: Hóspede sem cadastro verificado no banco. Pesquise (🔍), consulte CPF (🌐) ou inclua (+) o cadastro completo.`);
+          setSelectedTariff({
+            id: `TAR-RES`,
+            name: reservationData.tariffName.toUpperCase(),
+            pax: 1,
+            price: reservationData.dailyRate || reservationData.totalAmount || 170,
+          });
         }
+      } else if (roomData?.category) {
+        const matchedCat = LISTA_TARIFAS.find((t) => t.name.toUpperCase().includes(roomData.category!.toUpperCase()));
+        if (matchedCat) setSelectedTariff(matchedCat);
       }
-      if (reservationData.checkInDate) {
-        const local = brDateTimeToLocal(reservationData.checkInDate);
-        if (local) setDtChegadaLocal(local);
+      setDailyRate(
+        reservationData.dailyRate ||
+        reservationData.totalAmount ||
+        roomData?.ratePerNight ||
+        LISTA_TARIFAS[0].price
+      );
+
+      // Período da reserva — o check-in é sempre efetivado na data de hoje (nunca superior
+      // nem inferior), independente da data originalmente reservada. Apenas a saída prevista
+      // é herdada da reserva (quando ainda for uma data futura válida).
+      setDtChegadaLocal(buildLocalDateTime(todayDateStr(), resolveCheckinTime(defaultCheckInTime)));
+      const reservedCheckoutLocal = reservationData.checkOutDate ? brDateTimeToLocal(reservationData.checkOutDate) : "";
+      if (reservedCheckoutLocal && localToDateOnly(reservedCheckoutLocal) > todayDateStr()) {
+        setDtSaidaLocal(reservedCheckoutLocal);
+      } else {
+        setDtSaidaLocal(buildLocalDateTime(tomorrowDateStr(), defaultCheckOutTime));
       }
-      if (reservationData.checkOutDate) {
-        const local = brDateTimeToLocal(reservationData.checkOutDate);
-        if (local) setDtSaidaLocal(local);
+      setAdults(reservationData.adults || 1);
+      setChildren(reservationData.children || 0);
+      setEarlyArrivalChoice(null);
+      setEarlyArrivalFixedFeeInput("0,00");
+      setEarlyArrivalFixedFeeAuthorized(false);
+      setEarlyArrivalCourtesyAuthorized(false);
+      setEarlyArrivalAuthorizedBy(null);
+      setAdminAuthPurpose(null);
+
+      // Observações da reserva
+      if (Array.isArray(reservationData.observations) && reservationData.observations.length > 0) {
+        setObsList(reservationData.observations as any);
+      } else if (reservationData.notes && reservationData.notes.trim()) {
+        const nowStr = new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR").slice(0, 5);
+        setObsList([
+          {
+            id: `OBS-RES-1`,
+            dateTime: nowStr,
+            typeDescription: "1 - Reserva de Origem",
+            note: reservationData.notes.trim(),
+          },
+        ]);
+      } else {
+        setObsList([]);
+      }
+
+      // Pagamentos/Adiantamentos da reserva
+      if (Array.isArray(reservationData.payments) && reservationData.payments.length > 0) {
+        setPaymentsList(reservationData.payments as any);
+      } else if (reservationData.depositPaid && reservationData.depositPaid > 0) {
+        setPaymentsList([
+          {
+            id: `PAY-RES-1`,
+            date: new Date().toLocaleDateString("pt-BR"),
+            amount: reservationData.depositPaid,
+            methodDescription: "Adiantamento Reserva (PIX)",
+          },
+        ]);
+      } else {
+        setPaymentsList([]);
+      }
+    } else {
+      // ── ORIGEM: DIRETA NO QUARTO (SEM RESERVA / WALK-IN) ─────────────────
+      // Todos os campos zerados / em branco
+      setDocType("CPF");
+      setDocNumber("");
+      setGuestName("");
+      setPhone("");
+      setVerifiedPhones([]);
+      setWhatsappPhone("");
+      setNomeUsuarioWpp("");
+      setWhatsappName("");
+      setHasWhatsapp(false);
+      setBirthDate("");
+      setGender("");
+      setMotherName("");
+      setFatherName("");
+      setIdentity("");
+      setFullAddress("");
+      setEmail("");
+      setTelephonesList([]);
+      setEmailsList([]);
+      setSecondaryGuests([]);
+      setPaymentsList([]);
+      setPaymentAmount("0,00");
+      setObsList([]);
+      setObsText("");
+      setDiscount(0);
+      setHubGuestSaved(false);
+      setHubMessage(null);
+      setShowGuestData(false);
+      setDateError(null);
+      setAdults(1);
+      setChildren(0);
+      setDtChegadaLocal(buildLocalDateTime(todayDateStr(), resolveCheckinTime(defaultCheckInTime)));
+      setDtSaidaLocal(buildLocalDateTime(tomorrowDateStr(), defaultCheckOutTime));
+      setEarlyArrivalChoice(null);
+      setEarlyArrivalFixedFeeInput("0,00");
+      setEarlyArrivalFixedFeeAuthorized(false);
+      setEarlyArrivalCourtesyAuthorized(false);
+      setEarlyArrivalAuthorizedBy(null);
+      setAdminAuthPurpose(null);
+
+      if (roomData?.category) {
+        const catUpper = roomData.category.toUpperCase();
+        const matchedCat = LISTA_TARIFAS.find((t) => {
+          const tName = t.name.toUpperCase();
+          return tName.includes(catUpper) || (catUpper.includes("STANDARD") && tName.includes("STANDAR"));
+        });
+        if (matchedCat) {
+          setSelectedTariff(matchedCat);
+          setDailyRate(roomData.ratePerNight || matchedCat.price);
+        } else {
+          setSelectedTariff(LISTA_TARIFAS[0]);
+          setDailyRate(roomData?.ratePerNight || LISTA_TARIFAS[0].price);
+        }
+      } else {
+        setSelectedTariff(LISTA_TARIFAS[0]);
+        setDailyRate(roomData?.ratePerNight || LISTA_TARIFAS[0].price);
       }
     }
-  }, [isOpen, reservationData]);
+  }, [isOpen, reservationData, roomData?.number, roomData?.category, roomData?.ratePerNight, defaultCheckInTime, defaultCheckOutTime]);
 
   // WhatsApp active verification & Meta username state
   const [whatsappPhone, setWhatsappPhone] = useState<string>("");
@@ -407,13 +672,14 @@ export default function CheckinHospedagemModal({
 
   // Dates & Occupants
   // ── Internal state: stored as datetime-local format "YYYY-MM-DDTHH:MM" ──
-  const buildInitialCheckin = () => {
-    if (reservationData?.checkInDate) return brDateTimeToLocal(reservationData.checkInDate);
-    return nowLocalMin();
-  };
+  // O check-in é sempre efetivado na data de hoje (nunca superior nem inferior).
+  const buildInitialCheckin = () => buildLocalDateTime(todayDateStr(), resolveCheckinTime(defaultCheckInTime));
 
   const buildInitialCheckout = (checkoutTime: string) => {
-    if (reservationData?.checkOutDate) return brDateTimeToLocal(reservationData.checkOutDate);
+    if (reservationData?.checkOutDate) {
+      const reservedLocal = brDateTimeToLocal(reservationData.checkOutDate);
+      if (reservedLocal && localToDateOnly(reservedLocal) > todayDateStr()) return reservedLocal;
+    }
     return buildLocalDateTime(tomorrowDateStr(), checkoutTime);
   };
 
@@ -427,45 +693,26 @@ export default function CheckinHospedagemModal({
   // Date validation state
   const [dateError, setDateError] = useState<string | null>(null);
 
+  // Popover do calendário de seleção de período (estilo WinDev)
+  const [showDateRangePicker, setShowDateRangePicker] = useState<boolean>(false);
+
+  // ── Decisão de chegada de madrugada (check-in muito antes do horário padrão) ──
+  // Quando detectado (ver MADRUGADA_CUTOFF_TIME), o operador precisa decidir como tratar a
+  // noite anterior antes de conseguir efetivar a hospedagem: diária extra, meia diária, taxa
+  // fixa, ou cortesia. Cortesia sempre exige senha de administrador; taxa fixa só exige quando
+  // o valor digitado é inferior à metade da diária (para impedir desconto informal exagerado).
+  type EarlyArrivalChoice = "EXTRA_NIGHT" | "HALF_NIGHT" | "FIXED_FEE" | "COURTESY";
+  const [earlyArrivalChoice, setEarlyArrivalChoice] = useState<EarlyArrivalChoice | null>(null);
+  const [earlyArrivalFixedFeeInput, setEarlyArrivalFixedFeeInput] = useState<string>("0,00");
+  const [earlyArrivalFixedFeeAuthorized, setEarlyArrivalFixedFeeAuthorized] = useState<boolean>(false);
+  const [earlyArrivalCourtesyAuthorized, setEarlyArrivalCourtesyAuthorized] = useState<boolean>(false);
+  const [earlyArrivalAuthorizedBy, setEarlyArrivalAuthorizedBy] = useState<string | null>(null);
+  const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
+  const [adminAuthPurpose, setAdminAuthPurpose] = useState<"COURTESY" | "LOW_FIXED_FEE" | null>(null);
+
   const [adults, setAdults] = useState<number>(reservationData?.adults || 1);
   const [children, setChildren] = useState<number>(reservationData?.children || 0);
   const [nights, setNights] = useState<number>(1);
-
-  // Handler: change check-in date — must not be before today
-  const handleDtChegadaChange = useCallback((newLocalVal: string) => {
-    const todayMin = nowLocalMin();
-    if (newLocalVal < todayMin) {
-      setDateError("A data de chegada não pode ser anterior à data/hora atual.");
-      setDtChegadaLocal(todayMin);
-      // Also adjust checkout if it falls before new checkin
-      const checkoutDate = localToDateOnly(dtSaidaLocal);
-      const checkinDate = localToDateOnly(todayMin);
-      if (checkoutDate <= checkinDate) {
-        setDtSaidaLocal(buildLocalDateTime(tomorrowDateStr(), defaultCheckOutTime));
-      }
-      return;
-    }
-    setDtChegadaLocal(newLocalVal);
-    setDateError(null);
-    // Enforce: checkout date must be >= checkin date
-    const newCheckinDate = localToDateOnly(newLocalVal);
-    const checkoutDate = localToDateOnly(dtSaidaLocal);
-    if (checkoutDate < newCheckinDate) {
-      // Move checkout to next day after new checkin
-      const nextDay = new Date(newLocalVal.split("T")[0]);
-      nextDay.setDate(nextDay.getDate() + 1);
-      const pad = (n: number) => (n < 10 ? "0" + n : String(n));
-      const nextDayStr = `${nextDay.getFullYear()}-${pad(nextDay.getMonth() + 1)}-${pad(nextDay.getDate())}`;
-      setDtSaidaLocal(buildLocalDateTime(nextDayStr, defaultCheckOutTime));
-    } else if (checkoutDate === newCheckinDate) {
-      // Same day: checkout must still be after checkin, move to next day
-      const nextDay = new Date(newLocalVal.split("T")[0]);
-      nextDay.setDate(nextDay.getDate() + 1);
-      const pad = (n: number) => (n < 10 ? "0" + n : String(n));
-      const nextDayStr = `${nextDay.getFullYear()}-${pad(nextDay.getMonth() + 1)}-${pad(nextDay.getDate())}`;
-      setDtSaidaLocal(buildLocalDateTime(nextDayStr, defaultCheckOutTime));
-    }
-  }, [dtSaidaLocal, defaultCheckOutTime]);
 
   // Handler: change checkout — must not be before checkin, hour locked to configured time
   const handleDtSaidaChange = useCallback((newLocalVal: string) => {
@@ -477,20 +724,12 @@ export default function CheckinHospedagemModal({
     if (newCheckoutDate < checkinDate) {
       setDateError("A data de saída não pode ser anterior à data de chegada.");
       // Set to next day after checkin
-      const nextDay = new Date(dtChegadaLocal.split("T")[0]);
-      nextDay.setDate(nextDay.getDate() + 1);
-      const pad = (n: number) => (n < 10 ? "0" + n : String(n));
-      const nextDayStr = `${nextDay.getFullYear()}-${pad(nextDay.getMonth() + 1)}-${pad(nextDay.getDate())}`;
-      setDtSaidaLocal(buildLocalDateTime(nextDayStr, defaultCheckOutTime));
+      setDtSaidaLocal(buildLocalDateTime(addDaysToYMD(checkinDate, 1), defaultCheckOutTime));
       return;
     }
     if (newCheckoutDate === checkinDate) {
       setDateError("A data de saída não pode ser igual à data de chegada. Mínimo 1 diária.");
-      const nextDay = new Date(dtChegadaLocal.split("T")[0]);
-      nextDay.setDate(nextDay.getDate() + 1);
-      const pad = (n: number) => (n < 10 ? "0" + n : String(n));
-      const nextDayStr = `${nextDay.getFullYear()}-${pad(nextDay.getMonth() + 1)}-${pad(nextDay.getDate())}`;
-      setDtSaidaLocal(buildLocalDateTime(nextDayStr, defaultCheckOutTime));
+      setDtSaidaLocal(buildLocalDateTime(addDaysToYMD(checkinDate, 1), defaultCheckOutTime));
       return;
     }
     setDateError(null);
@@ -552,22 +791,32 @@ export default function CheckinHospedagemModal({
   // Search Guest Modal
   const [showSearchGuestModal, setShowSearchGuestModal] = useState<boolean>(false);
   const [searchGuestQuery, setSearchGuestQuery] = useState<string>("");
-  // Guest Database List (com inclusão automática via API)
-  const mockGuestDB = [
-    { name: "ANSELMO DE SOUZA LEÃO", doc: "123.456.789-00", phone: "(35) 98414-0199" },
-    { name: "MARCELO LIMA NUNES", doc: "111.222.333-44", phone: "(11) 98888-1111" },
-    { name: "PEDRO RICARDO DA SILVA FAGUNDES", doc: "222.333.444-55", phone: "(21) 99999-2222" },
-    { name: "CARLOS DAVI SOUZA FERREIRA", doc: "643.204.301-82", phone: "(11) 98765-4321" },
-    { name: "MARIA CAROLINA LOPES", doc: "775.252.801-34", phone: "(11) 90719-3807" },
-    { name: "JOÃO PEDRO ALMEIDA", doc: "321.456.789-00", phone: "(68) 99887-6543" },
-    { name: "ANA PAULA FERREIRA", doc: "123.456.789-09", phone: "(11) 91234-5678" },
-    { name: "ROBERTO CARLOS SILVA", doc: "987.654.321-00", phone: "(21) 99876-5432" },
-  ];
-  const filteredGuests = mockGuestDB.filter(
-    (g) =>
-      g.name.includes(searchGuestQuery.toUpperCase()) ||
-      g.doc.includes(searchGuestQuery)
-  );
+  const [dbGuests, setDbGuests] = useState<Array<{ name: string; doc: string; phone: string }>>([]);
+
+  useEffect(() => {
+    if (!showSearchGuestModal) return;
+    const fetchGuests = async () => {
+      try {
+        const res = await fetch(`/api/cadastros/hospedes?q=${encodeURIComponent(searchGuestQuery)}`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.guests)) {
+          setDbGuests(data.guests.map((g: any) => ({
+            name: g.fullName || "",
+            doc: g.cpf || "",
+            phone: g.phone || g.whatsappPhone || "",
+          })));
+        } else {
+          setDbGuests([]);
+        }
+      } catch (err) {
+        console.error("Erro ao buscar hóspedes do banco:", err);
+        setDbGuests([]);
+      }
+    };
+    fetchGuests();
+  }, [showSearchGuestModal, searchGuestQuery]);
+
+  const filteredGuests = dbGuests;
 
   // Manual Guest Modal
   const [showManualGuestModal, setShowManualGuestModal] = useState<boolean>(false);
@@ -577,7 +826,7 @@ export default function CheckinHospedagemModal({
     identity: "", address: "", email: "",
   });
 
-  const handleSelectSearchGuest = (guest: typeof mockGuestDB[0]) => {
+  const handleSelectSearchGuest = (guest: { name: string; doc: string; phone: string }) => {
     setGuestName(guest.name);
     setDocNumber(guest.doc);
     setPhone(guest.phone);
@@ -588,7 +837,7 @@ export default function CheckinHospedagemModal({
   };
 
   const handleConfirmManualGuest = () => {
-    if (!manualForm.name.trim()) { alert("Informe o nome do hóspede."); return; }
+    if (!manualForm.name.trim()) { toast.warning("Informe o nome do hóspede."); return; }
     const uppercaseName = manualForm.name.toUpperCase();
     setGuestName(uppercaseName);
     setDocNumber(manualForm.doc);
@@ -630,21 +879,51 @@ export default function CheckinHospedagemModal({
     setManualForm({ name: "", doc: "", docType: "CPF", phone: "", birthDate: "", gender: "", motherName: "", fatherName: "", identity: "", address: "", email: "" });
   };
 
-  // Calculate nights difference on date change (using datetime-local strings for precision)
+  // Calculate nights: diferença em dias de calendário entre chegada e saída
+  // (o horário de chegada/saída não deve influenciar a contagem de diárias).
   useEffect(() => {
     try {
-      const d1 = new Date(dtChegadaLocal);
-      const d2 = new Date(dtSaidaLocal);
-      const diffMs = d2.getTime() - d1.getTime();
-      const diffDays = Math.max(1, Math.ceil(diffMs / (1000 * 3600 * 24)));
+      const [y1, m1, d1] = localToDateOnly(dtChegadaLocal).split("-").map(Number);
+      const [y2, m2, d2] = localToDateOnly(dtSaidaLocal).split("-").map(Number);
+      const diffMs = new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime();
+      const diffDays = Math.max(1, Math.round(diffMs / (1000 * 3600 * 24)));
       setNights(diffDays);
     } catch {
       setNights(1);
     }
   }, [dtChegadaLocal, dtSaidaLocal]);
 
+  // Chegada de madrugada: detectada quando o horário efetivo da chegada (já resolvido em
+  // resolveCheckinTime) cai antes do corte — exige decisão do operador sobre a noite anterior.
+  const isMadrugadaCheckin = isMadrugadaArrival(dtChegadaLocal.split("T")[1] || "00:00");
+
+  const earlyArrivalFixedFeeValue = parseFloat(earlyArrivalFixedFeeInput.replace(/\./g, "").replace(",", ".")) || 0;
+  // Taxa fixa abaixo da metade da diária é tratada como desconto informal — exige autorização
+  // de administrador, igual à cortesia, para evitar que o operador zere o valor sozinho.
+  const earlyArrivalFixedFeeBelowHalf = earlyArrivalChoice === "FIXED_FEE" && earlyArrivalFixedFeeValue < dailyRate / 2;
+  const earlyArrivalFixedFeeNeedsAuth = earlyArrivalFixedFeeBelowHalf && !earlyArrivalFixedFeeAuthorized;
+
+  const earlyArrivalPending = isMadrugadaCheckin && (!earlyArrivalChoice || earlyArrivalFixedFeeNeedsAuth);
+
+  const earlyArrivalCharge = !isMadrugadaCheckin
+    ? 0
+    : earlyArrivalChoice === "EXTRA_NIGHT"
+    ? dailyRate
+    : earlyArrivalChoice === "HALF_NIGHT"
+    ? dailyRate / 2
+    : earlyArrivalChoice === "FIXED_FEE"
+    ? earlyArrivalFixedFeeValue
+    : 0; // COURTESY ou ainda não decidido
+
+  const earlyArrivalLabel =
+    earlyArrivalChoice === "EXTRA_NIGHT" ? "Diária extra (chegada de madrugada)"
+    : earlyArrivalChoice === "HALF_NIGHT" ? "Meia diária (chegada de madrugada)"
+    : earlyArrivalChoice === "FIXED_FEE" ? (earlyArrivalFixedFeeBelowHalf ? `Taxa de chegada antecipada abaixo da meia diária (autorizado por ${earlyArrivalAuthorizedBy || "administrador"})` : "Taxa de chegada antecipada")
+    : earlyArrivalChoice === "COURTESY" ? `Cortesia — chegada de madrugada (autorizado por ${earlyArrivalAuthorizedBy || "administrador"})`
+    : "";
+
   // Total calculations
-  const totalDiariasBruto = nights * dailyRate;
+  const totalDiariasBruto = nights * dailyRate + earlyArrivalCharge;
   const totalAdiantamento = paymentsList.reduce((acc, item) => acc + item.amount, 0);
   const saldoAPagar = Math.max(0, totalDiariasBruto - discount - totalAdiantamento);
 
@@ -665,7 +944,7 @@ export default function CheckinHospedagemModal({
   const handleHubCpfSearch = async () => {
     const clean = docNumber.replace(/\D/g, "");
     if (docType === "CPF" && clean.length !== 11) {
-      alert("Por favor, digite um CPF válido com 11 dígitos para consultar no Hub do Desenvolvedor.");
+      toast.warning("Por favor, digite um CPF válido com 11 dígitos para consultar no Hub do Desenvolvedor.");
       return;
     }
     setHubLoading(true);
@@ -673,6 +952,42 @@ export default function CheckinHospedagemModal({
     setHubGuestSaved(false);
 
     try {
+      // Antes de consultar a API externa (Hub do Desenvolvedor), verifica se o hóspede
+      // já possui cadastro local. Se existir, carrega os dados do banco e não consulta a API.
+      if (docType === "CPF") {
+        const localRes = await fetch(`/api/cadastros/hospedes?q=${clean}`);
+        const localData = await localRes.json();
+        if (localData.success && Array.isArray(localData.guests)) {
+          const matchedGuest = localData.guests.find((g: any) => (g.cpf || "").replace(/\D/g, "") === clean);
+          if (matchedGuest) {
+            setGuestName(matchedGuest.fullName?.toUpperCase() || guestName);
+            setPhone(matchedGuest.phone || matchedGuest.whatsappPhone || phone);
+            setWhatsappPhone(matchedGuest.whatsappPhone || matchedGuest.phone || "");
+            setHasWhatsapp(!!matchedGuest.hasWhatsapp);
+            if (matchedGuest.phone || matchedGuest.whatsappPhone) {
+              setVerifiedPhones([{
+                id: "TEL-1",
+                number: matchedGuest.phone || matchedGuest.whatsappPhone,
+                hasWhatsapp: !!matchedGuest.hasWhatsapp,
+                nomeUsuarioWpp: (matchedGuest.fullName || guestName).toLowerCase().replace(/\s+/g, ".") + ".wpp",
+                whatsappName: matchedGuest.fullName || guestName,
+                isPrimary: true,
+              }]);
+            }
+            setBirthDate(matchedGuest.birthDate ? String(matchedGuest.birthDate).slice(0, 10) : "");
+            setGender(matchedGuest.gender || "");
+            setIdentity(matchedGuest.cpf || clean);
+            const addressParts = [matchedGuest.street, matchedGuest.number, matchedGuest.neighborhood, matchedGuest.city, matchedGuest.state, matchedGuest.country].filter(Boolean);
+            setFullAddress(addressParts.join(", "));
+            setEmail(matchedGuest.email || "");
+            setHubGuestSaved(true);
+            setHubMessage(`✓ Hóspede '${matchedGuest.fullName}' localizado no cadastro local. Consulta à API não é necessária.`);
+            setHubLoading(false);
+            return;
+          }
+        }
+      }
+
       const res = await fetch(`/api/stay/hub-consult-cpf?cpf=${clean}`);
       const data = await res.json();
       if (data.success && data.data) {
@@ -713,50 +1028,27 @@ export default function CheckinHospedagemModal({
         setHubMessage(`⚠️ ${data.message || "CPF não localizado na API."}`);
       }
     } catch {
-      // Fallback offline mock for dev
-      setGuestName("MARIA CAROLINA LOPES");
-      setPhone("(11) 90719-3807");
-      setWhatsappPhone("(11) 90719-3807");
-      setNomeUsuarioWpp("maria.carolina.lopes.wpp");
-      setWhatsappName("MARIA CAROLINA LOPES");
-      setHasWhatsapp(true);
-      setVerifiedPhones([
-        {
-          id: "TEL-1",
-          number: "(11) 90719-3807",
-          hasWhatsapp: true,
-          nomeUsuarioWpp: "maria.carolina.lopes.wpp",
-          whatsappName: "MARIA CAROLINA LOPES",
-          isPrimary: true,
-        },
-        {
-          id: "TEL-2",
-          number: "(68) 99909-9646",
-          hasWhatsapp: true,
-          nomeUsuarioWpp: "maria.carolina.lopes.2.wpp",
-          whatsappName: "MARIA CAROLINA LOPES",
-          isPrimary: false,
-        }
-      ]);
-      setBirthDate("17/07/1981");
-      setGender("Feminino");
-      setMotherName("VERONICA ROSALEA");
-      setFatherName("");
-      setIdentity(clean);
-      setFullAddress("RUA PERNAMBUCO, Nº 443 ALT - BOSQUE, RIO BRANCO/AC - CEP 69900-421");
-      setEmail("maria.mariacarolina@gmail.com");
-      setTelephonesList(["(11) 907193807", "(68) 999099646"]);
-      setEmailsList(["maria.mariacarolina@gmail.com"]);
-      setHubGuestSaved(true);
-      setHubMessage("✓ Hóspede 'MARIA CAROLINA LOPES' cadastrado automaticamente no banco de dados.");
+      setHubMessage("⚠️ Não foi possível realizar a consulta do CPF no momento. Por favor, preencha os dados manualmente.");
+      setHubGuestSaved(false);
     } finally {
       setHubLoading(false);
     }
   };
 
-  // Add Secondary Guest
+  // Add Secondary Guest — Coherence check against (selectedTariff.pax + children)
   const handleAddSecondaryGuest = () => {
     if (!newGuestInput.trim()) return;
+
+    const maxCapacidadeTotal = selectedTariff.pax + children;
+    const totalOccupants = 1 + secondaryGuests.length;
+    if (totalOccupants >= maxCapacidadeTotal) {
+      toast.warning(
+        `A hospedagem atual permite no máximo ${maxCapacidadeTotal} pessoa(s) (${selectedTariff.pax} Adulto(s) da Tarifa + ${children} Criança(s)).\n\nPara incluir mais acompanhantes, adicione crianças ou selecione uma tarifa com maior capacidade de adultos (ex: Duplo ou Triplo).`,
+        "Capacidade Máxima Atingida"
+      );
+      return;
+    }
+
     setSecondaryGuests((prev) => [
       ...prev,
       { id: `SEC-${Date.now()}`, name: newGuestInput.trim().toUpperCase() },
@@ -768,66 +1060,27 @@ export default function CheckinHospedagemModal({
     setSecondaryGuests((prev) => prev.filter((g) => g.id !== id));
   };
 
-  // Add Payment — posts to BOTH room account and caixa (cash register)
-  const [paymentPosting, setPaymentPosting] = useState<boolean>(false);
-  const [lastCaixaMovId, setLastCaixaMovId] = useState<string | null>(null);
-
-  const handleAddPayment = async () => {
+  // Add Payment — enquanto a tela de check-in estiver aberta, o pagamento/adiantamento fica
+  // SOMENTE na grade local (nada é gravado no banco). Só quando o usuário efetivar o check-in
+  // (handleConfirmCheckin) é que esses lançamentos seguem seu fluxo real: crédito na conta do
+  // quarto, lançamento no caixa etc — tudo dentro da mesma transação que cria a StayCheckin.
+  const handleAddPayment = () => {
     const num = parseFloat(paymentAmount.replace(/\./g, "").replace(",", "."));
     if (isNaN(num) || num <= 0) {
-      alert("Informe um valor válido para o pagamento.");
+      toast.warning("Informe um valor válido para o pagamento.");
       return;
     }
 
-    const payId = `PAY-${Date.now()}`;
-
-    // Map form method to API format
-    const methodMap: Record<string, string> = {
-      "Dinheiro": "DINHEIRO",
-      "PIX Instantâneo": "PIX",
-      "Cartão Crédito": "CARTAO_CREDITO",
-      "Cartão Débito": "CARTAO_DEBITO",
-      "Faturado Corporativo": "FATURADO_CORPORATIVO",
-    };
-
-    // Optimistically add to local list first
     setPaymentsList((prev) => [
       ...prev,
       {
-        id: payId,
+        id: `PAY-${Date.now()}`,
         date: paymentDate,
         amount: num,
         methodDescription: paymentMethod,
       },
     ]);
     setPaymentAmount("0,00");
-
-    // Dual-post to backend: room account + caixa
-    setPaymentPosting(true);
-    try {
-      const res = await fetch("/api/caixa/pagamento-checkin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          operatorId: "USR-001",
-          operatorName: "OPERADOR RECEPCAO",
-          roomId: roomData.number,
-          stayCheckinId: payId,          // temp ID until check-in confirmed
-          guestName: guestName,
-          valor: num,
-          formaPagamento: methodMap[paymentMethod] || "DINHEIRO",
-          descricao: `Pagamento no Check-in — Quarto ${roomData.number}`,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setLastCaixaMovId(data.movimentoCaixaId);
-      }
-    } catch {
-      // Fail silently — payment still recorded locally
-    } finally {
-      setPaymentPosting(false);
-    }
   };
 
   const handleRemovePayment = (id: string) => {
@@ -856,6 +1109,14 @@ export default function CheckinHospedagemModal({
   // Submit Check-in — posts dailies to room account + executes check-in
   const handleConfirmCheckin = async () => {
     // Validations
+    if (earlyArrivalPending) {
+      toast.error(
+        `Esta chegada foi registrada de madrugada (${dtChegada.slice(11, 16)}), bem antes do horário padrão de check-in.\n\nDefina abaixo como tratar a noite anterior (diária extra, meia diária, taxa fixa ou cortesia) antes de efetivar a hospedagem.`,
+        "Decisão de Chegada de Madrugada Pendente"
+      );
+      return;
+    }
+
     if (!guestName.trim()) {
       toast.warning("O Nome do Hóspede Principal é obrigatório.", "Campo Obrigatório");
       return;
@@ -895,16 +1156,34 @@ export default function CheckinHospedagemModal({
       return;
     }
 
+    const maxCapacidadeTotal = selectedTariff.pax + children;
+    const totalOccupants = 1 + secondaryGuests.length;
+
     if (adults > selectedTariff.pax) {
-      toast.warning(
-        `A quantidade de adultos (${adults}) excede o limite máximo permitido pela tarifa selecionada '${selectedTariff.name}' (máximo ${selectedTariff.pax} adulto(s)).`,
+      toast.error(
+        `A quantidade de adultos (${adults}) excede a capacidade da tarifa '${selectedTariff.name}' (${selectedTariff.pax} adulto(s)).`,
+        "Capacidade de Adultos Excedida"
+      );
+      return;
+    }
+
+    if (totalOccupants > maxCapacidadeTotal) {
+      toast.error(
+        `Check-in Bloqueado por Incoerência de Ocupação:\n\nA capacidade total desta hospedagem é de ${maxCapacidadeTotal} pessoa(s) (${selectedTariff.pax} Adulto(s) + ${children} Criança(s)), mas foram registrados ${totalOccupants} hóspede(s) (1 Principal + ${secondaryGuests.length} Acompanhante(s)).\n\nAjuste o número de crianças ou selecione uma tarifa compatível antes de continuar.`,
         "Capacidade Excedida"
       );
       return;
     }
 
-    // Generate stay ID for linking room account entries
-    const newStayId = `HPD-${Math.floor(1000 + Math.random() * 9000)}`;
+    // Mapeia a descrição da forma de pagamento exibida na grade local para o código aceito
+    // pelo backend — só agora, no momento de efetivar o check-in, esses valores seguem para o banco.
+    const paymentMethodApiCodes: Record<string, string> = {
+      "Dinheiro": "DINHEIRO",
+      "PIX Instantâneo": "PIX",
+      "Cartão Crédito": "CARTAO_CREDITO",
+      "Cartão Débito": "CARTAO_DEBITO",
+      "Faturado Corporativo": "FATURADO_CORPORATIVO",
+    };
 
     const payload = {
       roomId: roomData.number,
@@ -921,35 +1200,20 @@ export default function CheckinHospedagemModal({
       children,
       nights,
       secondaryGuests,
-      initialPayments: paymentsList,
+      initialPayments: paymentsList.map((p) => ({
+        valor: p.amount,
+        formaPagamento: paymentMethodApiCodes[p.methodDescription] || "DINHEIRO",
+        descricao: `Pagamento no Check-in — Quarto ${roomData.number}`,
+      })),
       observations: obsList,
       totalBruto: totalDiariasBruto,
       discount,
       totalAdvance: totalAdiantamento,
       balance: saldoAPagar,
-      stayCheckinId: newStayId,
+      operatorId: activeOperatorId,
+      operatorName: activeOperatorName,
     };
 
-    // 1. Post dailies to room account
-    try {
-      await fetch("/api/caixa/lancamento-diaria", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          roomId: roomData.number,
-          stayCheckinId: newStayId,
-          guestName: guestName.toUpperCase(),
-          totalDiarias: totalDiariasBruto,
-          nights,
-          dailyRate,
-          tariffName: selectedTariff.name,
-        }),
-      });
-    } catch {
-      // Fail silently — check-in proceeds regardless
-    }
-
-    // 2. Execute check-in
     onSuccess(payload);
   };
 
@@ -1014,7 +1278,7 @@ export default function CheckinHospedagemModal({
                 <input
                   type="text"
                   readOnly
-                  value={dtChegada.split(" ")[0]}
+                  value={dtChegada.slice(0, 16)}
                   className={`w-full rounded-md px-2 py-1 font-mono text-[11px] ${isDark ? "bg-slate-950/80 border border-slate-800 text-emerald-400" : "bg-emerald-50 border border-emerald-300 text-emerald-700 font-bold"}`}
                 />
               </div>
@@ -1024,7 +1288,7 @@ export default function CheckinHospedagemModal({
                 <input
                   type="text"
                   readOnly
-                  value={dtSaida.split(" ")[0]}
+                  value={dtSaida.slice(0, 16)}
                   className={`w-full rounded-md px-2 py-1 font-mono text-[11px] ${isDark ? "bg-slate-950/80 border border-slate-800 text-amber-400" : "bg-amber-50 border border-amber-300 text-amber-700 font-bold"}`}
                 />
               </div>
@@ -1164,7 +1428,7 @@ export default function CheckinHospedagemModal({
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`font-mono font-bold text-xs ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>R$ {selectedTariff.price.toFixed(2).replace(".", ",")}</span>
+                    <span className={`font-mono font-bold text-xs ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>R$ {dailyRate.toFixed(2).replace(".", ",")}</span>
                     <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showTariffDropdown ? "rotate-180" : ""}`} />
                   </div>
                 </div>
@@ -1189,8 +1453,19 @@ export default function CheckinHospedagemModal({
                           onClick={() => {
                             setSelectedTariff(t);
                             setDailyRate(t.price);
-                            setAdults(t.pax);
+                            setAdults(Math.min(adults, t.pax));
                             setShowTariffDropdown(false);
+
+                            // Ajustar lista de acompanhantes se exceder a nova capacidade (pax + crianças)
+                            const maxTotalAllowed = t.pax + children;
+                            const maxSecondaryAllowed = Math.max(0, maxTotalAllowed - 1);
+                            if (secondaryGuests.length > maxSecondaryAllowed) {
+                              setSecondaryGuests((prev) => prev.slice(0, maxSecondaryAllowed));
+                              toast.info(
+                                `A tarifa '${t.name}' acomoda até ${t.pax} adulto(s) (total ${maxTotalAllowed} pax com crianças). A lista de acompanhantes foi ajustada.`,
+                                "Ajuste de Acompanhantes"
+                              );
+                            }
                           }}
                           className={`px-3 py-2 grid grid-cols-12 gap-2 text-xs items-center cursor-pointer transition-colors ${
                             selectedTariff.id === t.id
@@ -1272,10 +1547,7 @@ export default function CheckinHospedagemModal({
                     type="radio"
                     name="docType"
                     checked={docType === "CPF"}
-                    onChange={() => {
-                      setDocType("CPF");
-                      setDocNumber("643.204.301-82");
-                    }}
+                    onChange={() => setDocType("CPF")}
                     className="accent-[#0284C7]"
                   />
                   <span>CPF</span>
@@ -1286,10 +1558,7 @@ export default function CheckinHospedagemModal({
                     type="radio"
                     name="docType"
                     checked={docType === "CNPJ"}
-                    onChange={() => {
-                      setDocType("CNPJ");
-                      setDocNumber("12.345.678/0001-90");
-                    }}
+                    onChange={() => setDocType("CNPJ")}
                     className="accent-[#0284C7]"
                   />
                   <span>CNPJ</span>
@@ -1300,10 +1569,7 @@ export default function CheckinHospedagemModal({
                     type="radio"
                     name="docType"
                     checked={docType === "PASSAPORTE"}
-                    onChange={() => {
-                      setDocType("PASSAPORTE");
-                      setDocNumber("CS987654");
-                    }}
+                    onChange={() => setDocType("PASSAPORTE")}
                     className="accent-[#0284C7]"
                   />
                   <span>Passaporte</span>
@@ -1648,37 +1914,54 @@ export default function CheckinHospedagemModal({
                 {/* Left Column: Dates, Occupants, Payment */}
                 <div className="md:col-span-7 space-y-3">
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end">
-                    <div className="col-span-2">
-                      <label className={`text-[10px] font-bold block mb-0.5 ${isDark ? "text-slate-300" : "text-slate-700"}`}>Dt.Chegada</label>
-                      <input
-                        type="datetime-local"
-                        value={dtChegadaLocal}
-                        min={nowLocalMin()}
-                        onChange={(e) => handleDtChegadaChange(e.target.value)}
-                        className={`w-full border rounded-md p-1.5 font-mono font-bold text-xs outline-none ${
-                          isDark ? "bg-slate-950 border-slate-700 text-emerald-400 focus:border-emerald-400 [color-scheme:dark]" : "bg-white border-slate-300 text-emerald-600 focus:border-emerald-500 [color-scheme:light]"
-                        }`}
-                      />
-                    </div>
+                    <div className="col-span-4 relative">
+                      <div className="flex items-center justify-between mb-0.5">
+                        <label className={`text-[10px] font-bold ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                          Período da Hospedagem
+                        </label>
+                        <span className="text-[9px] opacity-75 font-normal">(chegada: hoje, {defaultCheckInTime}h ou horário real se após o limite · saída: {defaultCheckOutTime}h)</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {/* Dt.Chegada — sempre a data de hoje, nunca editável (check-in é sempre "agora") */}
+                        <div>
+                          <span className={`block text-[9px] font-semibold mb-0.5 ${isDark ? "text-slate-400" : "text-slate-500"}`}>Dt.Chegada</span>
+                          <div
+                            title="O check-in é sempre efetivado na data de hoje."
+                            className={`w-full flex items-center justify-between gap-1 border rounded-md p-1.5 font-mono font-bold text-xs cursor-not-allowed ${
+                              isDark ? "bg-slate-950 border-slate-700 text-emerald-400" : "bg-emerald-50 border-emerald-300 text-emerald-700"
+                            }`}
+                          >
+                            <span>{dtChegada.slice(0, 16)}</span>
+                            <Lock className="w-3 h-3 shrink-0 opacity-70" />
+                          </div>
+                        </div>
 
-                    <div className="col-span-2">
-                      <label className={`text-[10px] font-bold block mb-0.5 ${isDark ? "text-slate-300" : "text-slate-700"}`}>
-                        Dt.Saida
-                        <span className="ml-1 opacity-75 font-normal">(saída: {defaultCheckOutTime}h)</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={localToDateOnly(dtSaidaLocal)}
-                        min={(() => {
-                          const nextDay = new Date(dtChegadaLocal.split("T")[0]);
-                          nextDay.setDate(nextDay.getDate() + 1);
-                          const pad = (n: number) => (n < 10 ? "0" + n : String(n));
-                          return `${nextDay.getFullYear()}-${pad(nextDay.getMonth() + 1)}-${pad(nextDay.getDate())}`;
-                        })()}
-                        onChange={(e) => handleDtSaidaChange(e.target.value + "T" + defaultCheckOutTime)}
-                        className={`w-full border rounded-md p-1.5 font-mono font-bold text-xs outline-none ${
-                          isDark ? "bg-slate-950 border-slate-700 text-amber-400 focus:border-amber-400 [color-scheme:dark]" : "bg-white border-slate-300 text-amber-700 focus:border-amber-500 [color-scheme:light]"
-                        }`}
+                        {/* Dt.Saida — apenas informativo, a escolha é feita pelo calendário */}
+                        <div>
+                          <span className={`block text-[9px] font-semibold mb-0.5 ${isDark ? "text-slate-400" : "text-slate-500"}`}>Dt.Saida</span>
+                          <button
+                            type="button"
+                            onClick={() => setShowDateRangePicker((v) => !v)}
+                            className={`w-full flex items-center justify-between gap-1 border rounded-md p-1.5 font-mono font-bold text-xs ${
+                              isDark ? "bg-slate-950 border-slate-700 text-amber-400 hover:border-amber-400" : "bg-amber-50 border-amber-300 text-amber-700 hover:border-amber-500"
+                            }`}
+                          >
+                            <span>{dtSaida.slice(0, 16)}</span>
+                            <Calendar className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <DateRangeCalendarPicker
+                        isOpen={showDateRangePicker}
+                        onClose={() => setShowDateRangePicker(false)}
+                        checkInLocal={dtChegadaLocal}
+                        checkOutLocal={dtSaidaLocal}
+                        minDateYMD={todayDateStr()}
+                        lockStart
+                        onSelectStart={() => {}}
+                        onSelectEnd={(dateYMD) => handleDtSaidaChange(`${dateYMD}T${defaultCheckOutTime}`)}
+                        isDark={isDark}
                       />
                     </div>
 
@@ -1695,7 +1978,7 @@ export default function CheckinHospedagemModal({
                         onChange={(e) => {
                           const val = parseInt(e.target.value) || 1;
                           if (val > selectedTariff.pax) {
-                            alert(`A tarifa '${selectedTariff.name}' suporta no máximo ${selectedTariff.pax} adulto(s). Para acomodar ${val} adultos, por favor selecione uma tarifa com maior capacidade.`);
+                            toast.warning(`A tarifa '${selectedTariff.name}' suporta no máximo ${selectedTariff.pax} adulto(s). Para acomodar ${val} adultos, por favor selecione uma tarifa com maior capacidade.`);
                             setAdults(selectedTariff.pax);
                             return;
                           }
@@ -1707,6 +1990,142 @@ export default function CheckinHospedagemModal({
                       />
                     </div>
                   </div>
+
+                  {/* Chegada de madrugada: exige decisão do operador sobre a noite anterior */}
+                  {isMadrugadaCheckin && (
+                    <div className={`rounded-lg border p-2.5 space-y-2 ${
+                      earlyArrivalPending
+                        ? (isDark ? "bg-red-500/10 border-red-500/40" : "bg-red-50 border-red-300")
+                        : (isDark ? "bg-slate-900/60 border-slate-700" : "bg-slate-50 border-slate-200")
+                    }`}>
+                      <div className="flex items-start gap-2">
+                        <Moon className={`w-4 h-4 shrink-0 mt-0.5 ${earlyArrivalPending ? "text-red-400" : "text-sky-400"}`} />
+                        <div className="flex-1">
+                          <p className={`text-[11px] font-bold ${earlyArrivalPending ? (isDark ? "text-red-300" : "text-red-700") : (isDark ? "text-slate-200" : "text-slate-800")}`}>
+                            Chegada de madrugada ({dtChegada.slice(11, 16)}) — muito antes do horário padrão de check-in ({defaultCheckInTime}h)
+                          </p>
+                          <p className={`text-[10px] ${isDark ? "text-slate-400" : "text-slate-600"}`}>
+                            Como tratar a noite anterior à diária oficial?
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEarlyArrivalChoice("EXTRA_NIGHT")}
+                          className={`px-2 py-1.5 rounded-md text-[10px] font-bold border transition-colors ${
+                            earlyArrivalChoice === "EXTRA_NIGHT"
+                              ? "bg-sky-600 border-sky-500 text-white"
+                              : (isDark ? "bg-slate-950 border-slate-700 text-slate-300 hover:border-sky-500" : "bg-white border-slate-300 text-slate-700 hover:border-sky-500")
+                          }`}
+                        >
+                          Diária Extra<br /><span className="font-mono opacity-80">R$ {dailyRate.toFixed(2).replace(".", ",")}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEarlyArrivalChoice("HALF_NIGHT")}
+                          className={`px-2 py-1.5 rounded-md text-[10px] font-bold border transition-colors ${
+                            earlyArrivalChoice === "HALF_NIGHT"
+                              ? "bg-sky-600 border-sky-500 text-white"
+                              : (isDark ? "bg-slate-950 border-slate-700 text-slate-300 hover:border-sky-500" : "bg-white border-slate-300 text-slate-700 hover:border-sky-500")
+                          }`}
+                        >
+                          Meia Diária<br /><span className="font-mono opacity-80">R$ {(dailyRate / 2).toFixed(2).replace(".", ",")}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEarlyArrivalChoice("FIXED_FEE")}
+                          className={`px-2 py-1.5 rounded-md text-[10px] font-bold border transition-colors ${
+                            earlyArrivalChoice === "FIXED_FEE"
+                              ? "bg-sky-600 border-sky-500 text-white"
+                              : (isDark ? "bg-slate-950 border-slate-700 text-slate-300 hover:border-sky-500" : "bg-white border-slate-300 text-slate-700 hover:border-sky-500")
+                          }`}
+                        >
+                          Taxa Fixa
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (earlyArrivalCourtesyAuthorized) {
+                              setEarlyArrivalChoice("COURTESY");
+                            } else {
+                              setAdminAuthPurpose("COURTESY");
+                              setShowAdminAuthModal(true);
+                            }
+                          }}
+                          className={`px-2 py-1.5 rounded-md text-[10px] font-bold border transition-colors flex items-center justify-center gap-1 ${
+                            earlyArrivalChoice === "COURTESY"
+                              ? "bg-emerald-600 border-emerald-500 text-white"
+                              : (isDark ? "bg-slate-950 border-slate-700 text-slate-300 hover:border-emerald-500" : "bg-white border-slate-300 text-slate-700 hover:border-emerald-500")
+                          }`}
+                        >
+                          <ShieldCheck className="w-3 h-3 opacity-80" /> Cortesia
+                        </button>
+                      </div>
+
+                      {earlyArrivalChoice === "FIXED_FEE" && (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-semibold ${isDark ? "text-slate-400" : "text-slate-600"}`}>Valor da taxa (R$):</span>
+                            <input
+                              type="text"
+                              value={earlyArrivalFixedFeeInput}
+                              onChange={(e) => {
+                                setEarlyArrivalFixedFeeInput(e.target.value);
+                                setEarlyArrivalFixedFeeAuthorized(false);
+                              }}
+                              className={`w-24 border rounded-md px-2 py-1 text-right font-mono font-bold text-xs ${
+                                earlyArrivalFixedFeeBelowHalf
+                                  ? (isDark ? "bg-slate-950 border-amber-500 text-amber-300" : "bg-amber-50 border-amber-400 text-amber-800")
+                                  : (isDark ? "bg-slate-950 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900")
+                              }`}
+                            />
+                            <span className={`text-[9px] ${isDark ? "text-slate-500" : "text-slate-500"}`}>
+                              (mínimo sem autorização: R$ {(dailyRate / 2).toFixed(2).replace(".", ",")})
+                            </span>
+                          </div>
+
+                          {earlyArrivalFixedFeeBelowHalf && (
+                            <div className={`flex items-center gap-2 text-[10px] font-semibold ${isDark ? "text-amber-300" : "text-amber-700"}`}>
+                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                              {earlyArrivalFixedFeeAuthorized ? (
+                                <span className="flex items-center gap-1">
+                                  <ShieldCheck className="w-3 h-3" /> Autorizado por {earlyArrivalAuthorizedBy}
+                                </span>
+                              ) : (
+                                <>
+                                  <span>Valor abaixo da meia diária exige senha de administrador.</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAdminAuthPurpose("LOW_FIXED_FEE");
+                                      setShowAdminAuthModal(true);
+                                    }}
+                                    className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-700 text-white font-bold shrink-0"
+                                  >
+                                    Autorizar
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {earlyArrivalChoice === "COURTESY" && earlyArrivalAuthorizedBy && (
+                        <div className={`flex items-center gap-1.5 text-[10px] font-semibold ${isDark ? "text-emerald-300" : "text-emerald-700"}`}>
+                          <ShieldCheck className="w-3 h-3" /> Cortesia autorizada por {earlyArrivalAuthorizedBy}
+                        </div>
+                      )}
+
+                      {earlyArrivalPending && (
+                        <div className={`flex items-center gap-1.5 text-[10px] font-semibold ${isDark ? "text-red-300" : "text-red-700"}`}>
+                          <AlertTriangle className="w-3 h-3" /> Selecione uma opção para liberar a hospedagem
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end">
                     <div>
@@ -1751,11 +2170,7 @@ export default function CheckinHospedagemModal({
                   <div className={`pt-2 border-t space-y-2 ${isDark ? "border-slate-800" : "border-slate-200"}`}>
                     <div className="flex items-center justify-between">
                       <span className={`font-bold text-[11px] ${isDark ? "text-[#00b4d8]" : "text-[#0284C7]"}`}>Pagamento Inicial / Adiantamento:</span>
-                      {lastCaixaMovId && (
-                        <span className="text-[9px] text-emerald-600 font-mono bg-emerald-500/10 border border-emerald-500/20 rounded px-1.5 py-0.5 flex items-center gap-1">
-                          <CheckCircle2 className="w-2.5 h-2.5" /> Caixa: {lastCaixaMovId}
-                        </span>
-                      )}
+                      <span className="text-[9px] text-slate-400 italic">Gravado ao confirmar o check-in</span>
                     </div>
                     <div className="grid grid-cols-12 gap-1.5 items-end">
                       <div className="col-span-3">
@@ -1800,16 +2215,12 @@ export default function CheckinHospedagemModal({
                         <button
                           type="button"
                           onClick={handleAddPayment}
-                          disabled={paymentPosting}
                           className={`w-full p-1 rounded font-bold text-white flex items-center justify-center disabled:opacity-60 ${
                             isDark ? "bg-[#00b4d8] hover:bg-[#0077b6]" : "bg-[#0284C7] hover:bg-[#0369A1]"
                           }`}
-                          title="Lançar Pagamento na Conta do Quarto + Caixa"
+                          title="Adicionar Pagamento/Adiantamento à grade (gravado ao confirmar o check-in)"
                         >
-                          {paymentPosting
-                            ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            : <Plus className="w-3.5 h-3.5" />
-                          }
+                          <Plus className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -1868,24 +2279,45 @@ export default function CheckinHospedagemModal({
 
                 {/* Right Column: Demais Hospedes Grid (Print 1) */}
                 <div className={`md:col-span-5 space-y-2 border-l pl-0 md:pl-3 ${isDark ? "border-slate-800" : "border-slate-200"}`}>
-                  <span className={`font-bold text-[11px] block ${isDark ? "text-[#00b4d8]" : "text-[#0284C7]"}`}>Demais Hospede:</span>
+                  <div className="flex items-center justify-between">
+                    <span className={`font-bold text-[11px] block ${isDark ? "text-[#00b4d8]" : "text-[#0284C7]"}`}>Demais Hospede:</span>
+                    <span className={`text-[10px] font-mono font-bold ${
+                      1 + secondaryGuests.length >= selectedTariff.pax + children ? "text-amber-500" : isDark ? "text-slate-400" : "text-slate-600"
+                    }`}>
+                      {1 + secondaryGuests.length} / {selectedTariff.pax + children} pax
+                    </span>
+                  </div>
+
+                  {1 + secondaryGuests.length >= selectedTariff.pax + children && (
+                    <div className="p-1.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-500 text-[10px] font-medium flex items-center gap-1">
+                      <Info className="w-3 h-3 shrink-0" />
+                      Limite da hospedagem atingido ({selectedTariff.pax + children} pax = {selectedTariff.pax} Ad. + {children} Cri.).
+                    </div>
+                  )}
+
                   <div className="flex gap-1">
                     <input
                       type="text"
                       value={newGuestInput}
                       onChange={(e) => setNewGuestInput(e.target.value)}
-                      placeholder="Nome do acompanhante..."
-                      className={`w-full border rounded-lg p-1.5 text-xs outline-none ${
+                      disabled={1 + secondaryGuests.length >= selectedTariff.pax + children}
+                      placeholder={
+                        1 + secondaryGuests.length >= selectedTariff.pax + children
+                          ? "Limite da hospedagem atingido..."
+                          : "Nome do acompanhante..."
+                      }
+                      className={`w-full border rounded-lg p-1.5 text-xs outline-none disabled:opacity-50 disabled:cursor-not-allowed ${
                         isDark ? "bg-slate-950 border-slate-700 text-slate-200 focus:border-[#00b4d8]" : "bg-white border-slate-300 text-slate-900 focus:border-[#0284C7]"
                       }`}
                     />
                     <button
                       type="button"
                       onClick={handleAddSecondaryGuest}
-                      className={`px-2.5 py-1.5 rounded-lg text-white font-bold flex items-center justify-center ${
+                      disabled={1 + secondaryGuests.length >= selectedTariff.pax + children}
+                      className={`px-2.5 py-1.5 rounded-lg text-white font-bold flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed ${
                         isDark ? "bg-[#00b4d8] hover:bg-[#0077b6]" : "bg-[#0284C7] hover:bg-[#0369A1]"
                       }`}
-                      title="Adicionar Acompanhante"
+                      title={1 + secondaryGuests.length >= selectedTariff.pax + children ? `Limite da hospedagem (${selectedTariff.pax + children} pax) atingido.` : "Adicionar Acompanhante"}
                     >
                       <Plus className="w-4 h-4" />
                     </button>
@@ -2381,6 +2813,30 @@ export default function CheckinHospedagemModal({
             </div>
           </div>
         )}
+
+        {/* ===== AUTORIZAÇÃO ADMIN: CORTESIA OU TAXA FIXA ABAIXO DA META DIÁRIA (CHEGADA DE MADRUGADA) ===== */}
+        <AdminAuthorizationModal
+          isOpen={showAdminAuthModal}
+          onClose={() => { setShowAdminAuthModal(false); setAdminAuthPurpose(null); }}
+          reason={
+            adminAuthPurpose === "LOW_FIXED_FEE"
+              ? "aplicar uma taxa de chegada antecipada abaixo da meia diária"
+              : "conceder cortesia (isenção de cobrança) na noite anterior a uma chegada de madrugada"
+          }
+          onAuthorized={(admin) => {
+            setEarlyArrivalAuthorizedBy(admin.name);
+            if (adminAuthPurpose === "LOW_FIXED_FEE") {
+              setEarlyArrivalFixedFeeAuthorized(true);
+              toast.success(`Taxa reduzida autorizada por ${admin.name}.`);
+            } else {
+              setEarlyArrivalCourtesyAuthorized(true);
+              setEarlyArrivalChoice("COURTESY");
+              toast.success(`Cortesia autorizada por ${admin.name}.`);
+            }
+            setShowAdminAuthModal(false);
+            setAdminAuthPurpose(null);
+          }}
+        />
       </div>
     );
   }

@@ -20,6 +20,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
+import { useConfirm } from "@/context/ConfirmContext";
 import CadastroHospedeModal, { HospedeFormData } from "@/components/CadastroHospedeModal";
 
 interface GuestFromDB {
@@ -34,11 +36,14 @@ interface GuestFromDB {
   state: string | null;
   country: string;
   street: string | null;
+  number: string | null;
+  neighborhood: string | null;
   zipCode: string | null;
   gender: string | null;
   birthDate: string | null;
   companyId: string | null;
   company: { name: string; cnpj: string } | null;
+  vehicles: { id: string; placa: string; caracteristica: string | null }[];
 }
 
 interface ApiResponse {
@@ -64,9 +69,9 @@ function guestToFormData(guest: GuestFromDB): HospedeFormData {
     dtNascimento: guest.birthDate ? guest.birthDate.substring(0, 10) : "",
     cep: guest.zipCode || "",
     logradouro: guest.street || "",
-    numero: "",
+    numero: guest.number || "",
     complEnder: "",
-    bairro: "",
+    bairro: guest.neighborhood || "",
     cidade: guest.city || "",
     uf: guest.state || "",
     pais: guest.country || "Brasil",
@@ -81,7 +86,11 @@ function guestToFormData(guest: GuestFromDB): HospedeFormData {
     emails: guest.email
       ? [{ email: guest.email, emailPrincipal: true }]
       : [],
-    veiculos: [],
+    veiculos: (guest.vehicles || []).map((v) => ({
+      id: v.id,
+      placaVeiculo: v.placa,
+      caractVeic: v.caracteristica || "",
+    })),
     ocorrencia: "",
   };
 }
@@ -100,6 +109,7 @@ function formDataToApiPayload(data: HospedeFormData) {
     zipCode: data.cep || null,
     street: data.logradouro || null,
     number: data.numero || null,
+    neighborhood: data.bairro || null,
     city: data.cidade || null,
     state: data.uf || null,
     country: data.pais || "Brasil",
@@ -112,6 +122,8 @@ const PAGE_SIZE = 50;
 export default function HospedesPage() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
+  const toast = useToast();
+  const confirmDialog = useConfirm();
 
   const [guests, setGuests] = useState<GuestFromDB[]>([]);
   const [total, setTotal] = useState(0);
@@ -177,13 +189,19 @@ export default function HospedesPage() {
   };
 
   const handleDelete = async (id: string, nome: string) => {
-    if (!confirm(`Deseja excluir o cadastro de "${nome}"?`)) return;
+    const ok = await confirmDialog({
+      title: "Excluir Hóspede",
+      message: `Deseja excluir o cadastro de "${nome}"?`,
+      confirmLabel: "Excluir",
+      variant: "danger",
+    });
+    if (!ok) return;
     try {
       const res = await fetch(`/api/cadastros/hospedes/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await fetchGuests(searchQuery, page);
     } catch {
-      alert("Erro ao excluir hóspede.");
+      toast.error("Erro ao excluir hóspede.");
     }
   };
 
@@ -211,10 +229,19 @@ export default function HospedesPage() {
         throw new Error(err.error || `HTTP ${res.status}`);
       }
 
+      const savedGuest = await res.json();
+      const guestId = data.id || savedGuest.id;
+
+      await fetch(`/api/cadastros/hospedes/${guestId}/veiculos`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ veiculos: data.veiculos }),
+      });
+
       setIsModalOpen(false);
       await fetchGuests(searchQuery, page);
     } catch (err: any) {
-      alert(`Erro ao salvar hóspede: ${err.message}`);
+      toast.error(`Erro ao salvar hóspede: ${err.message}`);
     }
   };
 

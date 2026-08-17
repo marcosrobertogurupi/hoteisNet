@@ -14,6 +14,7 @@ import {
   Copy
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
 import { TelefoneItem, EmailItem } from "@/components/CadastroHospedeModal";
 
 export interface EmpresaFormData {
@@ -56,6 +57,7 @@ export default function CadastroEmpresaModal({
   initialData,
 }: CadastroEmpresaModalProps) {
   const { theme } = useTheme();
+  const toast = useToast();
   const isDark = theme.isDark;
 
   const [activeTab, setActiveTab] = useState<"dados" | "cobranca" | "contatos" | "obs">("dados");
@@ -184,7 +186,7 @@ export default function CadastroEmpresaModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.razao.trim()) {
-      alert("Por favor, preencha a Razão Social da Empresa.");
+      toast.warning("Por favor, preencha a Razão Social da Empresa.");
       return;
     }
     onSave(formData);

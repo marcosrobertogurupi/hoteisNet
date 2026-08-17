@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { CreditCard, Building2, CheckCircle2, DollarSign, FileText, Printer, ArrowRight, ShieldCheck, UserCheck } from "lucide-react";
+import { useToast } from "@/context/ToastContext";
 
 export default function TenantCheckoutPage() {
+  const toast = useToast();
   const [selectedRoomNumber, setSelectedRoomNumber] = useState("102");
   const [billingOption, setBillingOption] = useState<"DIRECT" | "CORPORATE" | "MIXED">("CORPORATE");
   const [paymentMethod, setPaymentMethod] = useState("PIX");
@@ -103,7 +105,7 @@ export default function TenantCheckoutPage() {
               Voltar ao Checkout
             </button>
             <button
-              onClick={() => alert("Imprimindo Extrato de Encerramento e Fatura...")}
+              onClick={() => toast.info("Imprimindo Extrato de Encerramento e Fatura...")}
               className="px-6 py-2 bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold rounded-lg flex items-center gap-2"
             >
               <Printer className="w-4 h-4" /> Imprimir Extrato & Fatura

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { X, Eye, Printer, Filter, Search, ChevronDown, Check } from "lucide-react";
 import { INITIAL_TARIFFS, TariffItem } from "./CadastroTarifasModal";
+import { useToast } from "@/context/ToastContext";
 
 export interface DailyRateItem {
   id: string;
@@ -48,6 +49,8 @@ export default function AlterarTarifaHospedagemModal({
   stayData,
   onSave,
 }: AlterarTarifaHospedagemModalProps) {
+  const toast = useToast();
+
   // State for available subscriber tariffs
   const [tariffs] = useState<TariffItem[]>(INITIAL_TARIFFS);
   
@@ -139,7 +142,7 @@ export default function AlterarTarifaHospedagemModal({
   const handleApplyToSelected = () => {
     const hasSelected = dailyRates.some((item) => item.selected);
     if (!hasSelected) {
-      alert("Selecione ao menos uma diária na tabela abaixo para aplicar a nova tarifa.");
+      toast.warning("Selecione ao menos uma diária na tabela abaixo para aplicar a nova tarifa.");
       return;
     }
 
@@ -149,13 +152,6 @@ export default function AlterarTarifaHospedagemModal({
           ? { ...item, tariffName: selectedTariff.name, rateValue: customDailyValue, selected: false }
           : item
       )
-    );
-  };
-
-  // Handle individual row rate change
-  const handleRateValueChange = (id: string, newValue: number) => {
-    setDailyRates((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, rateValue: newValue } : item))
     );
   };
 
@@ -174,7 +170,7 @@ export default function AlterarTarifaHospedagemModal({
         dailyRates,
       });
     }
-    alert(`Novas tarifas salvas com sucesso para o Hóspede ${stayData.guestName}!\n\nNovo Saldo a Pagar: R$ ${saldoAPagar.toFixed(2).replace(".", ",")}`);
+    toast.success(`Novas tarifas salvas com sucesso para o Hóspede ${stayData.guestName}!\n\nNovo Saldo a Pagar: R$ ${saldoAPagar.toFixed(2).replace(".", ",")}`);
     onClose();
   };
 
@@ -549,13 +545,7 @@ export default function AlterarTarifaHospedagemModal({
                         {row.endDate}
                       </td>
                       <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.rateValue}
-                          onChange={(e) => handleRateValueChange(row.id, Number(e.target.value))}
-                          className="w-24 text-right bg-white border border-slate-200 px-1 py-0.5 font-mono text-xs focus:outline-none focus:border-[#00b4d8]"
-                        />
+                        {row.rateValue.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                     </tr>
                   ))}

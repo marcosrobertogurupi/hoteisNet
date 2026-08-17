@@ -18,6 +18,8 @@ export interface ConsumptionItem {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  operatorName?: string | null;
+  posLocationName?: string | null;
 }
 
 export interface TariffPeriodItem {
@@ -41,7 +43,7 @@ export interface ExtratoRoomData {
   checkInDate: string; // e.g. "23/01/2026 21:18:49"
   prevCheckOutDate: string; // e.g. "24/01/2026 14:00:00"
   actualCheckOutDate?: string; // e.g. "11/08/2026 16:39:04"
-  extrasAmount?: number;
+  extrasAmount?: number; // quantidade de diárias extras (além da saída originalmente prevista), não valor monetário
   outrosDebitos?: number;
   adiantamento?: number;
   desconto?: number;
@@ -104,7 +106,7 @@ const formatDateMask = (val: string): string => {
 export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemModalProps> = ({
   isOpen,
   onClose,
-  roomData,
+  roomData: liveRoomData,
 }) => {
   const {
     hotelName,
@@ -123,6 +125,12 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
     sendReceiptEmailEnabled,
   } = useTheme();
 
+  // Padrão desta tela: os dados são buscados do banco UMA VEZ, na abertura da janela, e ficam
+  // estáticos enquanto ela permanece aberta — não devem ser sobrescritos pela sincronização em
+  // segundo plano (a cada 3s) que o Mapa de Quartos roda por trás. Por isso guardamos aqui um
+  // snapshot local (roomData) em vez de usar a prop ao vivo (liveRoomData) diretamente no corpo do componente.
+  const [roomData, setRoomData] = useState<ExtratoRoomData>(liveRoomData);
+
   // Extract initial date strings (DD/MM/YYYY)
   const initialStartDate = roomData.checkInDate ? roomData.checkInDate.split(" ")[0] : "23/01/2026";
   const initialEndDate = roomData.actualCheckOutDate
@@ -136,11 +144,17 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
   const [appliedStartDate, setAppliedStartDate] = useState<string>(formatDateMask(initialStartDate));
   const [appliedEndDate, setAppliedEndDate] = useState<string>(formatDateMask(initialEndDate));
 
+  // Só tira um novo snapshot (e reinicializa os campos de data) quando o modal é ABERTO
+  // (transição false -> true), nunca em atualizações subsequentes de liveRoomData (ex: polling
+  // de sincronização do Mapa de Quartos a cada 3s) — senão tanto os dados exibidos quanto o valor
+  // digitado pelo usuário nos filtros de data seriam sobrescritos enquanto o modal está aberto.
+  const wasOpenRef = React.useRef(false);
   useEffect(() => {
-    if (isOpen) {
-      const start = roomData.checkInDate ? roomData.checkInDate.split(" ")[0] : "23/01/2026";
-      const end = roomData.actualCheckOutDate
-        ? roomData.actualCheckOutDate.split(" ")[0]
+    if (isOpen && !wasOpenRef.current) {
+      setRoomData(liveRoomData);
+      const start = liveRoomData.checkInDate ? liveRoomData.checkInDate.split(" ")[0] : "23/01/2026";
+      const end = liveRoomData.actualCheckOutDate
+        ? liveRoomData.actualCheckOutDate.split(" ")[0]
         : "11/08/2026";
       const formattedStart = formatDateMask(start);
       const formattedEnd = formatDateMask(end);
@@ -149,7 +163,8 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
       setAppliedStartDate(formattedStart);
       setAppliedEndDate(formattedEnd);
     }
-  }, [isOpen, roomData]);
+    wasOpenRef.current = isOpen;
+  }, [isOpen, liveRoomData]);
 
   const [modeSynthetic, setModeSynthetic] = useState<boolean>(false); // false = Analítico, true = Sintético
   const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
@@ -164,10 +179,10 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
   const [sendingEmail, setSendingEmail] = useState<boolean>(false);
   const [emailStatusMsg, setEmailStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Fallback lists if empty
+  // O hóspede principal já é exibido no cabeçalho ("Nome do Hospede Principal") — esta lista
+  // é só dos acompanhantes da hospedagem, para não duplicar o nome principal na grade abaixo.
   const guests: GuestItem[] = useMemo(() => {
-    if (roomData.allGuests && roomData.allGuests.length > 0) return roomData.allGuests;
-    return [{ id: "1", name: roomData.guestName || "FAUSTO DE OLIVEIRA DA COSTA", isPrimary: true }];
+    return (roomData.allGuests || []).filter((g) => !g.isPrimary);
   }, [roomData]);
 
   const rawConsumptions: ConsumptionItem[] = useMemo(() => {
@@ -557,7 +572,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
           {/* Consumptions Table */}
           {filteredConsumptions.length > 0 && (
             <div className="mb-4 avoid-break">
-              <table className="w-full text-xs border-collapse">
+              <table className="w-full text-[9px] border-collapse">
                 <thead>
                   <tr className="border-b border-black text-left font-bold">
                     <th className="pb-1">Dt/Hora Consumo</th>
@@ -570,11 +585,14 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
                 <tbody>
                   {filteredConsumptions.map((c, idx) => (
                     <tr key={idx} className="border-b border-slate-200">
-                      <td className="py-1">{c.date}</td>
-                      <td className="py-1">{c.description}</td>
-                      <td className="py-1 text-center">{c.quantity.toFixed(4).replace(".", ",")}</td>
-                      <td className="py-1 text-right">R$ {c.unitPrice.toFixed(2).replace(".", ",")}</td>
-                      <td className="py-1 text-right">R$ {c.totalPrice.toFixed(2).replace(".", ",")}</td>
+                      <td className="py-0.5">{c.date}</td>
+                      <td className="py-0.5">
+                        {c.description}
+                        {c.posLocationName ? `(${c.posLocationName})` : ""}
+                      </td>
+                      <td className="py-0.5 text-center">{c.quantity.toFixed(4).replace(".", ",")}</td>
+                      <td className="py-0.5 text-right">R$ {c.unitPrice.toFixed(2).replace(".", ",")}</td>
+                      <td className="py-0.5 text-right">R$ {c.totalPrice.toFixed(2).replace(".", ",")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -656,22 +674,24 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
         <div className="p-3 space-y-2 overflow-y-auto flex-1 bg-[#F4F4F4]">
           
           {/* HEADER STRIP: Quartos, Nome Hóspede, Dates, Extras */}
-          <div className="bg-[#E4E4E4] border border-slate-300 p-2 rounded flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-            <div className="flex items-center gap-1">
-              <span className="font-bold text-slate-700">Quartos:</span>
-              <select className="bg-white border border-slate-400 rounded px-1.5 py-0.5 text-xs font-semibold focus:outline-none">
-                <option>{roomData.number || "310"}</option>
-              </select>
-            </div>
+          <div className="bg-[#E4E4E4] border border-slate-300 p-2 rounded space-y-2 text-xs">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="font-bold text-slate-700">Quartos:</span>
+                <select className="bg-white border border-slate-400 rounded px-1.5 py-0.5 text-xs font-semibold focus:outline-none">
+                  <option>{roomData.number || "310"}</option>
+                </select>
+              </div>
 
-            <div className="flex items-center gap-1 flex-1 min-w-[200px]">
-              <span className="font-bold text-slate-700 whitespace-nowrap">Nome do Hospede Principal:</span>
-              <div className="bg-[#FFFFC0] border border-slate-400 px-2 py-0.5 font-bold text-slate-900 w-full truncate rounded-sm">
-                {roomData.guestName || "FAUSTO DE OLIVEIRA DA COSTA"}
+              <div className="flex items-center gap-1 flex-1 min-w-[240px]">
+                <span className="font-bold text-slate-700 whitespace-nowrap">Nome do Hospede Principal:</span>
+                <div className="bg-[#FFFFC0] border border-slate-400 px-2 py-0.5 font-bold text-slate-900 flex-1 min-w-0 truncate rounded-sm">
+                  {roomData.guestName || "FAUSTO DE OLIVEIRA DA COSTA"}
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 font-mono text-[11px]">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px]">
               <div>
                 <span className="font-bold text-slate-700">Dt.Chegada:</span>{" "}
                 <span className="text-slate-900">{roomData.checkInDate || "23/01/2026 21:18:49"}</span>
@@ -694,7 +714,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
 
               <div>
                 <span className="font-bold text-slate-700">Extras:</span>{" "}
-                <span className="text-red-600 font-bold">{roomData.extrasAmount || 200}</span>
+                <span className="text-red-600 font-bold">{roomData.extrasAmount ?? 0}</span>
               </div>
             </div>
           </div>
@@ -705,7 +725,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
             {/* Left Box: Nome Hospede Table */}
             <div className="md:col-span-5 bg-white border border-slate-300 rounded overflow-hidden flex flex-col h-40">
               <div className="bg-[#00BCD4] text-white font-bold px-2 py-1 flex items-center justify-between text-xs">
-                <span>Nome Hospede</span>
+                <span>Acompanhantes</span>
                 <span className="text-[10px]">Filter</span>
               </div>
               <div className="flex-1 overflow-y-auto">
@@ -723,6 +743,11 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
                         <td className="px-2 py-1 font-semibold text-slate-800">{g.name}</td>
                       </tr>
                     ))}
+                    {guests.length === 0 && (
+                      <tr>
+                        <td colSpan={2} className="text-center py-4 text-slate-400 italic">Nenhum acompanhante registrado.</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -807,7 +832,10 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
                 <thead>
                   <tr className="bg-slate-100 border-b text-slate-600 text-[11px] font-semibold">
                     <th className="px-2 py-1 border-r w-12 text-center">Item</th>
+                    <th className="px-2 py-1 border-r w-28">Dt/Hora Lançto.</th>
                     <th className="px-2 py-1 border-r">Descrição</th>
+                    <th className="px-2 py-1 border-r w-24">Operador</th>
+                    <th className="px-2 py-1 border-r w-24">PDV</th>
                     <th className="px-2 py-1 border-r text-right w-20">Quant.</th>
                     <th className="px-2 py-1 border-r text-right w-24">Valor.Unit</th>
                     <th className="px-2 py-1 text-right w-24">Valor Total</th>
@@ -817,7 +845,10 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
                   {filteredConsumptions.map((c) => (
                     <tr key={c.itemNumber} className="hover:bg-slate-50">
                       <td className="px-2 py-1 border-r text-center font-mono text-slate-500">{c.itemNumber}</td>
+                      <td className="px-2 py-1 border-r font-mono text-slate-700">{c.date}</td>
                       <td className="px-2 py-1 border-r font-semibold text-slate-800">{c.description}</td>
+                      <td className="px-2 py-1 border-r text-slate-700">{c.operatorName || "-"}</td>
+                      <td className="px-2 py-1 border-r text-slate-700">{c.posLocationName || "-"}</td>
                       <td className="px-2 py-1 border-r text-right font-mono">{c.quantity.toFixed(4)}</td>
                       <td className="px-2 py-1 border-r text-right font-mono">R$ {c.unitPrice.toFixed(2)}</td>
                       <td className="px-2 py-1 text-right font-mono font-bold text-slate-900">R$ {c.totalPrice.toFixed(2)}</td>
@@ -825,7 +856,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
                   ))}
                   {filteredConsumptions.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="text-center py-4 text-slate-400 italic">Nenhum consumo no período filtrado.</td>
+                      <td colSpan={8} className="text-center py-4 text-slate-400 italic">Nenhum consumo no período filtrado.</td>
                     </tr>
                   )}
                 </tbody>

@@ -1,0 +1,86 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { logActivity } from "@/lib/audit";
+import { resolveTerminalLabel } from "@/lib/terminal";
+import {
+  verifyPassword,
+  createSessionToken,
+  SESSION_COOKIE,
+  SESSION_COOKIE_MAX_AGE,
+  TERMINAL_COOKIE,
+  getClientIp,
+} from "@/lib/auth";
+
+// POST /api/auth/login — autentica por e-mail/senha, emite o cookie de sessão (JWT httpOnly)
+// e o cookie de terminal (IP/hostname resolvidos automaticamente, usados depois na auditoria).
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { email, password } = body;
+
+    if (!email || !password) {
+      return NextResponse.json({ success: false, error: "E-mail e senha são obrigatórios." }, { status: 400 });
+    }
+
+    const user = await prisma.user.findUnique({ where: { email: String(email).toLowerCase().trim() } });
+
+    if (!user || !user.active) {
+      return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
+    }
+
+    const validPassword = await verifyPassword(password, user.passwordHash);
+    if (!validPassword) {
+      return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
+    }
+
+    const token = await createSessionToken({
+      userId: user.id,
+      tenantId: user.tenantId,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    });
+
+    const res = NextResponse.json({
+      success: true,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, tenantId: user.tenantId },
+    });
+
+    res.cookies.set(SESSION_COOKIE, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_COOKIE_MAX_AGE,
+    });
+
+    // Terminal identificado automaticamente pelo servidor (IP de quem logou, com hostname via
+    // DNS reverso quando a rede permitir) — nunca digitado pelo usuário.
+    const ip = getClientIp(req);
+    const terminalLabel = await resolveTerminalLabel(ip);
+
+    res.cookies.set(TERMINAL_COOKIE, terminalLabel, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365,
+    });
+
+    await logActivity({
+      tenantId: user.tenantId || "tenant-hoteisnet-demo",
+      userId: user.id,
+      userName: user.name,
+      action: "LOGIN",
+      description: `${user.name} entrou no sistema.`,
+      entityType: "AUTH",
+      terminal: terminalLabel,
+      ipAddress: ip,
+    });
+
+    return res;
+  } catch (error: any) {
+    console.error("[POST /api/auth/login] Erro:", error);
+    return NextResponse.json({ success: false, error: error.message || "Erro ao autenticar." }, { status: 500 });
+  }
+}

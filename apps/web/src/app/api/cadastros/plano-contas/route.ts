@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
-const prisma = new PrismaClient();
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 // GET /api/cadastros/plano-contas — Lista todo o Plano de Contas cadastrado no banco

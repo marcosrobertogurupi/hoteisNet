@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { 
@@ -21,12 +21,41 @@ import {
   FolderKanban
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useOperator } from "@/context/OperatorContext";
+import { useSession } from "@/context/SessionContext";
+
+const ROLE_LABELS: Record<string, string> = {
+  SUPER_ADMIN: "Super Admin",
+  TENANT_ADMIN: "Administrador",
+  RECEPCIONIST: "Recepção",
+  GOVERNESS: "Governança",
+  FINANCIAL: "Financeiro",
+};
 
 export default function Sidebar() {
   const pathname = usePathname();
   const [isHovered, setIsHovered] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const { theme, hotelLogo, hotelName, showLogoInHeader } = useTheme();
+  const { setOperator } = useOperator();
+  const { user, logout } = useSession();
+
+  // O operador ativo (usado nos lançamentos de caixa) passa a ser sempre o usuário
+  // realmente logado — não é mais um nome livre digitado sem verificação.
+  useEffect(() => {
+    if (user) setOperator(user.id, user.name);
+  }, [user, setOperator]);
+
+  const displayName = user?.name || "Carregando...";
+  const roleLabel = user ? (ROLE_LABELS[user.role] || user.role) : "";
+
+  const operatorInitials = displayName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(w => w[0])
+    .join("")
+    .toUpperCase() || "OP";
 
   const isExpanded = isPinned || isHovered;
   const isSidebarLight = theme.bgSidebar.includes("bg-white") || theme.bgSidebar.includes("bg-slate-50");
@@ -203,24 +232,28 @@ export default function Sidebar() {
 
         {/* User Profile & Logout */}
         <div className="pt-3 border-t border-slate-500/30 flex items-center justify-between">
-          <div className="flex items-center gap-3 overflow-hidden">
+          <div
+            title="Usuário autenticado neste terminal"
+            className="flex items-center gap-3 overflow-hidden text-left rounded-lg p-1 -m-1"
+          >
             <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold shrink-0 shadow-inner ${
               isSidebarLight ? "bg-slate-200 text-slate-900" : "bg-white/20 text-white"
             }`}>
-              RC
+              {operatorInitials}
             </div>
             <div className={`transition-all duration-200 overflow-hidden ${isExpanded ? "opacity-100 w-auto" : "opacity-0 w-0 pointer-events-none"}`}>
               <span className={`text-xs font-bold block truncate ${
                 isSidebarLight ? "text-slate-900" : "text-white"
-              }`}>Recepção Sol</span>
+              }`}>{displayName}</span>
               <span className={`text-[10px] block truncate ${
                 isSidebarLight ? "text-slate-500" : "text-slate-200"
-              }`}>Operador Geral</span>
+              }`}>{roleLabel}</span>
             </div>
           </div>
           {isExpanded && (
-            <Link 
-              href="/" 
+            <button
+              type="button"
+              onClick={logout}
               className={`p-2 rounded-lg transition-colors shrink-0 ${
                 isSidebarLight
                   ? "text-slate-600 hover:text-red-600 hover:bg-slate-200"
@@ -229,7 +262,7 @@ export default function Sidebar() {
               title="Sair"
             >
               <LogOut className="w-4 h-4" />
-            </Link>
+            </button>
           )}
         </div>
       </aside>

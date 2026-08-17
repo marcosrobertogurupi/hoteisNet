@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { UtensilsCrossed, Plus, Search, Edit3, Trash2, ArrowLeft } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
 
 interface Prato {
   id: string;
@@ -44,6 +45,7 @@ const INITIAL_PRATOS: Prato[] = [
 export default function PratosPage() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
+  const toast = useToast();
 
   const [pratos] = useState<Prato[]>(INITIAL_PRATOS);
   const [searchQuery, setSearchQuery] = useState("");
@@ -93,7 +95,7 @@ export default function PratosPage() {
           </div>
 
           <button
-            onClick={() => alert("Formulário de inclusão de Pratos em breve.")}
+            onClick={() => toast.info("Formulário de inclusão de Pratos em breve.")}
             className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-red-600/20 transition"
           >
             <Plus className="w-4 h-4" /> Novo Prato / Item Cardápio

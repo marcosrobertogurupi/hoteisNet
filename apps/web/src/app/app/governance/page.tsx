@@ -7,15 +7,12 @@ export default function TenantGovernancePage() {
   const [rooms, setRooms] = useState<any[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
 
-  // Sync rooms from database API & disabled rooms with localStorage
+  // Sync rooms from database API (o campo "active" já vem persistido no banco)
   useEffect(() => {
     fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`)
       .then((r) => r.json())
       .then((data) => {
         if (data.success && Array.isArray(data.rooms)) {
-          const savedDisabledStr = typeof window !== "undefined" ? localStorage.getItem("hoteisnet_disabled_rooms") : null;
-          const disabledIds: string[] = savedDisabledStr ? JSON.parse(savedDisabledStr) : [];
-
           const loaded = data.rooms.map((r: any) => ({
             id: r.id,
             number: String(r.number),
@@ -23,7 +20,7 @@ export default function TenantGovernancePage() {
             status: r.status || "VACANT_CLEAN",
             housekeeper: r.status === "VACANT_CLEAN" ? "Higienizado" : "Governança",
             lastCleaned: r.status === "VACANT_CLEAN" ? "Higienizado & Vistoriado" : "Pendente higienização",
-            active: !disabledIds.includes(r.id),
+            active: r.active !== false,
           }));
           setRooms(loaded);
         }
@@ -43,23 +40,20 @@ export default function TenantGovernancePage() {
   };
 
   const handleToggleRoomActive = (roomId: string) => {
-    setRooms((prev) => {
-      const updated = prev.map((r) => {
-        if (r.id === roomId) {
-          const nextActive = !r.active;
-          setNotification(`Quarto ${r.number} ${nextActive ? "REATIVADO" : "DESATIVADO"} com sucesso! ${nextActive ? "Agora ele aparece no Mapa de Quartos." : "Ocultado da relação principal de quartos."}`);
-          setTimeout(() => setNotification(null), 4000);
-          return { ...r, active: nextActive };
-        }
-        return r;
-      });
+    const room = rooms.find((r) => r.id === roomId);
+    if (!room) return;
+    const nextActive = !room.active;
 
-      // Save disabled list to localStorage
-      const disabledIds = updated.filter((r) => !r.active).map((r) => r.id);
-      localStorage.setItem("hoteisnet_disabled_rooms", JSON.stringify(disabledIds));
+    setRooms((prev) => prev.map((r) => (r.id === roomId ? { ...r, active: nextActive } : r)));
+    setNotification(`Quarto ${room.number} ${nextActive ? "REATIVADO" : "DESATIVADO"} com sucesso! ${nextActive ? "Agora ele aparece no Mapa de Quartos." : "Ocultado da relação principal de quartos."}`);
+    setTimeout(() => setNotification(null), 4000);
 
-      return updated;
-    });
+    // Persistir no banco de dados
+    fetch(`/api/reservations/rooms`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomId, active: nextActive }),
+    }).catch((e) => console.error("Erro ao persistir status ativo do quarto:", e));
   };
 
   return (

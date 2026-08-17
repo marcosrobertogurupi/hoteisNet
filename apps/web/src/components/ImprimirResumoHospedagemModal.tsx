@@ -59,9 +59,21 @@ interface ImprimirResumoHospedagemModalProps {
 export const ImprimirResumoHospedagemModal: React.FC<ImprimirResumoHospedagemModalProps> = ({
   isOpen,
   onClose,
-  roomData,
+  roomData: liveRoomData,
 }) => {
   const { hotelName, hotelLogo, showLogoInPrint } = useTheme();
+
+  // Padrão desta tela: os dados são buscados do banco UMA VEZ, na abertura da janela, e ficam
+  // estáticos enquanto ela permanece aberta — não devem ser sobrescritos pela sincronização em
+  // segundo plano (a cada 3s) que o Mapa de Quartos roda por trás.
+  const [roomData, setRoomData] = React.useState<ResumoRoomData>(liveRoomData);
+  const wasOpenRef = React.useRef(false);
+  React.useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      setRoomData(liveRoomData);
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen, liveRoomData]);
 
   const totalDiarias = roomData.totalDiarias ?? 28140.0;
   const totalConsumo = roomData.totalConsumo ?? 62.0;

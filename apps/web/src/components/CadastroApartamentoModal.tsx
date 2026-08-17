@@ -1,8 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { X, BedDouble, Check } from "lucide-react";
+import Link from "next/link";
+import { X, BedDouble, Check, Settings2 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
+
+const TENANT_ID = "tenant-hoteisnet-demo";
 
 export interface ApartamentoFormData {
   id?: string;
@@ -43,13 +47,39 @@ export default function CadastroApartamentoModal({
   onSave,
   initialData,
 }: CadastroApartamentoModalProps) {
+  const toast = useToast();
   const { theme } = useTheme();
   const isDark = theme.isDark;
 
+  const [andares, setAndares] = useState<{ id: string; name: string }[]>([]);
+  const [categorias, setCategorias] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    fetch(`/api/cadastros/andares?tenantId=${TENANT_ID}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.floors)) {
+          setAndares(data.floors.map((f: any) => ({ id: f.id, name: f.name })));
+        }
+      })
+      .catch((err) => console.warn("[CadastroApartamentoModal] Erro ao buscar andares:", err));
+
+    fetch(`/api/cadastros/categorias-apartamento?tenantId=${TENANT_ID}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.categories)) {
+          setCategorias(data.categories.map((c: any) => ({ id: c.id, name: c.name })));
+        }
+      })
+      .catch((err) => console.warn("[CadastroApartamentoModal] Erro ao buscar categorias:", err));
+  }, [isOpen]);
+
   const [formData, setFormData] = useState<ApartamentoFormData>({
     numero: "",
-    categoria: "Standard Solteiro/Casal",
-    andar: "1º Andar",
+    categoria: "",
+    andar: "",
     bloco: "Bloco Principal",
     camasCasal: 1,
     camasSolteiro: 1,
@@ -64,8 +94,8 @@ export default function CadastroApartamentoModal({
     } else {
       setFormData({
         numero: "",
-        categoria: "Standard Solteiro/Casal",
-        andar: "1º Andar",
+        categoria: "",
+        andar: "",
         bloco: "Bloco Principal",
         camasCasal: 1,
         camasSolteiro: 1,
@@ -75,6 +105,17 @@ export default function CadastroApartamentoModal({
       });
     }
   }, [initialData, isOpen]);
+
+  // Ao carregar as listas de pré-cadastro, seleciona o primeiro item por padrão em
+  // novos cadastros que ainda não têm categoria/andar definidos.
+  useEffect(() => {
+    if (initialData) return;
+    setFormData((prev) => ({
+      ...prev,
+      categoria: prev.categoria || categorias[0]?.name || "",
+      andar: prev.andar || andares[0]?.name || "",
+    }));
+  }, [categorias, andares, initialData]);
 
   if (!isOpen) return null;
 
@@ -92,7 +133,7 @@ export default function CadastroApartamentoModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.numero.trim()) {
-      alert("Por favor, preencha o Número da UH / Apartamento.");
+      toast.warning("Por favor, preencha o Número da UH / Apartamento.");
       return;
     }
     onSave(formData);
@@ -150,32 +191,51 @@ export default function CadastroApartamentoModal({
             </div>
 
             <div className="md:col-span-2 space-y-1.5">
-              <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Categoria / Tipo de UH</label>
+              <div className="flex items-center justify-between">
+                <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Categoria / Tipo de UH</label>
+                <Link
+                  href="/app/cadastros/categorias-apartamento"
+                  target="_blank"
+                  className="text-[10px] font-semibold text-teal-600 dark:text-teal-400 hover:underline inline-flex items-center gap-1"
+                >
+                  <Settings2 className="w-3 h-3" /> Gerenciar categorias
+                </Link>
+              </div>
               <select
                 value={formData.categoria}
                 onChange={(e) => setFormData({ ...formData, categoria: e.target.value })}
                 className={inputClass}
               >
-                <option value="Standard Solteiro/Casal">Standard (1 Casal + 1 Solteiro)</option>
-                <option value="Standard Casal">Standard Casal</option>
-                <option value="Luxo Varanda">Luxo com Varanda</option>
-                <option value="Suíte Executiva">Suíte Executiva</option>
-                <option value="Suíte Presidencial com Hidro">Suíte Presidencial com Hidro</option>
-                <option value="Quarto Família Tríplo">Quarto Família Tríplo</option>
+                {categorias.length === 0 && <option value={formData.categoria}>{formData.categoria || "Nenhuma categoria cadastrada"}</option>}
+                {categorias.map((c) => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
               </select>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="space-y-1.5">
-              <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Andar</label>
-              <input
-                type="text"
-                placeholder="Ex: 1º Andar"
+              <div className="flex items-center justify-between">
+                <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Andar</label>
+                <Link
+                  href="/app/cadastros/andares"
+                  target="_blank"
+                  className="text-[10px] font-semibold text-teal-600 dark:text-teal-400 hover:underline inline-flex items-center gap-1"
+                >
+                  <Settings2 className="w-3 h-3" /> Gerenciar
+                </Link>
+              </div>
+              <select
                 value={formData.andar}
                 onChange={(e) => setFormData({ ...formData, andar: e.target.value })}
                 className={inputClass}
-              />
+              >
+                {andares.length === 0 && <option value={formData.andar}>{formData.andar || "Nenhum andar cadastrado"}</option>}
+                {andares.map((a) => (
+                  <option key={a.id} value={a.name}>{a.name}</option>
+                ))}
+              </select>
             </div>
 
             <div className="space-y-1.5">

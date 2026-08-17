@@ -43,10 +43,11 @@ export interface ReservationItem {
   checkInTime: string;  // HH:mm
   checkOutDate: string; // YYYY-MM-DD
   checkOutTime: string; // HH:mm
+  mapEndDate?: string; // YYYY-MM-DD — data até onde o quarto está ocupado (diárias extras já lançadas), só para a barra visual
   dailyRate: number;
   depositPaid: number;
   totalAmount: number;
-  status: "CONFIRMED" | "PRE_RESERVATION" | "CHECKED_IN" | "CANCELLED";
+  status: "CONFIRMED" | "PRE_RESERVATION" | "CHECKED_IN" | "CHECKED_OUT" | "CANCELLED";
   company?: string;
   notes?: string;
   precheckinSent?: boolean;
@@ -296,7 +297,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
 
   // State Management
   const [rooms, setRooms] = useState<RoomDefinition[]>([]);
-  const [reservations, setReservations] = useState<ReservationItem[]>(DEFAULT_RESERVATIONS);
+  const [reservations, setReservations] = useState<ReservationItem[]>([]);
 
   const syncGridRooms = useCallback(async () => {
     try {
@@ -375,6 +376,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
   const normalizeApiReservation = useCallback((r: any): ReservationItem => {
     const checkInDate = (r.checkInDate || r.check_in_date || "").split("T")[0];
     const checkOutDate = (r.checkOutDate || r.check_out_date || "").split("T")[0];
+    const mapEndDateRaw = (r.occupiedUntilDate || r.mapEndDate || "").split("T")[0];
 
     // Extract room number
     let roomNum = "101";
@@ -408,6 +410,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
       checkInDate: checkInDate,
       checkInTime: r.checkInTime || "14:00",
       checkOutDate: checkOutDate,
+      mapEndDate: mapEndDateRaw && mapEndDateRaw > checkOutDate ? mapEndDateRaw : undefined,
       checkOutTime: r.checkOutTime || "12:00",
       dailyRate: parseFloat(r.dailyRate || r.daily_rate || 0),
       depositPaid: parseFloat(r.depositPaid || r.deposit_paid || 0),
@@ -426,12 +429,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
       apiMapped = apiReservations.map(normalizeApiReservation);
     }
 
-    // Preserve default active stays (CHECKED_IN) if not present in API data
-    const activeDefaults = DEFAULT_RESERVATIONS.filter(r => r.status === "CHECKED_IN");
     const combinedMap = new Map<string, ReservationItem>();
-
-    // Put default checked-in stays (e.g. Quarto 102, 202)
-    activeDefaults.forEach(item => combinedMap.set(item.id, item));
 
     // Override or add API reservations
     apiMapped.forEach(item => combinedMap.set(item.id, item));
@@ -721,6 +719,16 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
     return `${parts[2]}/${parts[1]}/${parts[0]}`;
   };
 
+  // Helper: Add 1 day to a YYYY-MM-DD string using UTC math (avoids timezone drift from new Date(dateStr))
+  const addOneDayStr = (dateStr: string) => {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const next = new Date(Date.UTC(y, m - 1, d + 1));
+    const yy = next.getUTCFullYear();
+    const mm = String(next.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(next.getUTCDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  };
+
   // RIGID CONFLICT CONTROL: Check timestamp overlap
   const checkReservationConflict = (
     targetRoomId: string,
@@ -754,7 +762,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
     for (const res of reservations) {
       if (res.id === excludeResId) continue;
       if (res.roomId !== targetRoomId && res.roomId !== roomDef?.number && res.roomId !== roomDef?.id) continue;
-      if (res.status === "CANCELLED") continue;
+      if (res.status === "CANCELLED" || res.status === "CHECKED_OUT") continue;
 
       const resInTime = res.checkInTime || defaultCheckInTime || "14:00";
       const resOutTime = res.checkOutTime || defaultCheckOutTime || "12:00";
@@ -786,12 +794,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
 
     let checkOutStr = maxDateStr;
     if (minDateStr === maxDateStr) {
-      const nextDay = new Date(minDateStr);
-      nextDay.setDate(nextDay.getDate() + 1);
-      const y = nextDay.getFullYear();
-      const m = String(nextDay.getMonth() + 1).padStart(2, "0");
-      const d = String(nextDay.getDate()).padStart(2, "0");
-      checkOutStr = `${y}-${m}-${d}`;
+      checkOutStr = addOneDayStr(minDateStr);
     }
 
     const inTime = defaultCheckInTime || "14:00";
@@ -814,6 +817,11 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
   // Click & Drag Range Handlers
   const handleCellMouseDown = (e: React.MouseEvent, roomId: string, dateStr: string) => {
     if (e.button !== 0) return; // Only left click
+
+    if (dateStr < todayStr) {
+      toast.error(`⚠️ Não é permitido abrir reservas para datas passadas (anteriores a hoje ${formatDateBr(todayStr)}).`);
+      return;
+    }
 
     const roomDef = rooms.find(r => r.id === roomId || r.number === roomId);
     if (roomDef?.isMaintenance) {
@@ -845,12 +853,16 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
       let checkOutStr = maxDateStr;
 
       if (minDateStr === maxDateStr) {
-        const nextDay = new Date(minDateStr);
-        nextDay.setDate(nextDay.getDate() + 1);
-        const y = nextDay.getFullYear();
-        const m = String(nextDay.getMonth() + 1).padStart(2, "0");
-        const d = String(nextDay.getDate()).padStart(2, "0");
-        checkOutStr = `${y}-${m}-${d}`;
+        checkOutStr = addOneDayStr(minDateStr);
+      }
+
+      if (checkInStr < todayStr) {
+        toast.error(`⚠️ Não é permitido abrir reservas para datas passadas (anteriores a hoje ${formatDateBr(todayStr)}).`);
+        setIsSelectingRange(false);
+        setSelectionRoomId(null);
+        setSelectionStartDate(null);
+        setSelectionEndDate(null);
+        return;
       }
 
       const checkResult = isDateRangeAvailable(selectionRoomId, checkInStr, checkOutStr);
@@ -876,7 +888,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
     setSelectionRoomId(null);
     setSelectionStartDate(null);
     setSelectionEndDate(null);
-  }, [isSelectingRange, selectionRoomId, selectionStartDate, selectionEndDate, isDateRangeAvailable, rooms, toast, formatDateBr]);
+  }, [isSelectingRange, selectionRoomId, selectionStartDate, selectionEndDate, isDateRangeAvailable, rooms, toast, formatDateBr, todayStr]);
 
   useEffect(() => {
     window.addEventListener("mouseup", handleGlobalMouseUp);
@@ -885,6 +897,17 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
 
   // Action: Open New Reservation modal on cell double click
   const handleCellDoubleClick = (roomId: string, dateStr: string) => {
+    if (dateStr < todayStr) {
+      toast.error(`⚠️ Não é permitido abrir reservas para datas passadas (anteriores a hoje ${formatDateBr(todayStr)}).`);
+      return;
+    }
+
+    const roomDef = rooms.find(r => r.id === roomId || r.number === roomId);
+    if (roomDef?.isMaintenance) {
+      toast.error(`⚠️ O Quarto ${roomId} está em MANUTENÇÃO e não aceita reservas.`);
+      return;
+    }
+
     setSelectedReservationId(null);
     setModalRoomNumber(roomId);
     setModalCheckInDate(dateStr);
@@ -1559,7 +1582,8 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
                   {reservations
                     .filter((r) => {
                       if (r.roomId !== room.id && r.roomId !== room.number) return false;
-                      if (r.status === "CANCELLED") return false;
+                      // Checkout já concluído: quarto liberado, não bloquear o mapa com hospedagem encerrada
+                      if (r.status === "CANCELLED" || r.status === "CHECKED_OUT") return false;
                       // Filtrar reservas expiradas por tolerância do assinante
                       if (isReservationExpired({
                         checkInDate: r.checkInDate,
@@ -1573,7 +1597,9 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
                     .map((res) => {
                       // Calculate horizontal position matching column indices
                       const startIndex = monthDays.findIndex((d) => d.dateStr === res.checkInDate);
-                      const endIndex = monthDays.findIndex((d) => d.dateStr === res.checkOutDate);
+                      // A barra acompanha diárias extras já lançadas na hospedagem (res.mapEndDate),
+                      // mesmo sem alterar a "Dt.Prev.Saída" exibida (que continua usando checkOutDate).
+                      const endIndex = monthDays.findIndex((d) => d.dateStr === (res.mapEndDate || res.checkOutDate));
 
                       if (startIndex === -1 && endIndex === -1) return null;
 
@@ -1598,11 +1624,20 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
                           onDrop={(e) => handleDrop(e, room.id, res.checkOutDate)}
                           onClick={(e) => {
                             e.stopPropagation();
+                            if (isHospedagem) {
+                              setSelectedReservationId(null);
+                              toast.info(`ℹ️ HOSPEDAGEM EM VIGÊNCIA (${res.guestName}): Esta hospedagem está com check-in efetivado e serve apenas para consulta informativa no mapa.`);
+                              return;
+                            }
                             setSelectedReservationId((prev) => (prev === res.id ? null : res.id));
                           }}
                           onContextMenu={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
+                            if (isHospedagem) {
+                              toast.info(`ℹ️ HOSPEDAGEM EM VIGÊNCIA (${res.guestName}): Esta hospedagem está com check-in efetivado e serve apenas para consulta informativa no mapa.`);
+                              return;
+                            }
                             setSelectedReservationId(res.id);
                             setContextMenu({
                               x: e.clientX,

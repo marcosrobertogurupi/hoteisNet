@@ -17,9 +17,24 @@ import {
   Search,
   Loader2,
   CheckCircle2,
-  Globe
+  Globe,
+  History,
+  DoorOpen,
+  Eye,
+  Printer,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
+import { ImprimirExtratoHospedagemModal, ExtratoRoomData } from "@/components/ImprimirExtratoHospedagemModal";
+import { ImprimirResumoHospedagemModal, ResumoRoomData } from "@/components/ImprimirResumoHospedagemModal";
+
+// Converte um ISO/timestamp do banco para "DD/MM/YYYY HH:MM:SS", formato usado nos modais de Extrato/Resumo.
+function formatBrDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
 export interface TelefoneItem {
   id?: string;
@@ -75,6 +90,17 @@ interface CadastroHospedeModalProps {
   onClose: () => void;
   onSave: (data: HospedeFormData) => void;
   initialData?: HospedeFormData | null;
+  initialTab?: "dados" | "contatos" | "veiculos" | "empresa" | "obs" | "historico";
+}
+
+interface HospedagemHistoricoItem {
+  id: string;
+  checkInDate: string;
+  expectedCheckOut: string;
+  actualCheckOut: string | null;
+  isClosed: boolean;
+  room: { number: string } | null;
+  charges: { amount: string; description: string }[];
 }
 
 export default function CadastroHospedeModal({
@@ -82,11 +108,136 @@ export default function CadastroHospedeModal({
   onClose,
   onSave,
   initialData,
+  initialTab,
 }: CadastroHospedeModalProps) {
+  const toast = useToast();
   const { theme } = useTheme();
   const isDark = theme.isDark;
 
-  const [activeTab, setActiveTab] = useState<"dados" | "contatos" | "veiculos" | "empresa" | "obs">("dados");
+  const [activeTab, setActiveTab] = useState<"dados" | "contatos" | "veiculos" | "empresa" | "obs" | "historico">(initialTab || "dados");
+
+  const [hospedagens, setHospedagens] = useState<HospedagemHistoricoItem[]>([]);
+  const [isLoadingHistorico, setIsLoadingHistorico] = useState(false);
+
+  const [loadingHistStayId, setLoadingHistStayId] = useState<string | null>(null);
+  const [histActionKind, setHistActionKind] = useState<"extrato" | "resumo" | null>(null);
+  const [histExtratoData, setHistExtratoData] = useState<ExtratoRoomData | null>(null);
+  const [histResumoData, setHistResumoData] = useState<ResumoRoomData | null>(null);
+
+  // Busca os dados completos (hóspede, diárias e consumo) de UMA hospedagem específica do
+  // histórico — inclusive já encerrada — e abre o modal de Extrato ou Resumo correspondente,
+  // reaproveitando os mesmos componentes usados no Mapa de Quartos para hospedagens ativas.
+  const openHistoricoAction = async (stayId: string, kind: "extrato" | "resumo") => {
+    setLoadingHistStayId(stayId);
+    setHistActionKind(kind);
+    try {
+      const [stayRes, paymentsRes] = await Promise.all([
+        fetch(`/api/stay/checkin?stayId=${stayId}`).then((r) => r.json()),
+        fetch(`/api/caixa/conta-quarto?stayCheckinId=${stayId}`).then((r) => r.json()).catch(() => ({ payments: [] })),
+      ]);
+
+      if (!stayRes.success) {
+        throw new Error(stayRes.error || "Não foi possível carregar os dados desta hospedagem.");
+      }
+
+      const stay = stayRes.stay;
+      const payments: { amount: number }[] = paymentsRes?.payments || [];
+      const totalAdiantamento = payments.reduce((acc, p) => acc + Number(p.amount), 0);
+
+      const checkIn = new Date(stay.checkInDate);
+      const msPerNight = 24 * 60 * 60 * 1000;
+
+      const tariffList = stay.dailyCharges.length > 0
+        ? stay.dailyCharges.map((charge: any) => {
+            const start = new Date(charge.referenceDate);
+            const end = new Date(start.getTime() + msPerNight);
+            return {
+              description: charge.description || "Diária",
+              startDate: formatBrDateTime(start.toISOString()).split(" ")[0],
+              endDate: formatBrDateTime(end.toISOString()).split(" ")[0],
+              dailyRate: Number(charge.amount),
+            };
+          })
+        : [{
+            description: "DIÁRIA",
+            startDate: formatBrDateTime(checkIn.toISOString()).split(" ")[0],
+            endDate: formatBrDateTime(new Date(checkIn.getTime() + msPerNight).toISOString()).split(" ")[0],
+            dailyRate: Number(stay.totalDaily),
+          }];
+
+      const nights = Math.max(1, tariffList.length);
+      const totalDiarias = Number(stay.totalDaily);
+      const totalConsumo = Number(stay.totalConsumption);
+      const discount = Number(stay.discount) || 0;
+      const totalDespesas = totalDiarias + totalConsumo;
+
+      const consumptionList = stay.consumptions.map((c: any, idx: number) => ({
+        itemNumber: idx + 1,
+        description: c.productName,
+        date: formatBrDateTime(c.createdAt),
+        quantity: Number(c.quantity),
+        unitPrice: Number(c.unitPrice),
+        totalPrice: Number(c.totalPrice),
+        operatorName: c.operatorName,
+        posLocationName: c.posLocationName,
+      }));
+
+      const baseGuest = {
+        guestName: stay.guest.fullName,
+        cpf: stay.guest.cpf || "",
+        phone: stay.guest.phone || "",
+        cep: stay.guest.zipCode || "",
+        neighborhood: stay.guest.neighborhood || "",
+        address: [stay.guest.street, stay.guest.city, stay.guest.state].filter(Boolean).join(", "),
+        city: stay.guest.city || "",
+        uf: stay.guest.state || "",
+        checkInDate: formatBrDateTime(stay.checkInDate),
+        prevCheckOutDate: formatBrDateTime(stay.expectedCheckOut),
+      };
+
+      if (kind === "extrato") {
+        setHistExtratoData({
+          ...baseGuest,
+          number: stay.roomNumber,
+          actualCheckOutDate: stay.actualCheckOut ? formatBrDateTime(stay.actualCheckOut) : formatBrDateTime(new Date().toISOString()),
+          extrasAmount: Math.max(0, nights - Math.max(1, Math.round((new Date(stay.expectedCheckOut).getTime() - checkIn.getTime()) / msPerNight))),
+          adiantamento: totalAdiantamento,
+          desconto: discount,
+          allGuests: [
+            { id: "primary", name: stay.guest.fullName, isPrimary: true },
+            ...stay.secondaryGuests.map((g: any) => ({ id: g.id, name: g.name })),
+          ],
+          tariffList,
+          consumptionList,
+        });
+      } else {
+        setHistResumoData({
+          ...baseGuest,
+          number: stay.roomNumber,
+          calculatedUntil: stay.actualCheckOut ? formatBrDateTime(stay.actualCheckOut) : formatBrDateTime(new Date().toISOString()),
+          diariasCount: nights,
+          totalDiarias,
+          totalConsumo,
+          totalDespesas,
+          pagamentosAmount: totalAdiantamento,
+          descontos: discount,
+          saldoAPagar: Math.max(0, totalDespesas - totalAdiantamento - discount),
+          consumptionItems: consumptionList.map((c: any) => ({
+            dateTime: c.date,
+            description: c.description,
+            unitPrice: c.unitPrice,
+            quantity: c.quantity,
+            totalPrice: c.totalPrice,
+          })),
+        });
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao carregar dados da hospedagem.");
+    } finally {
+      setLoadingHistStayId(null);
+      setHistActionKind(null);
+    }
+  };
 
   const [formData, setFormData] = useState<HospedeFormData>({
     nome: "",
@@ -136,6 +287,10 @@ export default function CadastroHospedeModal({
   } | null>(null);
 
   useEffect(() => {
+    if (isOpen) setActiveTab(initialTab || "dados");
+  }, [isOpen, initialTab]);
+
+  useEffect(() => {
     if (initialData) {
       setFormData(initialData);
       if (initialData.tipoDoc === "PASSPORT") {
@@ -175,7 +330,31 @@ export default function CadastroHospedeModal({
       setDocChoice("CPF");
       setHubFeedback(null);
     }
+    setActiveTab("dados");
   }, [initialData, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !initialData?.id) {
+      setHospedagens([]);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingHistorico(true);
+    fetch(`/api/cadastros/hospedes/${initialData.id}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) setHospedagens(data.checkins || []);
+      })
+      .catch((err) => console.error("Erro ao buscar histórico de hospedagens", err))
+      .finally(() => {
+        if (!cancelled) setIsLoadingHistorico(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, initialData?.id]);
 
   const [customHubToken, setCustomHubToken] = useState<string>("");
   const [showTokenInput, setShowTokenInput] = useState<boolean>(false);
@@ -384,7 +563,7 @@ export default function CadastroHospedeModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.nome.trim()) {
-      alert("Por favor, preencha o Nome do Hóspede.");
+      toast.warning("Por favor, preencha o Nome do Hóspede.");
       return;
     }
     onSave(formData);
@@ -496,6 +675,20 @@ export default function CadastroHospedeModal({
           >
             <FileText className="w-4 h-4" /> Observações & Ocorrências
           </button>
+
+          {initialData?.id && (
+            <button
+              type="button"
+              onClick={() => setActiveTab("historico")}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition whitespace-nowrap ${
+                activeTab === "historico"
+                  ? "bg-sky-600 text-white shadow-md shadow-sky-600/20"
+                  : isDark ? "text-slate-400 hover:text-white hover:bg-slate-800" : "text-slate-600 hover:text-slate-900 hover:bg-slate-200"
+              }`}
+            >
+              <History className="w-4 h-4" /> Histórico de Hospedagens ({hospedagens.length})
+            </button>
+          )}
         </div>
 
         {/* Form Body */}
@@ -1305,6 +1498,119 @@ export default function CadastroHospedeModal({
             </div>
           )}
 
+          {/* TAB 6: HISTÓRICO DE HOSPEDAGENS */}
+          {activeTab === "historico" && (
+            <div className="space-y-6">
+              <div className={`p-5 rounded-2xl border space-y-4 ${
+                isDark ? "bg-slate-950/60 border-slate-800" : "bg-slate-50 border-slate-200"
+              }`}>
+                <div className="flex items-center justify-between">
+                  <h3 className={`text-sm font-bold flex items-center gap-2 ${isDark ? "text-white" : "text-slate-900"}`}>
+                    <History className="w-4 h-4 text-sky-500" /> Hospedagens Anteriores e Atuais
+                  </h3>
+                  <span className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>StayCheckin (primaryGuestId)</span>
+                </div>
+
+                <div className={`border rounded-xl overflow-hidden ${isDark ? "border-slate-800" : "border-slate-200"}`}>
+                  <table className="w-full text-left text-xs">
+                    <thead className={`font-mono ${isDark ? "bg-slate-900 text-slate-400" : "bg-slate-100 text-slate-600"}`}>
+                      <tr>
+                        <th className="px-4 py-2">Quarto</th>
+                        <th className="px-4 py-2">Check-in</th>
+                        <th className="px-4 py-2">Saída Prevista</th>
+                        <th className="px-4 py-2">Check-out</th>
+                        <th className="px-4 py-2 text-center">Status</th>
+                        <th className="px-4 py-2 text-right">Total Diárias</th>
+                        <th className="px-4 py-2 text-center">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className={`divide-y ${isDark ? "divide-slate-800" : "divide-slate-200"}`}>
+                      {isLoadingHistorico && (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-6 text-center text-slate-400">
+                            <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Carregando histórico...
+                          </td>
+                        </tr>
+                      )}
+
+                      {!isLoadingHistorico && hospedagens.map((h) => {
+                        const totalDiarias = h.charges.reduce((sum, c) => sum + Number(c.amount), 0);
+                        const isBusy = loadingHistStayId === h.id;
+                        return (
+                          <tr key={h.id} className={isDark ? "hover:bg-slate-800/50 text-white" : "hover:bg-slate-50 text-slate-900"}>
+                            <td className="px-4 py-2 font-mono font-bold text-sky-600 dark:text-sky-400">
+                              <span className="inline-flex items-center gap-1">
+                                <DoorOpen className="w-3.5 h-3.5" /> {h.room?.number || "-"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2">{new Date(h.checkInDate).toLocaleString("pt-BR")}</td>
+                            <td className="px-4 py-2">{new Date(h.expectedCheckOut).toLocaleString("pt-BR")}</td>
+                            <td className="px-4 py-2">
+                              {h.actualCheckOut ? new Date(h.actualCheckOut).toLocaleString("pt-BR") : "-"}
+                            </td>
+                            <td className="px-4 py-2 text-center">
+                              {h.isClosed ? (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold text-[10px]">
+                                  FINALIZADA
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold text-[10px]">
+                                  EM ANDAMENTO
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2 text-right font-semibold">
+                              {totalDiarias.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  title="Visualizar / Extrato da hospedagem"
+                                  disabled={isBusy}
+                                  onClick={() => openHistoricoAction(h.id, "extrato")}
+                                  className={`p-1.5 rounded-lg border transition disabled:opacity-50 ${
+                                    isDark ? "border-slate-700 hover:bg-slate-800 text-sky-400" : "border-slate-300 hover:bg-slate-100 text-sky-600"
+                                  }`}
+                                >
+                                  {isBusy && histActionKind === "extrato" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Imprimir resumo da hospedagem"
+                                  disabled={isBusy}
+                                  onClick={() => openHistoricoAction(h.id, "resumo")}
+                                  className={`p-1.5 rounded-lg border transition disabled:opacity-50 ${
+                                    isDark ? "border-slate-700 hover:bg-slate-800 text-slate-300" : "border-slate-300 hover:bg-slate-100 text-slate-700"
+                                  }`}
+                                >
+                                  {isBusy && histActionKind === "resumo" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {!isLoadingHistorico && hospedagens.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-4 text-center text-slate-400 italic">
+                            Nenhuma hospedagem registrada para este hóspede ainda.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                  {hospedagens.length > 0 && (
+                    <p className={`px-4 py-2 text-[11px] border-t ${isDark ? "border-slate-800 text-slate-500" : "border-slate-200 text-slate-500"}`}>
+                      <Eye className="w-3 h-3 inline -mt-0.5 mr-1" /> Extrato: visualizar, imprimir, enviar por WhatsApp ou e-mail. <Printer className="w-3 h-3 inline -mt-0.5 mr-1 ml-2" /> Resumo: imprimir.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Footer Actions */}
           <div className={`pt-4 border-t flex items-center justify-end gap-3 ${
             isDark ? "border-slate-800" : "border-slate-200"
@@ -1328,6 +1634,22 @@ export default function CadastroHospedeModal({
           </div>
         </form>
       </div>
+
+      {histExtratoData && (
+        <ImprimirExtratoHospedagemModal
+          isOpen={!!histExtratoData}
+          onClose={() => setHistExtratoData(null)}
+          roomData={histExtratoData}
+        />
+      )}
+
+      {histResumoData && (
+        <ImprimirResumoHospedagemModal
+          isOpen={!!histResumoData}
+          onClose={() => setHistResumoData(null)}
+          roomData={histResumoData}
+        />
+      )}
     </div>
   );
 }

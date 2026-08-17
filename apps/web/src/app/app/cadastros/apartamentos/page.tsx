@@ -14,62 +14,15 @@ import {
   Wrench
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useConfirm } from "@/context/ConfirmContext";
+import { useToast } from "@/context/ToastContext";
 import CadastroApartamentoModal, { ApartamentoFormData } from "@/components/CadastroApartamentoModal";
-
-const INITIAL_APARTAMENTOS: ApartamentoFormData[] = [
-  {
-    id: "APT-101",
-    numero: "101",
-    categoria: "Standard Solteiro/Casal",
-    andar: "1º Andar",
-    bloco: "Bloco Principal",
-    camasCasal: 1,
-    camasSolteiro: 1,
-    caracteristicas: ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Frigobar Abastecido"],
-    status: "OCUPADO",
-    observacao: "Hóspede Carlos Eduardo Silva Santos."
-  },
-  {
-    id: "APT-102",
-    numero: "102",
-    categoria: "Standard Casal",
-    andar: "1º Andar",
-    bloco: "Bloco Principal",
-    camasCasal: 1,
-    camasSolteiro: 0,
-    caracteristicas: ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Wi-Fi de Alta Velocidade"],
-    status: "LIVRE",
-    observacao: "Higienizado e vistoriado pela governança."
-  },
-  {
-    id: "APT-103",
-    numero: "103",
-    categoria: "Suíte Presidencial com Hidro",
-    andar: "1º Andar",
-    bloco: "Bloco Nobre",
-    camasCasal: 1,
-    camasSolteiro: 1,
-    caracteristicas: ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Frigobar Abastecido", "Banheira Hidromassagem", "Sacada com Vista Mar"],
-    status: "LIMPEZA",
-    observacao: "Saída recente de checkout às 11h. Em higienização."
-  },
-  {
-    id: "APT-104",
-    numero: "104",
-    categoria: "Standard Solteiro/Casal",
-    andar: "1º Andar",
-    bloco: "Bloco Principal",
-    camasCasal: 1,
-    camasSolteiro: 1,
-    caracteristicas: ["Ar-Condicionado Split", "TV a Cabo / Smart TV"],
-    status: "MANUTENCAO",
-    observacao: "Manutenção no vazamento do chuveiro do banheiro."
-  }
-];
 
 export default function ApartamentosPage() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
+  const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [apartamentos, setApartamentos] = useState<ApartamentoFormData[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -98,33 +51,17 @@ export default function ApartamentosPage() {
           else if (r.status === "MAINTENANCE") st = "MANUTENCAO";
 
           const categoryName = r.category || r.room_categories?.name || "Standard";
-          const notesStr = r.notes || "Quarto Higienizado e Vistoriado.";
+          const notesStr = r.notes || "";
           const floorStr = r.floor || "1º Andar";
-          const blocoStr = num === "AUDITORIO" ? "Centro de Convenções" : num.startsWith("2") ? "Bloco Superior" : "Bloco Principal";
+          const blocoStr = r.bloco || "Bloco Principal";
+          const casalCount = r.camasCasal ?? 0;
+          const solteiroCount = r.camasSolteiro ?? 0;
+          const caracteristicasArr =
+            Array.isArray(r.caracteristicas) && r.caracteristicas.length > 0
+              ? r.caracteristicas
+              : ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Wi-Fi de Alta Velocidade"];
 
-          const descLower = (r.notes || "").toLowerCase();
-          const casalCount = descLower.includes("casal") ? 1 : 0;
-          const solteiroCount = descLower.includes("2 solteiro") ? 2 : descLower.includes("solteiro") ? 1 : 0;
-
-          if (existing) {
-            if (
-              existing.status === st &&
-              existing.categoria === categoryName &&
-              existing.observacao === notesStr &&
-              existing.andar === floorStr
-            ) {
-              return existing;
-            }
-            return {
-              ...existing,
-              status: st,
-              categoria: categoryName,
-              observacao: notesStr,
-              andar: floorStr,
-            };
-          }
-
-          return {
+          const candidate: ApartamentoFormData = {
             id: r.id,
             numero: num,
             categoria: categoryName,
@@ -132,10 +69,25 @@ export default function ApartamentosPage() {
             bloco: blocoStr,
             camasCasal: casalCount,
             camasSolteiro: solteiroCount,
-            caracteristicas: ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Wi-Fi de Alta Velocidade"],
+            caracteristicas: caracteristicasArr,
             status: st,
             observacao: notesStr,
           };
+
+          if (
+            existing &&
+            existing.status === st &&
+            existing.categoria === categoryName &&
+            existing.observacao === notesStr &&
+            existing.andar === floorStr &&
+            existing.bloco === blocoStr &&
+            existing.camasCasal === casalCount &&
+            existing.camasSolteiro === solteiroCount
+          ) {
+            return existing;
+          }
+
+          return candidate;
         });
 
         return updated;
@@ -173,24 +125,87 @@ export default function ApartamentosPage() {
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id?: string) => {
+  const handleDelete = async (id?: string) => {
     if (!id) return;
-    if (confirm("Tem certeza que deseja excluir esta Unidade Habitacional (UH)?")) {
+    const ok = await confirmDialog({
+      title: "Excluir Unidade Habitacional",
+      message: "Tem certeza que deseja excluir esta Unidade Habitacional (UH)?",
+      confirmLabel: "Excluir",
+      variant: "danger",
+    });
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/reservations/rooms?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        toast.error(result.error || "Não foi possível excluir o apartamento.");
+        return;
+      }
       setApartamentos((prev) => prev.filter((item) => item.id !== id));
+      toast.success("Apartamento excluído com sucesso.");
+    } catch (err) {
+      console.error("[CadastroApartamentos] Erro ao excluir:", err);
+      toast.error("Erro de conexão ao excluir o apartamento.");
     }
   };
 
-  const handleSaveApartamento = (data: ApartamentoFormData) => {
-    if (data.id) {
-      setApartamentos((prev) => prev.map((a) => (a.id === data.id ? data : a)));
-    } else {
-      const newApto: ApartamentoFormData = {
-        ...data,
-        id: `APT-${Math.floor(100 + Math.random() * 900)}`,
-      };
-      setApartamentos((prev) => [newApto, ...prev]);
+  const handleSaveApartamento = async (data: ApartamentoFormData) => {
+    try {
+      const isEditing = Boolean(data.id);
+      const res = await fetch("/api/reservations/rooms", {
+        method: isEditing ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: data.id,
+          tenantId: "tenant-hoteisnet-demo",
+          numero: data.numero,
+          categoria: data.categoria,
+          andar: data.andar,
+          bloco: data.bloco,
+          camasCasal: data.camasCasal,
+          camasSolteiro: data.camasSolteiro,
+          caracteristicas: data.caracteristicas,
+          status: data.status,
+          observacao: data.observacao,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        toast.error(result.error || "Não foi possível salvar o apartamento.");
+        return;
+      }
+
+      const savedRoom = result.room;
+      const savedApto: ApartamentoFormData = savedRoom
+        ? {
+            id: savedRoom.id,
+            numero: savedRoom.number,
+            categoria: savedRoom.category,
+            andar: savedRoom.floor,
+            bloco: savedRoom.bloco,
+            camasCasal: savedRoom.camasCasal,
+            camasSolteiro: savedRoom.camasSolteiro,
+            caracteristicas: savedRoom.caracteristicas,
+            status: data.status,
+            observacao: savedRoom.notes,
+          }
+        : data;
+
+      setApartamentos((prev) => {
+        if (isEditing) {
+          return prev.map((a) => (a.id === savedApto.id ? savedApto : a));
+        }
+        return [savedApto, ...prev];
+      });
+      toast.success("Apartamento salvo com sucesso.");
+      setIsModalOpen(false);
+    } catch (err) {
+      console.error("[CadastroApartamentos] Erro ao salvar:", err);
+      toast.error("Erro de conexão ao salvar o apartamento.");
     }
-    setIsModalOpen(false);
   };
 
   const getStatusBadge = (status: string) => {

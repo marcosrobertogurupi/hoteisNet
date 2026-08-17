@@ -21,13 +21,19 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
+import { useOperator } from "@/context/OperatorContext";
+import { useConfirm } from "@/context/ConfirmContext";
+import { usePrompt } from "@/context/PromptContext";
+import { generateReciboPdfBase64 } from "@/utils/pdfGenerator";
+import CadastroHospedeModal, { HospedeFormData } from "@/components/CadastroHospedeModal";
 
 
 export interface PaymentCreditItem {
   id: string;
-  date: string;              // e.g. "12/08/2026"
+  date: string;              // e.g. "12/08/2026 14:35"
   amount: number;            // e.g. 150.00
   methodDescription: string; // e.g. "DINHEIRO", "PIX", "CARTAO", etc.
+  operatorName?: string;     // operador que efetuou o lançamento
   caixaMovimentoId?: string;
 }
 
@@ -50,6 +56,7 @@ export interface LancarPagamentoHospedagemModalProps {
   stayData: {
     idHospedagem: string;
     roomNumber: string;
+    primaryGuestId?: string;
     primaryGuestName: string;
     checkInDate: string;          // e.g. "05/02/2026 13:08:42"
     expectedCheckOutDate: string; // e.g. "08/02/2026 14:00:00"
@@ -70,6 +77,10 @@ export interface LancarPagamentoHospedagemModalProps {
     payments: PaymentCreditItem[];
     observations: ObservationLog[];
   }) => void;
+  // Chamado quando o saldo é totalmente quitado e o usuário confirma o check-out do hóspede.
+  onCheckoutConfirmed?: () => void;
+  // Chamado ao clicar no "+" de Consumo — abre a tela real de Lançamento de Consumo do Quarto por cima deste modal.
+  onOpenConsumo?: () => void;
 }
 
 const PRE_REGISTERED_PAYMENT_METHODS = [
@@ -86,10 +97,14 @@ export default function LancarPagamentoHospedagemModal({
   onClose,
   stayData,
   onSaveSuccess,
+  onCheckoutConfirmed,
+  onOpenConsumo,
 }: LancarPagamentoHospedagemModalProps) {
   const {
     theme,
     hotelName,
+    uazapiServerUrl,
+    uazapiInstanceToken,
     emailSmtpHost,
     emailSmtpPort,
     emailSmtpSecure,
@@ -101,17 +116,37 @@ export default function LancarPagamentoHospedagemModal({
     sendPaymentConfirmEmailEnabled,
   } = useTheme();
   const toast = useToast();
+  const confirmDialog = useConfirm();
+  const promptDialog = usePrompt();
+  const { operatorId: activeOperatorId, operatorName: activeOperatorName } = useOperator();
 
   // Financial values
-  const totalDiarias = stayData.totalDiarias || 35720.0;
-  const [totalConsumo, setTotalConsumo] = useState<number>(stayData.totalConsumo || 28.0);
-  const outrosDebitos = stayData.outrosDebitos || 0.0;
+  const totalDiarias = stayData.totalDiarias ?? 0.0;
+  const [totalConsumo, setTotalConsumo] = useState<number>(stayData.totalConsumo ?? 0.0);
+  // Mantém o Consumo(R$) sincronizado quando a tela de Lançamento de Consumo do Quarto (aberta
+  // pelo "+") salva alterações e o pai atualiza os dados reais da hospedagem.
+  useEffect(() => {
+    setTotalConsumo(stayData.totalConsumo ?? 0.0);
+  }, [stayData.totalConsumo]);
+  const outrosDebitos = stayData.outrosDebitos ?? 0.0;
   const [desconto, setDesconto] = useState<number>(stayData.desconto || 0.0);
+  // Mesmo motivo do totalConsumo/payments acima: sem isto, reabrir a tela mantém o desconto da
+  // hospedagem/quarto anterior em vez do valor real vindo do banco pela prop.
+  useEffect(() => {
+    setDesconto(stayData.desconto || 0.0);
+  }, [stayData.desconto]);
 
   // Payments State
   const [payments, setPayments] = useState<PaymentCreditItem[]>(
     stayData.initialPayments || []
   );
+  // O componente permanece montado entre uma hospedagem e outra (só desmonta quando isOpen vira
+  // false), então o valor inicial do useState acima só é usado na primeira vez. Sem este efeito,
+  // reabrir o modal (mesmo quarto ou outro) mostra a lista de pagamentos desatualizada — o
+  // histórico real (buscado em /api/caixa/conta-quarto) chega pela prop, não pelo estado inicial.
+  useEffect(() => {
+    setPayments(stayData.initialPayments || []);
+  }, [stayData.initialPayments]);
 
   // Observations State
   const [observations, setObservations] = useState<ObservationLog[]>(
@@ -120,7 +155,7 @@ export default function LancarPagamentoHospedagemModal({
         id: "OBS-101",
         dateTime: new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
         type: "SISTEMA",
-        user: "MARCOS",
+        user: activeOperatorName,
         note: "Hospedagem iniciada com pagamento parcial pendente."
       }
     ]
@@ -140,28 +175,156 @@ export default function LancarPagamentoHospedagemModal({
 
   // Quick Modal States
   const [showReciboModal, setShowReciboModal] = useState<boolean>(false);
-  const [selectedReciboPayment, setSelectedReciboPayment] = useState<PaymentCreditItem | null>(null);
-  const [showAddConsumoModal, setShowAddConsumoModal] = useState<boolean>(false);
-  const [consumoItemName, setConsumoItemName] = useState<string>("Água Mineral 500ml");
-  const [consumoItemVal, setConsumoItemVal] = useState<string>("6.00");
+  const [reciboPayments, setReciboPayments] = useState<PaymentCreditItem[]>([]);
 
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  // Lançamentos já persistidos (têm caixaMovimentoId) marcados para exclusão: só são apagados
+  // do caixa de fato quando o usuário clicar em "Salvar Crédito" — se o modal for fechado sem
+  // salvar, a exclusão é descartada e o lançamento reaparece normalmente na próxima abertura.
+  const [pendingDeletions, setPendingDeletions] = useState<string[]>([]);
   const [sendingEmailPayment, setSendingEmailPayment] = useState<boolean>(false);
+  const [sendingWhatsappPayment, setSendingWhatsappPayment] = useState<boolean>(false);
 
-  const handleSendEmailPaymentReceipt = async (payment: PaymentCreditItem) => {
+  // Cadastro do Hóspede (visualização/edição de dados e de veículos, abertos pelos botões
+  // "olho" e "carro" ao lado do nome do hóspede principal)
+  const [showCadastroHospede, setShowCadastroHospede] = useState<boolean>(false);
+  const [cadastroHospedeTab, setCadastroHospedeTab] = useState<"dados" | "veiculos">("dados");
+  const [cadastroHospedeData, setCadastroHospedeData] = useState<HospedeFormData | null>(null);
+  const [loadingCadastroHospede, setLoadingCadastroHospede] = useState<boolean>(false);
+
+  const openCadastroHospede = async (tab: "dados" | "veiculos") => {
+    if (!stayData.primaryGuestId) {
+      toast.warning("Este hóspede não está vinculado a um cadastro.", "Cadastro Indisponível");
+      return;
+    }
+    setCadastroHospedeTab(tab);
+    setLoadingCadastroHospede(true);
+    try {
+      const res = await fetch(`/api/cadastros/hospedes/${stayData.primaryGuestId}`);
+      const guest = await res.json();
+      if (!res.ok) throw new Error(guest.error || "Não foi possível carregar o cadastro do hóspede.");
+
+      setCadastroHospedeData({
+        id: guest.id,
+        nome: guest.fullName,
+        cpf: guest.cpf || "",
+        tipoDoc: guest.passport ? "PASSPORT" : "RG",
+        noDoc: guest.passport || "",
+        orgaoExp: "",
+        noTitEleitor: "",
+        sexo: guest.gender || "M",
+        nacionalidade: guest.country || "Brasileira",
+        dtNascimento: guest.birthDate ? String(guest.birthDate).substring(0, 10) : "",
+        cep: guest.zipCode || "",
+        logradouro: guest.street || "",
+        numero: guest.number || "",
+        complEnder: "",
+        bairro: guest.neighborhood || "",
+        cidade: guest.city || "",
+        uf: guest.state || "",
+        pais: guest.country || "Brasil",
+        profissao: "",
+        nomePai: "",
+        nomeMae: "",
+        codEmpresa: guest.companyId || "",
+        nomeEmpresa: guest.company?.name || "",
+        telefones: guest.phone
+          ? [{ telefone: guest.phone, descricao: "Celular", telPrincipal: true }]
+          : [],
+        emails: guest.email ? [{ email: guest.email, emailPrincipal: true }] : [],
+        veiculos: (guest.vehicles || []).map((v: { id: string; placa: string; caracteristica: string | null }) => ({
+          id: v.id,
+          placaVeiculo: v.placa,
+          caractVeic: v.caracteristica || "",
+        })),
+        ocorrencia: "",
+      });
+      setShowCadastroHospede(true);
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao carregar o cadastro do hóspede.");
+    } finally {
+      setLoadingCadastroHospede(false);
+    }
+  };
+
+  const handleSaveCadastroHospede = async (data: HospedeFormData) => {
+    if (!data.id) return;
+    try {
+      const res = await fetch(`/api/cadastros/hospedes/${data.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: data.nome,
+          cpf: data.cpf || null,
+          gender: data.sexo || "M",
+          birthDate: data.dtNascimento || null,
+          email: data.emails?.[0]?.email || null,
+          phone: data.telefones?.[0]?.telefone || null,
+          whatsappPhone: data.telefones?.[0]?.telefone || null,
+          hasWhatsapp: !!(data.telefones?.[0]?.telefone),
+          zipCode: data.cep || null,
+          street: data.logradouro || null,
+          number: data.numero || null,
+          neighborhood: data.bairro || null,
+          city: data.cidade || null,
+          state: data.uf || null,
+          country: data.pais || "Brasil",
+          companyId: data.codEmpresa || null,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Falha ao salvar o cadastro do hóspede.");
+
+      await fetch(`/api/cadastros/hospedes/${data.id}/veiculos`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ veiculos: data.veiculos }),
+      });
+
+      toast.success("Cadastro do hóspede atualizado com sucesso.");
+      setShowCadastroHospede(false);
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao salvar o cadastro do hóspede.");
+    }
+  };
+
+  const buildReciboPdfBase64 = (paymentsForRecibo: PaymentCreditItem[]) =>
+    generateReciboPdfBase64({
+      hotelName: hotelName || "HOTEL IDEAL",
+      guestName: stayData.primaryGuestName,
+      roomNumber: stayData.roomNumber,
+      operatorName: activeOperatorName,
+      payments: paymentsForRecibo.map((p) => ({
+        date: p.date,
+        amount: p.amount,
+        methodDescription: p.methodDescription,
+        operatorName: p.operatorName,
+      })),
+    });
+
+  const handleSendEmailPaymentReceipt = async (paymentsForRecibo: PaymentCreditItem[]) => {
     if (!sendPaymentConfirmEmailEnabled) {
       toast.warning("O envio de Confirmações de Pagamento por e-mail está desativado nas Configurações da Área do Assinante.");
       return;
     }
+    if (paymentsForRecibo.length === 0) return;
 
-    const recipient = prompt("Informe o e-mail do hóspede para envio do comprovante de pagamento:");
-    if (!recipient || !recipient.includes("@")) {
-      if (recipient !== null) toast.error("Informe um e-mail válido.");
-      return;
-    }
+    const recipient = await promptDialog({
+      title: "Enviar Recibo por E-mail",
+      message: "Informe o e-mail do hóspede para envio do recibo de pagamento:",
+      placeholder: "hospede@email.com",
+      inputType: "email",
+      confirmLabel: "Enviar",
+      validate: (v) => (!v || !v.includes("@") ? "Informe um e-mail válido." : null),
+    });
+    if (!recipient) return;
 
     setSendingEmailPayment(true);
     try {
+      const totalValor = paymentsForRecibo.reduce((acc, p) => acc + p.amount, 0);
+      const pdfBase64 = buildReciboPdfBase64(paymentsForRecibo);
+      const docFilename = `Recibo_Pagamento_Quarto_${stayData.roomNumber}.pdf`;
+
       const res = await fetch("/api/email/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -170,7 +333,9 @@ export default function LancarPagamentoHospedagemModal({
           recipientName: stayData.primaryGuestName,
           documentType: "payment_confirmation",
           subject: `Comprovante de Pagamento - Quarto ${stayData.roomNumber} - ${hotelName}`,
-          message: `Confirmamos o recebimento do pagamento no valor de R$ ${payment.amount.toFixed(2)} (${payment.methodDescription}) referente ao Quarto ${stayData.roomNumber}. Data: ${payment.date}.`,
+          message: `Confirmamos o recebimento do pagamento no valor de R$ ${totalValor.toFixed(2)} referente ao Quarto ${stayData.roomNumber}. Segue em anexo o recibo em PDF.`,
+          pdfBase64,
+          filename: docFilename,
           smtpHost: emailSmtpHost,
           smtpPort: emailSmtpPort,
           smtpSecure: emailSmtpSecure,
@@ -184,15 +349,100 @@ export default function LancarPagamentoHospedagemModal({
 
       const data = await res.json();
       if (res.ok && data.success) {
-        toast.success(`✓ Comprovante de pagamento enviado com sucesso para ${recipient}!`);
+        toast.success(`✓ Recibo de pagamento enviado com sucesso para ${recipient}!`);
       } else {
         toast.error(`Falha no envio: ${data.error || data.message || "Erro no servidor SMTP."}`);
       }
     } catch (err: any) {
-      console.error("Erro ao enviar comprovante por e-mail:", err);
+      console.error("Erro ao enviar recibo por e-mail:", err);
       toast.error(err.message || "Erro de rede ao enviar e-mail.");
     } finally {
       setSendingEmailPayment(false);
+    }
+  };
+
+  const handlePrintRecibo = (paymentsForRecibo: PaymentCreditItem[]) => {
+    if (paymentsForRecibo.length === 0) return;
+
+    const pdfBase64 = buildReciboPdfBase64(paymentsForRecibo);
+    const base64Data = pdfBase64.split(",")[1];
+    const byteChars = atob(base64Data);
+    const byteNumbers = new Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "none";
+    iframe.src = url;
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+      if (iframe.parentNode) document.body.removeChild(iframe);
+      URL.revokeObjectURL(url);
+    };
+
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      }, 250);
+    };
+
+    setTimeout(cleanup, 60000);
+  };
+
+  const handleSendWhatsAppPaymentReceipt = async (paymentsForRecibo: PaymentCreditItem[]) => {
+    if (paymentsForRecibo.length === 0) return;
+
+    const phone = await promptDialog({
+      title: "Enviar Recibo por WhatsApp",
+      message: "Informe o número de WhatsApp do hóspede para envio do recibo de pagamento:",
+      placeholder: "63992428861",
+      inputType: "tel",
+      confirmLabel: "Enviar",
+      validate: (v) => (!v || v.replace(/\D/g, "").length < 8 ? "Informe um número de WhatsApp válido." : null),
+    });
+    if (!phone) return;
+
+    setSendingWhatsappPayment(true);
+    try {
+      const pdfBase64 = buildReciboPdfBase64(paymentsForRecibo);
+      const docFilename = `Recibo_Pagamento_Quarto_${stayData.roomNumber}.pdf`;
+      const caption = `Segue anexo o recibo de pagamento do hóspede: ${stayData.primaryGuestName || ""} quarto: ${stayData.roomNumber || ""}`;
+
+      const res = await fetch("/api/uazapi/send-extrato", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: phone.trim(),
+          caption,
+          pdfBase64,
+          filename: docFilename,
+          guestName: stayData.primaryGuestName,
+          roomNumber: stayData.roomNumber,
+          serverUrl: uazapiServerUrl,
+          instanceToken: uazapiInstanceToken,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        toast.success(data.message || "Recibo enviado com sucesso via WhatsApp!");
+      } else {
+        toast.error(data.message || "Erro no envio pelo WhatsApp. Verifique se a instância está conectada.");
+      }
+    } catch (err: any) {
+      console.error("Erro ao enviar recibo via WhatsApp:", err);
+      toast.error(err.message || "Erro de rede ao enviar via WhatsApp.");
+    } finally {
+      setSendingWhatsappPayment(false);
     }
   };
 
@@ -219,8 +469,9 @@ export default function LancarPagamentoHospedagemModal({
     }).format(val);
   };
 
-  // Add Payment Handler
-  const handleAddPayment = async () => {
+  // Add Payment Handler — apenas adiciona à grade local (pendente). Só é gravado no caixa
+  // quando o usuário clicar em "Salvar Crédito" (igual ao Table_Pagto do sistema WinDev original).
+  const handleAddPayment = () => {
     const cleanValStr = vlrPagto.replace("R$", "").replace(/\./g, "").replace(",", ".").trim();
     const valNum = parseFloat(cleanValStr);
 
@@ -229,36 +480,14 @@ export default function LancarPagamentoHospedagemModal({
       return;
     }
 
+    const nowTime = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
     const newPayment: PaymentCreditItem = {
       id: `PAG-${Date.now()}`,
-      date: dtPagto || new Date().toLocaleDateString("pt-BR"),
+      date: `${dtPagto || new Date().toLocaleDateString("pt-BR")} ${nowTime}`,
       amount: valNum,
       methodDescription: formaPagamento,
+      operatorName: activeOperatorName,
     };
-
-    // Try posting to API caixa
-    try {
-      const res = await fetch("/api/caixa/pagamento-checkin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          operatorId: "USR-001",
-          operatorName: "MARCOS",
-          roomId: stayData.roomNumber,
-          stayCheckinId: stayData.idHospedagem,
-          guestName: stayData.primaryGuestName,
-          valor: valNum,
-          formaPagamento,
-          descricao: `Crédito de hospedagem (${formaPagamento}) - Quarto ${stayData.roomNumber}`
-        })
-      });
-      const data = await res.json();
-      if (data.success && data.movimentoCaixaId) {
-        newPayment.caixaMovimentoId = data.movimentoCaixaId;
-      }
-    } catch (e) {
-      console.warn("Backend API not reachable, saving locally:", e);
-    }
 
     setPayments(prev => [newPayment, ...prev]);
 
@@ -267,42 +496,36 @@ export default function LancarPagamentoHospedagemModal({
       id: `OBS-${Date.now()}`,
       dateTime: new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
       type: "PAGAMENTO",
-      user: "MARCOS",
-      note: `Lançado pagamento/crédito de ${fmtCurrency(valNum)} em ${formaPagamento}.`
+      user: activeOperatorName,
+      note: `Lançamento de ${fmtCurrency(valNum)} em ${formaPagamento} adicionado (pendente até Salvar Crédito).`
     };
     setObservations(prev => [newObs, ...prev]);
 
     setVlrPagto("0,00");
-    toast.success(`Crédito de ${fmtCurrency(valNum)} (${formaPagamento}) lançado com sucesso no caixa!`, "Crédito Registrado");
+    toast.info(`Lançamento de ${fmtCurrency(valNum)} (${formaPagamento}) adicionado. Será gravado no caixa ao clicar em "Salvar Crédito".`, "Lançamento Pendente");
   };
 
-  // Remove Payment Handler
+  // Remove Payment Handler — se o lançamento já estiver salvo no caixa (tem caixaMovimentoId),
+  // a exclusão fica apenas pendente: só é efetivada no banco quando o usuário clicar em
+  // "Salvar Crédito" (mesma filosofia "só confirma ao salvar" aplicada às inclusões).
   const handleRemovePayment = async (paymentId: string) => {
-    if (!confirm("Deseja realmente excluir este lançamento de pagamento/crédito?")) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: "Excluir Lançamento",
+      message: "Deseja realmente excluir este lançamento de pagamento/crédito?",
+      confirmLabel: "Excluir",
+      variant: "danger",
+    });
+    if (!ok) return;
 
     const item = payments.find(p => p.id === paymentId);
-    if (item?.caixaMovimentoId) {
-      try {
-        await fetch("/api/caixa/remover-pagamento", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            roomId: stayData.roomNumber,
-            stayCheckinId: stayData.idHospedagem,
-            lancamentoId: item.id,
-            caixaMovimentoId: item.caixaMovimentoId,
-            operatorId: "USR-001"
-          })
-        });
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
     setPayments(prev => prev.filter(p => p.id !== paymentId));
-    toast.info("Lançamento de crédito removido da conta e conferência do caixa.", "Lançamento Excluído");
+
+    if (item?.caixaMovimentoId) {
+      setPendingDeletions(prev => [...prev, item.caixaMovimentoId!]);
+      toast.info('Exclusão pendente — será efetivada no caixa ao clicar em "Salvar Crédito".', "Exclusão Pendente");
+    } else {
+      toast.info("Lançamento pendente removido da lista.", "Lançamento Removido");
+    }
   };
 
   // Add Observation Handler
@@ -312,7 +535,7 @@ export default function LancarPagamentoHospedagemModal({
       id: `OBS-${Date.now()}`,
       dateTime: new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
       type: "RECEPÇÃO",
-      user: "MARCOS",
+      user: activeOperatorName,
       note: newObsText.trim()
     };
     setObservations(prev => [newObs, ...prev]);
@@ -321,37 +544,131 @@ export default function LancarPagamentoHospedagemModal({
     toast.info("Observação adicionada com sucesso.", "Observação");
   };
 
-  // Save Credit Button Handler
-  const handleSaveCredit = () => {
-    setIsSaving(true);
-    setTimeout(() => {
-      setIsSaving(false);
-      toast.success(
-        `Crédito/Pagamento salvo com sucesso para o Quarto ${stayData.roomNumber}!\n\n` +
-        `Total Pagamentos: ${fmtCurrency(totalPagamentos)}\n` +
-        `Saldo Restante a Pagar: ${fmtCurrency(saldoAPagar)}`,
-        "Crédito Salvo"
-      );
-      if (onSaveSuccess) {
-        onSaveSuccess({
-          totalPagamentos,
-          saldoAPagar,
-          payments,
-          observations,
-        });
-      }
+  // Save Credit Button Handler — grava no caixa, em uma única transação, todos os lançamentos
+  // ainda pendentes (adicionados com "+" mas sem caixaMovimentoId), igual ao BTN_FinalizarHospedagem
+  // do sistema WinDev original. Só depois disso decide se pergunta o check-out.
+  const handleSaveCredit = async () => {
+    if (isSaving) return; // evita duplo envio por cliques repetidos enquanto a gravação está em andamento
+
+    const pendingPayments = payments.filter((p) => !p.caixaMovimentoId);
+    const discountChanged = desconto !== (stayData.desconto ?? 0.0);
+
+    // Nada foi incluído, excluído ou alterado nesta sessão: não há o que gravar no caixa.
+    if (pendingPayments.length === 0 && pendingDeletions.length === 0 && !discountChanged) {
+      toast.info("Nenhuma alteração feita na hospedagem", "Nada a Salvar");
       onClose();
-    }, 400);
+      return;
+    }
+
+    setIsSaving(true);
+    toast.info("Gravando lançamentos no caixa. Aguarde...", "Salvando Crédito");
+
+    try {
+      // Efetiva primeiro as exclusões pendentes (lançamentos antigos removidos pelo usuário nesta sessão)
+      if (pendingDeletions.length > 0) {
+        const results = await Promise.all(
+          pendingDeletions.map((caixaMovimentoId) =>
+            fetch("/api/caixa/remover-pagamento", {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ caixaMovimentoId, operatorId: activeOperatorId }),
+            }).then((r) => r.json())
+          )
+        );
+        const failed = results.find((r) => !r.success);
+        if (failed) {
+          throw new Error(failed.error || "Falha ao excluir lançamento(s) do caixa.");
+        }
+        setPendingDeletions([]);
+      }
+
+      if (pendingPayments.length > 0 || discountChanged) {
+        const res = await fetch("/api/caixa/pagamento-lote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operatorId: activeOperatorId,
+            operatorName: activeOperatorName,
+            roomId: stayData.roomNumber,
+            stayCheckinId: stayData.idHospedagem,
+            guestName: stayData.primaryGuestName,
+            discount: desconto,
+            payments: pendingPayments.map((p) => ({
+              clientId: p.id,
+              valor: p.amount,
+              formaPagamento: p.methodDescription,
+              descricao: `Crédito de hospedagem (${p.methodDescription}) - Quarto ${stayData.roomNumber}`,
+            })),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error(data.error || "Falha ao gravar lançamentos no caixa.");
+        }
+
+        const movimentoByClientId = new Map<string, string>(
+          (data.movimentos || []).map((m: { clientId: string; movimentoCaixaId: string }) => [m.clientId, m.movimentoCaixaId])
+        );
+        setPayments((prev) =>
+          prev.map((p) => (movimentoByClientId.has(p.id) ? { ...p, caixaMovimentoId: movimentoByClientId.get(p.id) } : p))
+        );
+      }
+    } catch (e: any) {
+      setIsSaving(false);
+      toast.error(e.message || "Não foi possível gravar os lançamentos no caixa. Tente novamente.", "Erro ao Salvar");
+      return;
+    }
+
+    setIsSaving(false);
+
+    if (onSaveSuccess) {
+      onSaveSuccess({
+        totalPagamentos,
+        saldoAPagar,
+        payments,
+        observations,
+      });
+    }
+
+    // Débito quitado (saldo zerado ou negativo): pergunta se deseja efetuar o check-out.
+    // Débito ainda pendente: o lançamento fica registrado como haver/crédito e a hospedagem permanece aberta.
+    const isQuitado = saldoAPagar <= 0.001;
+
+    if (isQuitado) {
+      toast.success(
+        `Débito da hospedagem do Quarto ${stayData.roomNumber} totalmente quitado!\n\n` +
+        `Total Pagamentos: ${fmtCurrency(totalPagamentos)}`,
+        "Conta Quitada"
+      );
+      const wantsCheckout = await confirmDialog({
+        title: "Conta Quitada",
+        message: `O débito da hospedagem do Quarto ${stayData.roomNumber} foi totalmente quitado.\n\nDeseja efetuar o check-out do hóspede agora?`,
+        confirmLabel: "Fazer Check-out",
+        cancelLabel: "Agora Não",
+      });
+      if (wantsCheckout) {
+        onCheckoutConfirmed?.();
+      }
+    } else {
+      toast.success(
+        `Crédito de ${fmtCurrency(totalPagamentos)} lançado com sucesso para o Quarto ${stayData.roomNumber}.\n\n` +
+        `Saldo Restante a Pagar: ${fmtCurrency(saldoAPagar)}\n` +
+        `A hospedagem permanece em aberto (lançado como haver/crédito).`,
+        "Crédito Lançado"
+      );
+    }
+
+    onClose();
   };
 
 
   const selectedObs = observations.find(o => o.id === selectedObsId) || observations[0];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-950/80 backdrop-blur-sm overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-950/80 backdrop-blur-sm overflow-y-auto print:p-0 print:bg-transparent print:static print:block print:overflow-visible">
       {/* Modal Container - WinDev Window Replication */}
       <div
-        className={`w-full max-w-5xl rounded-xl border shadow-2xl overflow-hidden flex flex-col my-auto ${
+        className={`w-full max-w-5xl rounded-xl border shadow-2xl overflow-hidden flex flex-col my-auto print:hidden ${
           theme.isDark ? "bg-[#0F172A] border-slate-800 text-white" : "bg-[#F4F6F9] border-slate-300 text-slate-900"
         }`}
       >
@@ -389,7 +706,7 @@ export default function LancarPagamentoHospedagemModal({
                 </div>
               </div>
 
-              <div className="min-w-[240px]">
+              <div className="flex-1 min-w-[380px]">
                 <label className="block text-[10px] font-bold text-slate-500 uppercase">Nome do Hospede Principal</label>
                 <div className="flex items-center gap-1.5">
                   <input
@@ -401,18 +718,28 @@ export default function LancarPagamentoHospedagemModal({
                     }`}
                   />
                   <button
-                    onClick={() => alert(`Visualizar cadastro do hóspede ${stayData.primaryGuestName}`)}
-                    className="p-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white shrink-0 shadow-sm"
-                    title="Visualizar Hóspede"
+                    onClick={() => openCadastroHospede("dados")}
+                    disabled={loadingCadastroHospede}
+                    className="p-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white shrink-0 shadow-sm disabled:opacity-60"
+                    title="Visualizar/Editar Cadastro do Hóspede"
                   >
-                    <Eye className="w-3.5 h-3.5" />
+                    {loadingCadastroHospede && cadastroHospedeTab === "dados" ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
                   </button>
                   <button
-                    onClick={() => alert(`Veículos do hóspede ${stayData.primaryGuestName}`)}
-                    className="p-1.5 rounded bg-sky-600 hover:bg-sky-500 text-white shrink-0 shadow-sm"
+                    onClick={() => openCadastroHospede("veiculos")}
+                    disabled={loadingCadastroHospede}
+                    className="p-1.5 rounded bg-sky-600 hover:bg-sky-500 text-white shrink-0 shadow-sm disabled:opacity-60"
                     title="Veículos do Hóspede"
                   >
-                    <Car className="w-3.5 h-3.5" />
+                    {loadingCadastroHospede && cadastroHospedeTab === "veiculos" ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Car className="w-3.5 h-3.5" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -450,7 +777,7 @@ export default function LancarPagamentoHospedagemModal({
               <div className="text-center">
                 <span className="block text-[10px] text-red-500 font-bold uppercase">Extras</span>
                 <span className="font-mono font-extrabold text-xs text-red-600 dark:text-red-400">
-                  {stayData.extrasCount || 185}
+                  {stayData.extrasCount ?? 0}
                 </span>
               </div>
             </div>
@@ -524,7 +851,7 @@ export default function LancarPagamentoHospedagemModal({
                       }`}
                     />
                     <button
-                      onClick={() => alert(`Detalhamento de Diárias: ${fmtCurrency(totalDiarias)}`)}
+                      onClick={() => toast.info(`Detalhamento de Diárias: ${fmtCurrency(totalDiarias)}`)}
                       className="p-1 rounded bg-cyan-600 text-white shrink-0 hover:bg-cyan-500"
                       title="Ver Diárias"
                     >
@@ -546,14 +873,14 @@ export default function LancarPagamentoHospedagemModal({
                       }`}
                     />
                     <button
-                      onClick={() => setShowAddConsumoModal(true)}
+                      onClick={() => onOpenConsumo?.()}
                       className="p-1 rounded bg-cyan-600 text-white shrink-0 hover:bg-cyan-500"
-                      title="Adicionar Consumo"
+                      title="Lançar Consumo"
                     >
                       <Plus className="w-3 h-3" />
                     </button>
                     <button
-                      onClick={() => alert(`Imprimir comprovante de consumo`)}
+                      onClick={() => toast.info(`Imprimir comprovante de consumo`)}
                       className="p-1 rounded bg-cyan-700 text-white shrink-0 hover:bg-cyan-600"
                       title="Imprimir Consumo"
                     >
@@ -575,7 +902,7 @@ export default function LancarPagamentoHospedagemModal({
                       }`}
                     />
                     <button
-                      onClick={() => alert(`Outros Débitos: ${fmtCurrency(outrosDebitos)}`)}
+                      onClick={() => toast.info(`Outros Débitos: ${fmtCurrency(outrosDebitos)}`)}
                       className="p-1 rounded bg-cyan-600 text-white shrink-0 hover:bg-cyan-500"
                       title="Ver Outros Débitos"
                     >
@@ -612,7 +939,7 @@ export default function LancarPagamentoHospedagemModal({
                       }`}
                     />
                     <button
-                      onClick={() => alert(`Total de adiantamentos lançados: ${fmtCurrency(totalPagamentos)}`)}
+                      onClick={() => toast.info(`Total de adiantamentos lançados: ${fmtCurrency(totalPagamentos)}`)}
                       className="p-1 rounded bg-cyan-600 text-white shrink-0 hover:bg-cyan-500"
                       title="Ver Adiantamentos"
                     >
@@ -623,7 +950,7 @@ export default function LancarPagamentoHospedagemModal({
               </div>
 
               <button
-                onClick={() => alert(`Imprimindo Resumo de Hospedagem do Quarto ${stayData.roomNumber}...`)}
+                onClick={() => toast.info(`Imprimindo Resumo de Hospedagem do Quarto ${stayData.roomNumber}...`)}
                 className="w-full py-2 px-3 rounded-lg bg-[#00BCD4] hover:bg-cyan-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
               >
                 <Printer className="w-4 h-4" />
@@ -688,7 +1015,7 @@ export default function LancarPagamentoHospedagemModal({
                 <button
                   onClick={handleAddPayment}
                   className="p-2 rounded-lg bg-[#00BCD4] hover:bg-cyan-600 text-white font-bold shrink-0 shadow-sm transition-colors flex items-center justify-center"
-                  title="Adicionar Lançamento de Crédito/Pagamento"
+                  title="Adicionar Lançamento de Crédito/Pagamento (pendente até Salvar Crédito)"
                 >
                   <Plus className="w-4 h-4" />
                 </button>
@@ -699,16 +1026,18 @@ export default function LancarPagamentoHospedagemModal({
                 <table className="w-full text-left text-[11px] border-collapse">
                   <thead>
                     <tr className="bg-[#00BCD4] text-white font-bold select-none">
-                      <th className="p-1.5 border-r border-cyan-400/50">Data</th>
+                      <th className="p-1.5 border-r border-cyan-400/50">Data/Hora</th>
                       <th className="p-1.5 border-r border-cyan-400/50 text-right">Valor Adiant.</th>
                       <th className="p-1.5 border-r border-cyan-400/50">Descr.Form.Pagto</th>
+                      <th className="p-1.5 border-r border-cyan-400/50">Operador</th>
+                      <th className="p-1.5 border-r border-cyan-400/50 text-center w-16">Imprimir</th>
                       <th className="p-1.5 text-center w-12">Ação</th>
                     </tr>
                   </thead>
                   <tbody>
                     {payments.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="p-3 text-center text-slate-400 italic">
+                        <td colSpan={6} className="p-3 text-center text-slate-400 italic">
                           Nenhum pagamento ou crédito lançado ainda nesta hospedagem.
                         </td>
                       </tr>
@@ -729,6 +1058,20 @@ export default function LancarPagamentoHospedagemModal({
                             {fmtCurrency(p.amount)}
                           </td>
                           <td className="p-1.5 font-bold uppercase">{p.methodDescription}</td>
+                          <td className="p-1.5 font-medium uppercase text-slate-500 dark:text-slate-400">{p.operatorName || "—"}</td>
+                          <td className="p-1.5 text-center">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setReciboPayments([p]);
+                                setShowReciboModal(true);
+                              }}
+                              className="text-cyan-600 hover:text-cyan-800 p-0.5 rounded hover:bg-cyan-100 dark:hover:bg-cyan-950/40"
+                              title="Imprimir recibo deste lançamento"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
                           <td className="p-1.5 text-center">
                             <button
                               onClick={(e) => {
@@ -753,16 +1096,16 @@ export default function LancarPagamentoHospedagemModal({
                 <button
                   onClick={() => {
                     if (payments.length > 0) {
-                      setSelectedReciboPayment(payments[0]);
+                      setReciboPayments(payments);
                       setShowReciboModal(true);
                     } else {
-                      alert("Nenhum pagamento registrado para emitir recibo.");
+                      toast.warning("Nenhum pagamento registrado para emitir recibo.");
                     }
                   }}
                   className="py-1.5 px-3 rounded-lg bg-[#00BCD4] hover:bg-cyan-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-colors"
                 >
                   <Printer className="w-4 h-4" />
-                  Imprimir Recibo
+                  Imprimir Recibo (Todos os Lançamentos)
                 </button>
 
                 <p className="text-[10px] text-red-500 italic font-semibold">
@@ -817,10 +1160,15 @@ export default function LancarPagamentoHospedagemModal({
                 <button
                   onClick={handleSaveCredit}
                   disabled={isSaving}
-                  className="w-full py-3 px-4 rounded-xl bg-[#00BCD4] hover:bg-cyan-600 text-white font-extrabold text-base flex items-center justify-center gap-2 shadow-lg transition-all transform active:scale-95 disabled:opacity-50"
+                  title={isSaving ? "Gravando no caixa... Aguarde" : "Salvar Crédito"}
+                  className="w-full py-3 px-4 rounded-xl bg-[#00BCD4] hover:bg-cyan-600 text-white font-extrabold text-base flex items-center justify-center gap-2 shadow-lg transition-all transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <Check className="w-6 h-6 stroke-[3]" />
-                  {isSaving ? "Salvando..." : "Salvar Crédito"}
+                  {isSaving ? (
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                  ) : (
+                    <Check className="w-6 h-6 stroke-[3]" />
+                  )}
+                  {isSaving ? "Gravando... Aguarde" : "Salvar Crédito"}
                 </button>
               </div>
             </div>
@@ -894,7 +1242,7 @@ export default function LancarPagamentoHospedagemModal({
       </div>
 
       {/* QUICK MODAL 1: RECIBO DE PAGAMENTO */}
-      {showReciboModal && selectedReciboPayment && (
+      {showReciboModal && reciboPayments.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm print:p-0 print:bg-transparent print:static print:block">
           <div className={`w-full max-w-md p-6 rounded-2xl border shadow-2xl space-y-4 print:p-0 print:border-none print:shadow-none print:bg-white print:text-black print:max-w-none print:w-full ${
             theme.isDark ? "bg-[#0F172A] border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"
@@ -915,18 +1263,36 @@ export default function LancarPagamentoHospedagemModal({
                 <span className="text-[10px] font-normal text-slate-500 print:text-slate-700">COMPROVANTE DE CRÉDITO DE HOSPEDAGEM</span>
               </div>
 
-              <div className="space-y-1">
+              <div className="space-y-1 text-slate-700 dark:text-slate-200 print:text-black">
                 <div>Quarto: <strong className="text-sky-500 print:text-black">{stayData.roomNumber}</strong></div>
                 <div>Hóspede: <strong>{stayData.primaryGuestName}</strong></div>
-                <div>Data Lançamento: {selectedReciboPayment.date}</div>
-                <div>Forma de Pagto: <strong className="uppercase">{selectedReciboPayment.methodDescription}</strong></div>
+
+                {reciboPayments.length === 1 ? (
+                  <>
+                    <div>Data Lançamento: {reciboPayments[0].date}</div>
+                    <div>Forma de Pagto: <strong className="uppercase">{reciboPayments[0].methodDescription}</strong></div>
+                    {reciboPayments[0].operatorName && (
+                      <div>Operador: <strong className="uppercase">{reciboPayments[0].operatorName}</strong></div>
+                    )}
+                  </>
+                ) : (
+                  <div className="space-y-1 border-y py-1.5">
+                    {reciboPayments.map((p) => (
+                      <div key={p.id} className="flex justify-between gap-2">
+                        <span className="truncate">{p.date} — {p.methodDescription}</span>
+                        <span className="font-bold shrink-0">{fmtCurrency(p.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 print:text-black pt-1 border-t">
-                  Valor Pago: {fmtCurrency(selectedReciboPayment.amount)}
+                  Valor {reciboPayments.length > 1 ? "Total" : "Pago"}: {fmtCurrency(reciboPayments.reduce((acc, p) => acc + p.amount, 0))}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 print:hidden">
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2 print:hidden">
               <button
                 onClick={() => setShowReciboModal(false)}
                 className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
@@ -934,7 +1300,23 @@ export default function LancarPagamentoHospedagemModal({
                 Fechar
               </button>
               <button
-                onClick={() => handleSendEmailPaymentReceipt(selectedReciboPayment)}
+                onClick={() => handleSendWhatsAppPaymentReceipt(reciboPayments)}
+                disabled={sendingWhatsappPayment}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shadow-md disabled:opacity-50"
+              >
+                {sendingWhatsappPayment ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Enviando...
+                  </>
+                ) : (
+                  <>
+                    <MessageSquare className="w-4 h-4" /> Enviar por WhatsApp
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => handleSendEmailPaymentReceipt(reciboPayments)}
                 disabled={sendingEmailPayment}
                 className="px-4 py-2 rounded-xl text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1.5 shadow-md disabled:opacity-50"
               >
@@ -951,7 +1333,7 @@ export default function LancarPagamentoHospedagemModal({
               </button>
               <button
                 onClick={() => {
-                  window.print();
+                  handlePrintRecibo(reciboPayments);
                   setShowReciboModal(false);
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white flex items-center gap-1.5 shadow-md"
@@ -963,70 +1345,15 @@ export default function LancarPagamentoHospedagemModal({
         </div>
       )}
 
-      {/* QUICK MODAL 2: ADICIONAR CONSUMO */}
-      {showAddConsumoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className={`w-full max-w-sm p-5 rounded-2xl border shadow-2xl space-y-4 ${
-            theme.isDark ? "bg-[#0F172A] border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"
-          }`}>
-            <div className="flex items-center justify-between border-b pb-2">
-              <h3 className="font-bold text-sm flex items-center gap-2">
-                <Plus className="w-4 h-4 text-cyan-500" /> Adicionar Consumo Rápido
-              </h3>
-              <button onClick={() => setShowAddConsumoModal(false)}>
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {/* CADASTRO DO HÓSPEDE (Visualizar/Editar dados ou Veículos) */}
+      <CadastroHospedeModal
+        isOpen={showCadastroHospede}
+        onClose={() => setShowCadastroHospede(false)}
+        onSave={handleSaveCadastroHospede}
+        initialData={cadastroHospedeData}
+        initialTab={cadastroHospedeTab}
+      />
 
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block mb-1 font-semibold">Descrição do Item</label>
-                <input
-                  type="text"
-                  value={consumoItemName}
-                  onChange={(e) => setConsumoItemName(e.target.value)}
-                  className={`w-full p-2 rounded border outline-none ${
-                    theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
-                  }`}
-                />
-              </div>
-
-              <div>
-                <label className="block mb-1 font-semibold">Valor (R$)</label>
-                <input
-                  type="number"
-                  value={consumoItemVal}
-                  onChange={(e) => setConsumoItemVal(e.target.value)}
-                  className={`w-full p-2 rounded border outline-none font-mono ${
-                    theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
-                  }`}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                onClick={() => setShowAddConsumoModal(false)}
-                className="px-3 py-1.5 rounded text-xs font-semibold bg-slate-200 dark:bg-slate-800"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={() => {
-                  const val = parseFloat(consumoItemVal) || 0;
-                  setTotalConsumo(prev => prev + val);
-                  setShowAddConsumoModal(false);
-                  toast.success(`Consumo '${consumoItemName}' (${fmtCurrency(val)}) adicionado com sucesso!`, "Consumo Adicionado");
-                }}
-
-                className="px-3 py-1.5 rounded text-xs font-semibold bg-cyan-600 text-white"
-              >
-                Confirmar Consumo
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

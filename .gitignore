@@ -7,9 +7,10 @@
 /coverage
 
 # next.js
-/.next/
+.next/
 /out/
 build
+dist/
 
 # misc
 .DS_Store
@@ -21,17 +22,22 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env*.local
-.env
-.env.development
-.env.production
+.env*
+!.env.example
 
 # vercel
 .vercel
 
+# local agent config
+.claude/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# RTK (Antigravity token-saving tooling, not part of the app)
+.agents/hooks.json
+scripts/rtk-gate.js
 
 # Legacy and Large files
 *.zip
@@ -43,3 +49,4 @@ next-env.d.ts
 .turbo/
 node_modules/
 PROJETO WINDEV/
+.vercel

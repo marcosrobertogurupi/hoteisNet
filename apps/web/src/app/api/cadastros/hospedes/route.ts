@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
-const prisma = new PrismaClient();
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 function formatCPF(v: string) {
@@ -59,12 +58,18 @@ export async function GET(request: NextRequest) {
           state: true,
           country: true,
           street: true,
+          number: true,
+          neighborhood: true,
           zipCode: true,
           gender: true,
           birthDate: true,
           companyId: true,
           company: {
             select: { name: true, cnpj: true },
+          },
+          vehicles: {
+            select: { id: true, placa: true, caracteristica: true },
+            orderBy: { createdAt: "asc" },
           },
         },
       }),
@@ -105,6 +110,7 @@ export async function POST(request: NextRequest) {
       zipCode,
       street,
       number,
+      neighborhood,
       city,
       state,
       country,
@@ -130,6 +136,7 @@ export async function POST(request: NextRequest) {
         zipCode: zipCode || null,
         street: street || null,
         number: number || null,
+        neighborhood: neighborhood || null,
         city: city || null,
         state: state || null,
         country: country || "Brasil",

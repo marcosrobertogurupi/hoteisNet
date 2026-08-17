@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Package, ArrowRightLeft, Building2, ShoppingBag, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Filter } from "lucide-react";
+import { Package, ArrowRightLeft, Building2, ShoppingBag, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Filter, ScanBarcode, Trash2, X, Loader2 } from "lucide-react";
+
+interface ProductBarcode {
+  id: string;
+  code: string;
+}
 
 export default function TenantStockPage() {
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -11,6 +16,16 @@ export default function TenantStockPage() {
   const [notification, setNotification] = useState<string | null>(null);
 
   const [products, setProducts] = useState<any[]>([]);
+
+  // Gestão de códigos de barras vinculados a um produto (vários códigos podem apontar para o
+  // mesmo produto; qualquer um deles resolve para ele no Lançamento de Consumo do Quarto).
+  const [showBarcodeModal, setShowBarcodeModal] = useState(false);
+  const [barcodeProduct, setBarcodeProduct] = useState<any>(null);
+  const [barcodes, setBarcodes] = useState<ProductBarcode[]>([]);
+  const [barcodesLoading, setBarcodesLoading] = useState(false);
+  const [newBarcodeInput, setNewBarcodeInput] = useState("");
+  const [barcodeSaving, setBarcodeSaving] = useState(false);
+  const [barcodeError, setBarcodeError] = useState<string | null>(null);
 
   const syncStockFromDatabase = useCallback(async () => {
     try {
@@ -74,6 +89,61 @@ export default function TenantStockPage() {
     const interval = setInterval(syncStockFromDatabase, 3000);
     return () => clearInterval(interval);
   }, [syncStockFromDatabase]);
+
+  const openBarcodeModal = async (product: any) => {
+    setBarcodeProduct(product);
+    setShowBarcodeModal(true);
+    setNewBarcodeInput("");
+    setBarcodeError(null);
+    setBarcodesLoading(true);
+    try {
+      const res = await fetch(`/api/stock/barcodes?productId=${product.id}`);
+      const data = await res.json();
+      setBarcodes(data.success ? data.barcodes : []);
+    } catch {
+      setBarcodes([]);
+    } finally {
+      setBarcodesLoading(false);
+    }
+  };
+
+  const handleAddBarcode = async () => {
+    const code = newBarcodeInput.trim();
+    if (!code || !barcodeProduct) return;
+    setBarcodeSaving(true);
+    setBarcodeError(null);
+    try {
+      const res = await fetch("/api/stock/barcodes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: barcodeProduct.id, code }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setBarcodeError(data.error || "Não foi possível vincular este código de barras.");
+        return;
+      }
+      setBarcodes((prev) => [...prev, data.barcode]);
+      setNewBarcodeInput("");
+    } catch {
+      setBarcodeError("Erro de rede ao vincular código de barras.");
+    } finally {
+      setBarcodeSaving(false);
+    }
+  };
+
+  const handleRemoveBarcode = async (barcodeId: string) => {
+    setBarcodes((prev) => prev.filter((b) => b.id !== barcodeId));
+    try {
+      await fetch("/api/stock/barcodes", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: barcodeId }),
+      });
+    } catch {
+      // mantém removido na tela; próxima abertura do modal resincroniza com o servidor
+    }
+  };
 
   const handleExecuteTransfer = () => {
     if (!selectedProduct || transferQty <= 0) return;
@@ -208,15 +278,23 @@ export default function TenantStockPage() {
                 <td className="p-3.5 font-mono text-emerald-400 font-semibold">{p.posStocks.PDV_RESTAURANTE} un.</td>
                 <td className="p-3.5 font-mono text-sky-400 font-semibold">{p.posStocks.PDV_RECEPCAO} un.</td>
                 <td className="p-3.5">
-                  <button
-                    onClick={() => {
-                      setSelectedProduct(p);
-                      setShowTransferModal(true);
-                    }}
-                    className="px-3 py-1.5 bg-[#0284C7]/20 hover:bg-[#0284C7]/40 text-[#38BDF8] border border-[#0284C7]/40 rounded text-xs transition-colors flex items-center gap-1 font-medium"
-                  >
-                    <ArrowRightLeft className="w-3.5 h-3.5" /> Transferir para PDV
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setSelectedProduct(p);
+                        setShowTransferModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-[#0284C7]/20 hover:bg-[#0284C7]/40 text-[#38BDF8] border border-[#0284C7]/40 rounded text-xs transition-colors flex items-center gap-1 font-medium"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" /> Transferir para PDV
+                    </button>
+                    <button
+                      onClick={() => openBarcodeModal(p)}
+                      className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-400 border border-emerald-500/40 rounded text-xs transition-colors flex items-center gap-1 font-medium"
+                    >
+                      <ScanBarcode className="w-3.5 h-3.5" /> Códigos de Barras
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -282,6 +360,94 @@ export default function TenantStockPage() {
                 className="px-4 py-2 bg-[#0284C7] text-white text-sm rounded-lg font-medium hover:bg-[#0369A1]"
               >
                 Confirmar Transferência
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Códigos de Barras (vários códigos podem apontar para o mesmo produto) */}
+      {showBarcodeModal && barcodeProduct && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0F172A] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-base font-semibold text-white flex items-center gap-2">
+                <ScanBarcode className="w-4 h-4 text-emerald-400" />
+                Códigos de Barras do Produto
+              </h3>
+              <button onClick={() => setShowBarcodeModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-[#1E293B]/70 border border-slate-800">
+              <span className="text-slate-400 text-xs block">Produto:</span>
+              <span className="text-sm font-bold text-white block">{barcodeProduct.name}</span>
+            </div>
+
+            <p className="text-[11px] text-slate-400">
+              Vincule quantos códigos de barras quiser a este produto. Ao ler qualquer um deles no Lançamento de Consumo do Quarto, este produto será encontrado.
+            </p>
+
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={newBarcodeInput}
+                  onChange={(e) => setNewBarcodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddBarcode();
+                    }
+                  }}
+                  placeholder="Digite ou leia o código de barras"
+                  className="flex-1 bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-emerald-500"
+                />
+                <button
+                  onClick={handleAddBarcode}
+                  disabled={barcodeSaving || !newBarcodeInput.trim()}
+                  className="p-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shrink-0 disabled:opacity-50"
+                  title="Adicionar código de barras"
+                >
+                  {barcodeSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                </button>
+              </div>
+              {barcodeError && <p className="text-[11px] text-red-400">{barcodeError}</p>}
+            </div>
+
+            <div className="border border-slate-800 rounded-lg overflow-hidden max-h-52 overflow-y-auto">
+              {barcodesLoading ? (
+                <div className="p-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
+                </div>
+              ) : barcodes.length === 0 ? (
+                <div className="p-4 text-center text-xs text-slate-400">Nenhum código de barras vinculado ainda.</div>
+              ) : (
+                barcodes.map((b) => (
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between px-3 py-2 border-b border-slate-800 last:border-b-0 hover:bg-slate-800/40"
+                  >
+                    <span className="font-mono text-xs text-slate-200">{b.code}</span>
+                    <button
+                      onClick={() => handleRemoveBarcode(b.id)}
+                      className="text-red-500 hover:text-red-400 p-1 rounded hover:bg-red-950/40"
+                      title="Remover vínculo"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-800">
+              <button
+                onClick={() => setShowBarcodeModal(false)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 text-sm rounded-lg hover:bg-slate-700"
+              >
+                Fechar
               </button>
             </div>
           </div>

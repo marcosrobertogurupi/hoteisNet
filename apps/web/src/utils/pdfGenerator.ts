@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { valorPorExtenso } from "./valorPorExtenso";
 
 export interface PdfExtratoData {
   hotelName: string;
@@ -599,6 +600,169 @@ export function generateReservaPdfBase64(data: PdfReservaData): string {
   doc.setTextColor(130, 130, 130);
   doc.text(`Documento emitido em ${data.issueDate} — ${data.hotelName}`, pageWidth / 2, pageH - 8, { align: "center" });
   doc.setTextColor(0, 0, 0);
+
+  return doc.output("datauristring");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF RECIBO DE PAGAMENTO / ADIANTAMENTO DE HOSPEDAGEM
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MESES_PT = [
+  "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO",
+  "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO",
+];
+
+export interface PdfReciboPaymentRow {
+  date: string;              // "15/08/2026 11:52"
+  amount: number;
+  methodDescription: string;
+  operatorName?: string;
+}
+
+export interface PdfReciboData {
+  hotelName: string;
+  hotelCnpj?: string;
+  hotelAddress?: string;
+  guestName: string;
+  roomNumber?: string;
+  payments: PdfReciboPaymentRow[];
+  operatorName?: string;
+  cityUf?: string; // ex: "REDENCAO-PA"
+}
+
+/**
+ * Gera o PDF do Recibo de Pagamento/Adiantamento de Hospedagem, seguindo o
+ * modelo oficial usado pelo sistema (Recibo de pagamento hospedagem.pdf).
+ * Aceita um ou mais lançamentos de pagamento — quando há mais de um, emite
+ * um único recibo consolidado com o detalhamento de cada lançamento.
+ */
+export function generateReciboPdfBase64(data: PdfReciboData): string {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginL = 15;
+  const marginR = pageWidth - 15;
+  let y = 18;
+
+  const totalValor = data.payments.reduce((acc, p) => acc + (p.amount || 0), 0);
+
+  // ── CABEÇALHO DO HOTEL ────────────────────────────────────────────────────
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text((data.hotelName || "HOTEL IDEAL").toUpperCase(), marginL, y);
+
+  doc.setFontSize(10);
+  const cnpjStr = `CNPJ: ${data.hotelCnpj || "40.904.811/0001-31"}`;
+  doc.text(cnpjStr, marginR, y, { align: "right" });
+
+  y += 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  const addrStr = data.hotelAddress || "RUA MARECHAL RONDON BAIRRO: ALTO PARANA NUMERO: SN CIDADE: REDENCAO/PA";
+  const addrLines = doc.splitTextToSize(addrStr, marginR - marginL);
+  doc.text(addrLines, marginL, y);
+  y += addrLines.length * 4 + 6;
+
+  // ── TÍTULO ────────────────────────────────────────────────────────────────
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text("R E C I B O", pageWidth / 2, y, { align: "center" });
+
+  y += 9;
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text("Valor:", marginR - 35, y);
+  doc.setFont("helvetica", "normal");
+  doc.text(`R$ ${totalValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, marginR, y, { align: "right" });
+
+  // ── RECEBEMOS DE / IMPORTÂNCIA ────────────────────────────────────────────
+  y += 10;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Recebemos de", marginL, y);
+  doc.setFont("helvetica", "normal");
+  doc.text((data.guestName || "-").toUpperCase(), marginL + 32, y);
+
+  y += 7;
+  doc.setFont("helvetica", "bold");
+  doc.text("A importância de", marginL, y);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.text(valorPorExtenso(totalValor), marginL + 32, y);
+
+  y += 9;
+  doc.setFontSize(9);
+  if (data.payments.length === 1) {
+    const p = data.payments[0];
+    doc.setFont("helvetica", "bold");
+    doc.text("Forma de pagamento:", marginL, y);
+    doc.setFont("helvetica", "normal");
+    doc.text((p.methodDescription || "-").toUpperCase(), marginL + 38, y);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("Data Pagto:", marginL + 110, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(p.date.split(" ")[0] || "-", marginL + 133, y);
+    y += 10;
+  } else {
+    doc.setFont("helvetica", "bold");
+    doc.text("Forma de pagamento: DIVERSAS (detalhamento abaixo)", marginL, y);
+    y += 6;
+
+    doc.setFillColor(235, 235, 235);
+    doc.rect(marginL, y, marginR - marginL, 6, "F");
+    doc.rect(marginL, y, marginR - marginL, 6, "S");
+    doc.setFontSize(8);
+    doc.text("Data/Hora", marginL + 2, y + 4);
+    doc.text("Forma de Pagamento", marginL + 45, y + 4);
+    doc.text("Operador", marginL + 100, y + 4);
+    doc.text("Valor (R$)", marginR - 2, y + 4, { align: "right" });
+
+    y += 6;
+    doc.setFont("helvetica", "normal");
+    for (const p of data.payments) {
+      if (y > 260) {
+        doc.addPage();
+        y = 15;
+      }
+      doc.text(p.date, marginL + 2, y + 4);
+      doc.text((p.methodDescription || "-").toUpperCase(), marginL + 45, y + 4);
+      doc.text((p.operatorName || "-").toUpperCase(), marginL + 100, y + 4);
+      doc.text(`R$ ${p.amount.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, marginR - 2, y + 4, { align: "right" });
+      y += 5;
+      doc.setLineWidth(0.1);
+      doc.line(marginL, y, marginR, y);
+    }
+
+    y += 3;
+    doc.setFont("helvetica", "bold");
+    doc.text(`Total: R$ ${totalValor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, marginR, y, { align: "right" });
+    y += 10;
+  }
+
+  // ── DATA/LOCAL DE EMISSÃO ────────────────────────────────────────────────
+  const now = new Date();
+  const dataExtenso = `${data.cityUf || "REDENCAO-PA"}, ${now.getDate()} DE ${MESES_PT[now.getMonth()]} DE ${now.getFullYear()}`;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Para maior clareza firmo o presente.", pageWidth / 2, y, { align: "center" });
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  doc.text(dataExtenso, pageWidth / 2, y, { align: "center" });
+
+  // ── ASSINATURA ────────────────────────────────────────────────────────────
+  y += 18;
+  doc.setFont("helvetica", "bold");
+  doc.text("Assinatura:", marginL, y);
+  doc.setLineWidth(0.3);
+  doc.line(marginL + 22, y, marginR, y);
+
+  y += 8;
+  doc.setFont("helvetica", "bold");
+  doc.text("Op:", marginL, y);
+  doc.setFont("helvetica", "normal");
+  doc.text((data.operatorName || "-").toUpperCase(), marginL + 8, y);
 
   return doc.output("datauristring");
 }

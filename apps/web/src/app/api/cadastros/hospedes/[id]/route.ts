@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
-const prisma = new PrismaClient();
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 // GET /api/cadastros/hospedes/[id]
@@ -13,7 +12,18 @@ export async function GET(
     const { id } = await params;
     const guest = await prisma.guest.findFirst({
       where: { id, tenantId: DEFAULT_TENANT_ID },
-      include: { company: true, fnrhRecords: true },
+      include: {
+        company: true,
+        fnrhRecords: true,
+        vehicles: { orderBy: { createdAt: "asc" } },
+        checkins: {
+          orderBy: { checkInDate: "desc" },
+          include: {
+            room: { select: { number: true } },
+            charges: true,
+          },
+        },
+      },
     });
 
     if (!guest) {
@@ -59,6 +69,7 @@ export async function PUT(
         zipCode: body.zipCode !== undefined ? body.zipCode || null : existing.zipCode,
         street: body.street !== undefined ? body.street || null : existing.street,
         number: body.number !== undefined ? body.number || null : existing.number,
+        neighborhood: body.neighborhood !== undefined ? body.neighborhood || null : existing.neighborhood,
         city: body.city !== undefined ? body.city || null : existing.city,
         state: body.state !== undefined ? body.state || null : existing.state,
         country: body.country || existing.country,

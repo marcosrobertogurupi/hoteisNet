@@ -30,8 +30,12 @@ import {
   Play,
   RotateCw
 } from "lucide-react";
+import { useToast } from "@/context/ToastContext";
+import { useTheme } from "@/context/ThemeContext";
 
 export default function SuperAdminDashboardPage() {
+  const toast = useToast();
+  const { uazapiServerUrl, setUazapiServerUrl, uazapiInstanceToken, setUazapiInstanceToken } = useTheme();
   const [activeTab, setActiveTab] = useState<"TENANTS" | "AI_USAGE" | "SUPPORT_TICKETS" | "SYSTEM_SETTINGS">("TENANTS");
 
   // Accordion Sections State in System Settings
@@ -51,6 +55,8 @@ export default function SuperAdminDashboardPage() {
   // Settings Fields State
   const [apiUrl, setApiUrl] = useState("https://api.netservice.net.br");
   const [adminToken, setAdminToken] = useState("•".repeat(48));
+  const [uazapiServerInput, setUazapiServerInput] = useState(uazapiServerUrl);
+  const [uazapiTokenInput, setUazapiTokenInput] = useState(uazapiInstanceToken);
   const [apiOnlineToggle, setApiOnlineToggle] = useState(true);
   const [mediaPath, setMediaPath] = useState("C:\\NETSERV\\HOTEISNET\\WIN.WAV");
   const [webhookUrl, setWebhookUrl] = useState("https://n8n.netservice.net.br/webhook-test/barberia-hoteisnet");
@@ -105,6 +111,8 @@ export default function SuperAdminDashboardPage() {
   };
 
   const handleSaveSettings = () => {
+    setUazapiServerUrl(uazapiServerInput.trim());
+    setUazapiInstanceToken(uazapiTokenInput.trim());
     setSaveToast(true);
     setTimeout(() => setSaveToast(false), 3000);
   };
@@ -368,8 +376,9 @@ export default function SuperAdminDashboardPage() {
                     <label className="text-slate-300 font-semibold block mb-1">Servidor API WhatsApp (Uazapi)</label>
                     <input
                       type="text"
-                      value={apiUrl}
-                      onChange={(e) => setApiUrl(e.target.value)}
+                      value={uazapiServerInput}
+                      onChange={(e) => setUazapiServerInput(e.target.value)}
+                      placeholder="https://netservice.uazapi.com"
                       className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white font-mono focus:outline-none focus:border-[#38BDF8]"
                     />
                   </div>
@@ -378,8 +387,9 @@ export default function SuperAdminDashboardPage() {
                     <label className="text-slate-300 font-semibold block mb-1">Chave/Token Adm/Conexão</label>
                     <input
                       type="password"
-                      value={adminToken}
-                      onChange={(e) => setAdminToken(e.target.value)}
+                      value={uazapiTokenInput}
+                      onChange={(e) => setUazapiTokenInput(e.target.value)}
+                      placeholder="fbe5bfbb-226a-47a2-9d1d-6b657933318c"
                       className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white font-mono focus:outline-none focus:border-[#38BDF8]"
                     />
                   </div>
@@ -464,21 +474,21 @@ export default function SuperAdminDashboardPage() {
                       </button>
 
                       <button
-                        onClick={() => alert("Status das Instâncias: 100% Operacional")}
+                        onClick={() => toast.info("Status das Instâncias: 100% Operacional")}
                         className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium text-xs"
                       >
                         Status da Instância
                       </button>
 
                       <button
-                        onClick={() => alert("Desconectando instâncias ativas...")}
+                        onClick={() => toast.info("Desconectando instâncias ativas...")}
                         className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium text-xs"
                       >
                         Desconectar Instância
                       </button>
 
                       <button
-                        onClick={() => alert("Baixando histórico de mensagens lidas...")}
+                        onClick={() => toast.info("Baixando histórico de mensagens lidas...")}
                         className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium text-xs"
                       >
                         Baixar Msg Lidas
@@ -539,7 +549,7 @@ export default function SuperAdminDashboardPage() {
                       <button
                         onClick={() => {
                           setWebhookConnected(true);
-                          alert("Webhook testado e conectado com sucesso!");
+                          toast.success("Webhook testado e conectado com sucesso!");
                         }}
                         className="px-4 py-2.5 rounded-xl bg-[#0284C7] text-white font-semibold text-xs whitespace-nowrap"
                       >
@@ -588,7 +598,7 @@ export default function SuperAdminDashboardPage() {
                       type="button"
                       onClick={() => {
                         handleSaveSettings();
-                        alert("Configurações do Hub do Desenvolvedor salvas com sucesso no servidor SaaS!");
+                        toast.success("Configurações do Hub do Desenvolvedor salvas com sucesso no servidor SaaS!");
                       }}
                       className="px-4 py-2 bg-[#10B981] hover:bg-[#059669] text-slate-950 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-md"
                     >

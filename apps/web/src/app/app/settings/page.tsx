@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTheme, THEMES, ThemeId } from "@/context/ThemeContext";
 import { getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
 import { 
@@ -16,8 +16,6 @@ import {
   Eye, 
   RefreshCw,
   ShieldCheck,
-  MessageSquare,
-  Key,
   Globe,
   TimerOff,
   Clock3,
@@ -26,7 +24,9 @@ import {
   Send,
   EyeOff,
   Lock,
-  FileText
+  FileText,
+  CalendarClock,
+  PackageX
 } from "lucide-react";
 
 export default function SubscriberSettingsPage() {
@@ -46,10 +46,6 @@ export default function SubscriberSettingsPage() {
     setDefaultCheckInTime,
     defaultCheckOutTime,
     setDefaultCheckOutTime,
-    uazapiServerUrl,
-    setUazapiServerUrl,
-    uazapiInstanceToken,
-    setUazapiInstanceToken,
     reservationToleranceHours,
     setReservationToleranceHours,
     // E-mail / SMTP
@@ -81,8 +77,6 @@ export default function SubscriberSettingsPage() {
   const [logoInput, setLogoInput] = useState(hotelLogo || "");
   const [checkInTimeInput, setCheckInTimeInput] = useState(defaultCheckInTime);
   const [checkOutTimeInput, setCheckOutTimeInput] = useState(defaultCheckOutTime);
-  const [uazapiServerInput, setUazapiServerInput] = useState(uazapiServerUrl);
-  const [uazapiTokenInput, setUazapiTokenInput] = useState(uazapiInstanceToken);
   const [toleranceInput, setToleranceInput] = useState(String(reservationToleranceHours));
 
   // Estados de E-mail / SMTP
@@ -103,8 +97,28 @@ export default function SubscriberSettingsPage() {
   const [emailTestStatus, setEmailTestStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   const [savedSuccess, setSavedSuccess] = useState(false);
-  const [testingConnection, setTestingConnection] = useState(false);
-  const [connectionResult, setConnectionResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Horário de virada de diária — persistido no Tenant (usado pelo worker de virada automática)
+  const [dailyRolloverTimeInput, setDailyRolloverTimeInput] = useState("14:30");
+  const [rolloverSaveError, setRolloverSaveError] = useState<string | null>(null);
+
+  // Aceitar estoque negativo — permite baixar o estoque do PDV no lançamento de consumo mesmo
+  // quando o saldo disponível é insuficiente, em vez de bloquear o lançamento.
+  const [allowNegativeStockInput, setAllowNegativeStockInput] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/tenant/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.settings?.dailyRolloverTime) {
+          setDailyRolloverTimeInput(data.settings.dailyRolloverTime);
+        }
+        if (data.success && typeof data.settings?.allowNegativeStock === "boolean") {
+          setAllowNegativeStockInput(data.settings.allowNegativeStock);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Calcula o exemplo de expiração com base na tolerância atual
   const exampleCheckInDate = "2026-08-12";
@@ -118,13 +132,26 @@ export default function SubscriberSettingsPage() {
   });
   const expirationExampleFormatted = formatExpirationLimit(expirationExample);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    setRolloverSaveError(null);
+    try {
+      const res = await fetch("/api/tenant/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyRolloverTime: dailyRolloverTimeInput, allowNegativeStock: allowNegativeStockInput }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setRolloverSaveError(data.error || "Erro ao salvar configurações do assinante.");
+      }
+    } catch (err: any) {
+      setRolloverSaveError(err.message || "Erro de rede ao salvar horário de virada de diária.");
+    }
+
     setHotelName(inputName);
     setHotelLogo(logoInput.trim() ? logoInput.trim() : null);
     setDefaultCheckInTime(checkInTimeInput);
     setDefaultCheckOutTime(checkOutTimeInput);
-    setUazapiServerUrl(uazapiServerInput.trim());
-    setUazapiInstanceToken(uazapiTokenInput.trim());
     const parsedHours = Math.max(1, Number(toleranceInput) || 24);
     setReservationToleranceHours(parsedHours);
 
@@ -532,118 +559,80 @@ export default function SubscriberSettingsPage() {
         </div>
       </div>
 
-      {/* SECTION 4: WhatsApp Integration - Uazapi API */}
+      {/* SECTION 3.5: Horário de Virada de Diária (Cobrança Automática) */}
       <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
         <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-500">
-            <MessageSquare className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-xl bg-[#0284C7]/15 border border-[#0284C7]/30 flex items-center justify-center text-[#0284C7]">
+            <CalendarClock className="w-5 h-5" />
           </div>
-          <div className="flex-1 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-lg font-bold flex items-center gap-2">
-                4. Configuração de Envio de WhatsApp (API Uazapi)
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  Assinante Conectado
-                </span>
-              </h2>
-              <p className={`text-xs ${theme.textMuted}`}>
-                Cada assinante possui seu próprio servidor e token Uazapi. Insira as credenciais da sua instância para envio automático de PDF de extratos e comunicados aos hóspedes.
-              </p>
-            </div>
+          <div>
+            <h2 className="text-lg font-bold">Horário de Virada de Diária</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Todos os dias, nesse horário, o sistema soma +1 diária em cada apartamento ainda ocupado.
+              O dia do check-in nunca gera virada (a 1ª diária já é lançada no ato do check-in), e no
+              momento do check-out só entram as diárias cuja virada já rodou até aquele instante.
+            </p>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold block flex items-center gap-1.5">
-              <Globe className="w-3.5 h-3.5 text-sky-400" />
-              URL do Servidor Uazapi (Server URL)
+            <label className="text-xs font-semibold block">
+              Horário de Virada de Diária
             </label>
             <input
-              type="text"
-              value={uazapiServerInput}
-              onChange={(e) => setUazapiServerInput(e.target.value)}
-              placeholder="https://netservice.uazapi.com"
-              className={`w-full border rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-emerald-500 ${
+              type="time"
+              value={dailyRolloverTimeInput}
+              onChange={(e) => setDailyRolloverTimeInput(e.target.value)}
+              className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
                 theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
               }`}
             />
-            <p className={`text-[11px] ${theme.textMuted}`}>
-              URL base do servidor Uazapi do assinante (ex: https://netservice.uazapi.com).
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold block flex items-center gap-1.5">
-              <Key className="w-3.5 h-3.5 text-amber-400" />
-              Token da Instância / Chave da API (Instance Token)
-            </label>
-            <input
-              type="password"
-              value={uazapiTokenInput}
-              onChange={(e) => setUazapiTokenInput(e.target.value)}
-              placeholder="fbe5bfbb-226a-47a2-9d1d-6b657933318c"
-              className={`w-full border rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-emerald-500 ${
-                theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
-              }`}
-            />
-            <p className={`text-[11px] ${theme.textMuted}`}>
-              Token de autenticação da instância conectada (ex: fbe5bfbb-226a-47a2-9d1d-6b657933318c).
-            </p>
-          </div>
-        </div>
-
-        {/* Status preview & Test Action */}
-        <div className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3 ${
-          theme.isDark ? "bg-slate-950 border-slate-800" : "bg-slate-50 border-slate-200"
-        }`}>
-          <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse shadow-md shadow-emerald-500/50" />
-            <div>
-              <span className="text-xs font-bold block">Status da Instância Uazapi</span>
-              <span className={`text-[11px] font-mono ${theme.textMuted}`}>
-                Servidor: {uazapiServerInput || "Não configurado"} | Token: {uazapiTokenInput ? "••••••••" + uazapiTokenInput.slice(-4) : "Vazio"}
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              setTestingConnection(true);
-              setConnectionResult(null);
-              setTimeout(() => {
-                setTestingConnection(false);
-                setConnectionResult({
-                  success: true,
-                  message: "Conexão Uazapi estabelecida com sucesso! Instância online e pronta para envio de PDFs."
-                });
-              }, 1200);
-            }}
-            disabled={testingConnection}
-            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-2 border border-slate-700 transition-colors"
-          >
-            {testingConnection ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" /> Testando Conexão...
-              </>
-            ) : (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-400" /> Testar Conexão Uazapi
-              </>
+            {rolloverSaveError && (
+              <p className="text-[11px] text-red-400">{rolloverSaveError}</p>
             )}
-          </button>
+          </div>
+
+          <div className={`p-4 rounded-xl border text-xs font-mono space-y-1 ${
+            theme.isDark ? "bg-slate-950 border-slate-800 text-slate-300" : "bg-slate-50 border-slate-200 text-slate-700"
+          }`}>
+            <p className="text-[11px] font-semibold text-[#0284C7] uppercase tracking-wider">Exemplo</p>
+            <p>Check-in 10/08 14:00, saída 11/08 {dailyRolloverTimeInput} ou depois → 2 diárias.</p>
+            <p>Check-in 10/08 14:00, saída 11/08 antes de {dailyRolloverTimeInput} → 1 diária.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 3.6: Controle de Estoque (PDV) */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-500">
+            <PackageX className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">Controle de Estoque (PDV)</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Define o comportamento do sistema ao baixar o estoque de um produto no Lançamento de Consumo do Quarto quando o PDV não tem saldo suficiente.
+            </p>
+          </div>
         </div>
 
-        {connectionResult && (
-          <div className={`p-3 rounded-xl border text-xs flex items-center gap-2 font-mono ${
-            connectionResult.success
-              ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-              : "bg-red-950/40 border-red-500/40 text-red-300"
-          }`}>
-            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-            {connectionResult.message}
+        <label className="flex items-start gap-3 cursor-pointer p-3 rounded-xl border border-slate-800 hover:bg-slate-800/40 transition-colors">
+          <input
+            type="checkbox"
+            checked={allowNegativeStockInput}
+            onChange={(e) => setAllowNegativeStockInput(e.target.checked)}
+            className="w-4 h-4 mt-0.5 rounded text-rose-600 focus:ring-rose-500"
+          />
+          <div>
+            <span className="text-sm font-bold block">Aceita estoque negativo</span>
+            <span className={`text-xs ${theme.textMuted}`}>
+              {allowNegativeStockInput
+                ? "Ativado: o sistema permite baixar o estoque do PDV mesmo sem saldo suficiente (o estoque fica negativo)."
+                : "Desativado: o sistema bloqueia o lançamento de consumo quando o PDV não tem estoque suficiente do produto."}
+            </span>
           </div>
-        )}
+        </label>
       </div>
 
       {/* SECTION 4: Configuração de Envio de E-mail (SMTP & Comprovantes por E-mail) */}
@@ -991,8 +980,8 @@ export default function SubscriberSettingsPage() {
         </div>
       </div>
 
-      {/* Save Action Footer */}
-      <div className={`flex items-center justify-between p-4 rounded-xl border ${theme.bgCard}`}>
+      {/* Save Action Footer - sempre visível, fixo na última linha da área de conteúdo */}
+      <div className={`sticky bottom-0 z-20 flex items-center justify-between p-4 rounded-xl border shadow-[0_-4px_16px_rgba(0,0,0,0.2)] ${theme.bgCard}`}>
         <div className={`flex items-center gap-2 text-xs ${theme.textMuted}`}>
           <ShieldCheck className="w-4 h-4 text-[#10B981]" />
           As configurações são salvas instantaneamente e aplicadas em todo o site.

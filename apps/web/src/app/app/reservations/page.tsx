@@ -32,9 +32,16 @@ export default function TenantReservationsPage() {
     }
   }, []);
 
+  // Polling em segundo plano a cada 3 segundos, igual ao Mapa de Quartos — pausado enquanto o
+  // modal "Lançar Nova Reserva" estiver aberto, para não sobrescrever dados que o operador esteja
+  // digitando (padrão herdado do projeto original em WinDev: telas de mapa atualizam sozinhas,
+  // janelas abertas por cima pausam a atualização).
   useEffect(() => {
+    if (showLancarModal) return;
     fetchReservations();
-  }, [fetchReservations]);
+    const interval = setInterval(fetchReservations, 3000);
+    return () => clearInterval(interval);
+  }, [fetchReservations, showLancarModal]);
 
   const handleSendUazapiLink = (resId: string) => {
     setUazapiSentSuccess(`Link de Pré-Checkin FNRH enviado com sucesso via WhatsApp Uazapi para a Reserva ${resId}!`);

@@ -17,14 +17,16 @@ import {
   Store, 
   Tags, 
   Receipt, 
-  Landmark, 
-  CreditCard, 
-  BookOpen, 
-  FileText, 
-  Globe, 
-  Search, 
+  Landmark,
+  CreditCard,
+  BookOpen,
+  FileText,
+  Globe,
+  Search,
   ChevronRight,
-  ArrowRight
+  ArrowRight,
+  Layers,
+  Tags as TagsIcon
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
@@ -124,6 +126,26 @@ export default function CadastrosHubPage() {
           count: "Mapa de UHs",
           badge: "WinDev Win_Apartamentos",
           color: isDark ? "bg-teal-500/10 text-teal-400 border-teal-500/20" : "bg-teal-50 text-teal-600 border-teal-200",
+        },
+        {
+          id: "andares",
+          title: "Andares do Hotel",
+          description: "Pré-cadastro dos andares existentes, usado no cadastro de Apartamentos",
+          icon: Layers,
+          href: "/app/cadastros/andares",
+          count: "Pré-cadastro",
+          badge: "Por Assinante",
+          color: isDark ? "bg-lime-500/10 text-lime-400 border-lime-500/20" : "bg-lime-50 text-lime-600 border-lime-200",
+        },
+        {
+          id: "categorias-apartamento",
+          title: "Categorias de Apartamento",
+          description: "Pré-cadastro dos tipos de UH (Standard, Luxo, Suíte...) do hotel",
+          icon: TagsIcon,
+          href: "/app/cadastros/categorias-apartamento",
+          count: "Pré-cadastro",
+          badge: "Por Assinante",
+          color: isDark ? "bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20" : "bg-fuchsia-50 text-fuchsia-600 border-fuchsia-200",
         },
         {
           id: "tarifas",

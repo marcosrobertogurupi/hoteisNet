@@ -13,11 +13,13 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { useConfirm } from "@/context/ConfirmContext";
 import CadastroFornecedorModal, { FornecedorFormData } from "@/components/CadastroFornecedorModal";
 
 export default function FornecedoresPage() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
+  const confirmDialog = useConfirm();
 
   const [fornecedores, setFornecedores] = useState<FornecedorFormData[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -97,9 +99,15 @@ export default function FornecedoresPage() {
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id?: string) => {
+  const handleDelete = async (id?: string) => {
     if (!id) return;
-    if (confirm("Tem certeza que deseja excluir este fornecedor?")) {
+    const ok = await confirmDialog({
+      title: "Excluir Fornecedor",
+      message: "Tem certeza que deseja excluir este fornecedor?",
+      confirmLabel: "Excluir",
+      variant: "danger",
+    });
+    if (ok) {
       setFornecedores((prev) => prev.filter((item) => item.id !== id));
     }
   };

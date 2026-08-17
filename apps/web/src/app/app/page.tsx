@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { 
   BedDouble, 
   UserCheck, 
@@ -32,7 +32,8 @@ import {
   CalendarCheck,
   Eye,
   EyeOff,
-  X
+  X,
+  Percent
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
@@ -41,19 +42,40 @@ import AlterarPeriodoModal from "@/components/AlterarPeriodoModal";
 import AlterarTarifaHospedagemModal from "@/components/AlterarTarifaHospedagemModal";
 import CadastroTarifasModal, { INITIAL_TARIFFS, TariffItem } from "@/components/CadastroTarifasModal";
 import CheckinHospedagemModal from "@/components/CheckinHospedagemModal";
-import { ImprimirExtratoHospedagemModal } from "@/components/ImprimirExtratoHospedagemModal";
+import { ImprimirExtratoHospedagemModal, TariffPeriodItem } from "@/components/ImprimirExtratoHospedagemModal";
 import { ImprimirResumoHospedagemModal } from "@/components/ImprimirResumoHospedagemModal";
+import LancarConsumoQuartoModal from "@/components/LancarConsumoQuartoModal";
 import LancarPagamentoHospedagemModal from "@/components/LancarPagamentoHospedagemModal";
 import LancarReservaModal from "@/components/LancarReservaModal";
 import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/SelecaoReservaQuartoModal";
+
+// Converte "DD/MM/YYYY HH:MM:SS" (formato usado pelo modal de check-in) para ISO "YYYY-MM-DDTHH:MM:SS",
+// formato exigido pela coluna timestamp do Postgres na API /api/reservations.
+function brDateTimeToIso(brStr: string): string {
+  if (!brStr) return brStr;
+  const [datePart, timePart] = brStr.split(" ");
+  if (!datePart || !datePart.includes("/")) return brStr;
+  const [dd, mm, yyyy] = datePart.split("/");
+  return `${yyyy}-${mm}-${dd}T${timePart || "00:00:00"}`;
+}
+
+// Converte um ISO/timestamp do banco para "DD/MM/YYYY HH:MM:SS", formato usado nos modais de Extrato/Resumo.
+function formatBrDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
 interface RoomItem {
   id: string;
   number: string;
   category: string;
+  floor: string;
   status: "VACANT_CLEAN" | "OCCUPIED" | "OCCUPIED_CLEANING" | "VACANT_DIRTY" | "MAINTENANCE";
   guest: string | null;
   dates: string;
+  expectedCheckOutDate?: string | null;
   notes?: string;
   maintenanceUntil?: string;
   fnrh?: boolean;
@@ -65,7 +87,7 @@ interface RoomItem {
   totalConsumption?: number;
 }
 
-type FilterType = "ALL" | "VACANT_CLEAN" | "OCCUPIED" | "CLEANING" | "MAINTENANCE";
+type FilterType = "ALL" | "VACANT_CLEAN" | "OCCUPIED" | "CLEANING" | "MAINTENANCE" | "CHECKOUT_TODAY";
 
 export default function TenantDashboardPage() {
   const { theme, hotelLogo, hotelName, showLogoInPrint } = useTheme();
@@ -79,6 +101,32 @@ export default function TenantDashboardPage() {
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showExtratoModal, setShowExtratoModal] = useState(false);
   const [showResumoModal, setShowResumoModal] = useState(false);
+  const [activeStayDetail, setActiveStayDetail] = useState<{
+    id: string;
+    checkInDate: string;
+    expectedCheckOut: string;
+    actualCheckOut: string | null;
+    totalDaily: number;
+    totalConsumption: number;
+    discount: number;
+    dailiesCount: number;
+    dailyCharges: { referenceDate: string; amount: number; description: string }[];
+    guest: { id: string; fullName: string; cpf: string | null; phone: string | null; city: string | null; state: string | null; street: string | null; neighborhood: string | null; zipCode: string | null };
+    secondaryGuests: { id: string; name: string; document: string | null }[];
+    consumptions: {
+      id: string;
+      productId: string | null;
+      productName: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+      posLocationId: string | null;
+      posLocationName: string | null;
+      operatorName: string | null;
+      createdAt: string;
+    }[];
+  } | null>(null);
+  const [activeStayPayments, setActiveStayPayments] = useState<{ id: string; date: string; amount: number; methodDescription: string; operatorName?: string; caixaMovimentoId: string }[]>([]);
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const [showWppModal, setShowWppModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -100,6 +148,7 @@ export default function TenantDashboardPage() {
 
 
   const [activeRoom, setActiveRoom] = useState<RoomItem | null>(null);
+  const lastFetchedRoomNumberRef = useRef<string | null>(null);
   const [targetRoomNumber, setTargetRoomNumber] = useState<string>("101");
   const [showInactive, setShowInactive] = useState(false);
 
@@ -118,6 +167,8 @@ export default function TenantDashboardPage() {
   // Filter and Search States
   const [statusFilter, setStatusFilter] = useState<FilterType>("ALL");
   const [searchTerm, setSearchTerm] = useState("");
+  const [floorFilter, setFloorFilter] = useState<string>("ALL");
+  const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
 
   // ─── Reservas do Dia (para sinais visuais de overbooking) ───────────────────
   // Chave: número do quarto (string), Valor: lista de reservas ativas para hoje
@@ -138,20 +189,34 @@ export default function TenantDashboardPage() {
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.rooms)) return;
 
-      const savedDisabledStr = typeof window !== "undefined" ? localStorage.getItem("hoteisnet_disabled_rooms") : null;
-      const disabledIds: string[] = savedDisabledStr ? JSON.parse(savedDisabledStr) : [];
-
       setRooms((prevRooms) => {
         const prevMap = new Map(prevRooms.map((r) => [r.number, r]));
 
         const updatedList: RoomItem[] = data.rooms.map((r: any) => {
           const roomNum = String(r.number);
           const existing = prevMap.get(roomNum);
-          const isActive = !disabledIds.includes(r.id);
+          const isActive = r.active !== false;
 
           const dbStatus = r.status || "VACANT_CLEAN";
           const dbNotes = r.notes || "Quarto Higienizado & Vistoriado";
           const dbCategory = r.category || r.room_categories?.name || "Standard";
+          const dbFloor = r.floor || "Térreo";
+
+          // Hospedagem ativa vem do banco (tabela stay_checkins) — é a fonte da verdade,
+          // não o estado local do navegador, que se perde ao recarregar a página.
+          const activeStay = r.activeStay;
+          const dbGuest = dbStatus === "VACANT_CLEAN" ? null : activeStay?.guestName ?? null;
+          const dbConsumption = activeStay ? activeStay.totalConsumption : 0;
+          const dbDates =
+            dbStatus === "VACANT_CLEAN"
+              ? "Disponível para Check-in"
+              : activeStay?.expectedCheckOut
+              ? `Check-out: ${new Date(activeStay.expectedCheckOut).toLocaleDateString("pt-BR")}`
+              : existing?.dates || "Disponível";
+          const dbExpectedCheckOutDate =
+            dbStatus === "VACANT_CLEAN" || !activeStay?.expectedCheckOut
+              ? null
+              : String(activeStay.expectedCheckOut).split("T")[0];
 
           if (existing) {
             // Manter a mesma referência de objeto se nada mudou para garantir ZERO piscamento na UI
@@ -159,7 +224,12 @@ export default function TenantDashboardPage() {
               existing.status === dbStatus &&
               existing.active === isActive &&
               existing.category === dbCategory &&
-              existing.notes === dbNotes
+              existing.floor === dbFloor &&
+              existing.notes === dbNotes &&
+              existing.guest === dbGuest &&
+              existing.totalConsumption === dbConsumption &&
+              existing.dates === dbDates &&
+              existing.expectedCheckOutDate === dbExpectedCheckOutDate
             ) {
               return existing;
             }
@@ -168,10 +238,13 @@ export default function TenantDashboardPage() {
               ...existing,
               status: dbStatus,
               category: dbCategory,
+              floor: dbFloor,
               notes: dbNotes,
               active: isActive,
-              dates: dbStatus === "VACANT_CLEAN" ? "Disponível para Check-in" : existing.dates,
-              guest: dbStatus === "VACANT_CLEAN" ? null : existing.guest,
+              dates: dbDates,
+              expectedCheckOutDate: dbExpectedCheckOutDate,
+              guest: dbGuest,
+              totalConsumption: dbConsumption,
             };
           }
 
@@ -179,13 +252,15 @@ export default function TenantDashboardPage() {
             id: r.id,
             number: roomNum,
             category: dbCategory,
+            floor: dbFloor,
             status: dbStatus,
-            guest: null,
-            dates: dbStatus === "VACANT_CLEAN" ? "Disponível para Check-in" : "Disponível",
+            guest: dbGuest,
+            dates: dbDates,
+            expectedCheckOutDate: dbExpectedCheckOutDate,
             notes: dbNotes,
             active: isActive,
             ratePerNight: r.ratePerNight || 180,
-            totalConsumption: 0,
+            totalConsumption: dbConsumption,
           };
         });
 
@@ -196,23 +271,80 @@ export default function TenantDashboardPage() {
     }
   }, []);
 
-  // Polling em segundo plano a cada 3 segundos
+  // A atualização automática (polling) é exclusiva das telas de Mapa de Quartos e Mapa de
+  // Reservas. Assim como no projeto original em WinDev, ao abrir qualquer janela/modal por cima
+  // (extrato, resumo, consumo, check-in, transferência, etc.) a atualização automática deve
+  // pausar, para não sobrescrever dados que o operador esteja vendo ou digitando naquela tela.
+  const anyModalOpen =
+    showCheckinModal ||
+    showConsumptionModal ||
+    showStatusModal ||
+    showPrintModal ||
+    showExtratoModal ||
+    showResumoModal ||
+    showAutomationModal ||
+    showWppModal ||
+    showTransferModal ||
+    showNotesModal ||
+    showAlterarPeriodoModal ||
+    showAlterarTarifaModal ||
+    showCadastroTarifasModal ||
+    showLancarPagamentoModal ||
+    showLancarReservaModal ||
+    showSelecaoReservaModal;
+
+  // Polling em segundo plano a cada 3 segundos — pausado enquanto qualquer modal estiver aberto
   useEffect(() => {
+    if (anyModalOpen) return;
     syncRoomsFromDatabase();
     const interval = setInterval(syncRoomsFromDatabase, 3000);
     return () => clearInterval(interval);
+  }, [syncRoomsFromDatabase, anyModalOpen]);
+
+  // Verificação automática de diária extra por checkout atrasado: a cada 1 minuto, checa todos os
+  // quartos ocupados e, se a data/hora atual já ultrapassou o horário de virada de diária configurado
+  // em Configurações (Tenant.dailyRolloverTime), lança +1 diária extra no débito da hospedagem
+  // (idempotente por dia). O horário limite é sempre decidido pelo servidor a partir do Tenant —
+  // nunca a partir de um valor local do navegador, para não ficar dessincronizado de Configurações.
+  useEffect(() => {
+    const checkLateCheckoutRollover = async () => {
+      try {
+        const res = await fetch("/api/stay/rollover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tenantId: "tenant-hoteisnet-demo" }),
+        });
+        const data = await res.json();
+        if (data.success && Array.isArray(data.rolledOver) && data.rolledOver.length > 0) {
+          for (const item of data.rolledOver) {
+            toast.info(
+              `Quarto ${item.roomNumber}: horário de virada de diária atingido. ${item.daysAdded} diária(s) extra lançada(s) (R$ ${item.amountAdded.toFixed(2)}).`,
+              "Diária Extra Lançada"
+            );
+          }
+          syncRoomsFromDatabase();
+        }
+      } catch (err) {
+        console.warn("[MapaQuartos] Erro na verificação de diária extra por checkout atrasado:", err);
+      }
+    };
+
+    checkLateCheckoutRollover();
+    const rolloverInterval = setInterval(checkLateCheckoutRollover, 60000);
+    return () => clearInterval(rolloverInterval);
   }, [syncRoomsFromDatabase]);
 
   // ─── Reservas do Dia (Apenas para sinais visuais de overbooking / próximos check-ins) ─
   useEffect(() => {
     const todayStr = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-    fetch(`/api/reservations?tenantId=tenant-hoteisnet-demo`)
+    fetch(`/api/reservations?tenantId=TNT-01`)
       .then(r => r.json())
       .then(data => {
         if (!data.success || !Array.isArray(data.reservations)) return;
         const byRoom: Record<string, { id?: string; guestName: string; checkInTime: string; reservationNumber?: string; }[]> = {};
         for (const res of data.reservations) {
-          if (res.status === "CANCELLED") continue;
+          // Reservas canceladas, já com hóspede em casa (CHECKED_IN) ou já finalizadas (CHECKED_OUT) não são "check-ins pendentes hoje"
+          if (res.status === "CANCELLED" || res.status === "CHECKED_IN" || res.status === "CHECKED_OUT") continue;
           const checkInDate = (res.checkInDate || "").split("T")[0];
           if (checkInDate !== todayStr) continue;
           const roomNum = res.rooms?.number ? String(res.rooms.number) : (res.roomDescription?.match(/\d+/)?.[0] || "");
@@ -238,6 +370,62 @@ export default function TenantDashboardPage() {
     window.addEventListener("click", handleClickOutside);
     return () => window.removeEventListener("click", handleClickOutside);
   }, [contextMenu.visible]);
+
+  // Busca a hospedagem ativa real do quarto ao abrir Extrato/Resumo/Pagamento/Alterar Tarifa/Consumo — evita usar dados de amostra
+  useEffect(() => {
+    if ((showExtratoModal || showResumoModal || showLancarPagamentoModal || showAlterarTarifaModal || showConsumptionModal) && activeRoom) {
+      // Não zera activeStayDetail/activeStayPayments quando é o MESMO quarto já carregado (ex.: Consumo
+      // aberto por cima do modal de Pagamento) — zerar desmontaria o modal em edição. Mas ao TROCAR de
+      // quarto (ex.: fechar Extrato do 217 e abrir do 220) é preciso zerar antes de buscar: senão o
+      // modal (que tira um snapshot único dos dados na abertura) renderiza de imediato com os dados
+      // antigos do quarto anterior, que nunca são substituídos pelos do quarto novo quando a busca termina.
+      if (activeStayDetail && lastFetchedRoomNumberRef.current !== activeRoom.number) {
+        setActiveStayDetail(null);
+        setActiveStayPayments([]);
+      }
+      lastFetchedRoomNumberRef.current = activeRoom.number;
+      (async () => {
+        try {
+          const res = await fetch(`/api/stay/checkin?roomNumber=${activeRoom.number}&tenantId=tenant-hoteisnet-demo`);
+          const data = await res.json();
+
+          if (!data.success) {
+            toast.error(data.error || "Hospedagem ativa não encontrada para este quarto.", "Erro ao Carregar Hospedagem");
+            setShowExtratoModal(false);
+            setShowResumoModal(false);
+            setShowLancarPagamentoModal(false);
+            setShowAlterarTarifaModal(false);
+            setShowConsumptionModal(false);
+            return;
+          }
+
+          // Busca os pagamentos já lançados ANTES de liberar o modal — evita que ele monte
+          // com a lista de pagamentos ainda vazia (o estado interno do modal só lê o valor inicial uma vez).
+          let payments: typeof activeStayPayments = [];
+          if (showLancarPagamentoModal || showAlterarTarifaModal || showConsumptionModal || showExtratoModal || showResumoModal) {
+            try {
+              const contaRes = await fetch(`/api/caixa/conta-quarto?stayCheckinId=${data.stay.id}`);
+              const contaData = await contaRes.json();
+              if (contaData.success) payments = contaData.payments || [];
+            } catch {
+              // segue sem histórico de pagamentos se o caixa não responder
+            }
+          }
+
+          setActiveStayPayments(payments);
+          setActiveStayDetail(data.stay);
+        } catch (err) {
+          console.warn("[Extrato/Resumo/Pagamento/Tarifa/Consumo] Erro ao buscar hospedagem ativa:", err);
+          toast.error("Não foi possível carregar os dados da hospedagem.", "Erro ao Carregar Hospedagem");
+          setShowExtratoModal(false);
+          setShowResumoModal(false);
+          setShowLancarPagamentoModal(false);
+          setShowAlterarTarifaModal(false);
+          setShowConsumptionModal(false);
+        }
+      })();
+    }
+  }, [showExtratoModal, showResumoModal, showLancarPagamentoModal, showAlterarTarifaModal, showConsumptionModal, activeRoom]);
 
   const handleOpenContextMenu = (e: React.MouseEvent, room: RoomItem) => {
     e.preventDefault();
@@ -298,6 +486,9 @@ export default function TenantDashboardPage() {
     }
   };
 
+  // Data de hoje (YYYY-MM-DD) para o filtro "Check-out Hoje"
+  const todayDateStr = new Date().toISOString().split("T")[0];
+
   // Status Counters
   const counts = {
     ALL: rooms.filter(r => showInactive || r.active !== false).length,
@@ -305,8 +496,26 @@ export default function TenantDashboardPage() {
     OCCUPIED: rooms.filter(r => (showInactive || r.active !== false) && (r.status === "OCCUPIED" || r.status === "OCCUPIED_CLEANING")).length,
     CLEANING: rooms.filter(r => (showInactive || r.active !== false) && (r.status === "VACANT_DIRTY" || r.status === "OCCUPIED_CLEANING")).length,
     MAINTENANCE: rooms.filter(r => (showInactive || r.active !== false) && r.status === "MAINTENANCE").length,
+    CHECKOUT_TODAY: rooms.filter(r => (showInactive || r.active !== false) && r.expectedCheckOutDate === todayDateStr).length,
     INACTIVE: rooms.filter(r => r.active === false).length,
   };
+
+  // Taxa de ocupação atual do hotel: ocupados / total de quartos ativos (independe do
+  // filtro "Inativos" da UI). Mesma definição usada no snapshot horário salvo pelo worker
+  // (ver apps/worker/src/occupancySnapshot.ts) para o histórico de vacância.
+  const activeRoomsCount = rooms.filter(r => r.active !== false).length;
+  const occupiedActiveRoomsCount = rooms.filter(r => r.active !== false && (r.status === "OCCUPIED" || r.status === "OCCUPIED_CLEANING")).length;
+  const occupancyRate = activeRoomsCount > 0 ? (occupiedActiveRoomsCount / activeRoomsCount) * 100 : 0;
+
+  // Listas de andares e categorias presentes nos quartos cadastrados, para o sub-filtro
+  const availableFloors = useMemo(
+    () => Array.from(new Set(rooms.map(r => r.floor).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    [rooms]
+  );
+  const availableCategories = useMemo(
+    () => Array.from(new Set(rooms.map(r => r.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    [rooms]
+  );
 
   // Filtered rooms logic
   const filteredRooms = rooms.filter(room => {
@@ -317,15 +526,102 @@ export default function TenantDashboardPage() {
     else if (statusFilter === "OCCUPIED") matchesStatus = room.status === "OCCUPIED" || room.status === "OCCUPIED_CLEANING";
     else if (statusFilter === "CLEANING") matchesStatus = room.status === "VACANT_DIRTY" || room.status === "OCCUPIED_CLEANING";
     else if (statusFilter === "MAINTENANCE") matchesStatus = room.status === "MAINTENANCE";
+    else if (statusFilter === "CHECKOUT_TODAY") matchesStatus = room.expectedCheckOutDate === todayDateStr;
+
+    const matchesFloor = floorFilter === "ALL" || room.floor === floorFilter;
+    const matchesCategory = categoryFilter === "ALL" || room.category === categoryFilter;
 
     const query = searchTerm.toLowerCase().trim();
-    const matchesSearch = !query || 
+    const matchesSearch = !query ||
       room.number.toLowerCase().includes(query) ||
       room.category.toLowerCase().includes(query) ||
       (room.guest && room.guest.toLowerCase().includes(query));
 
-    return matchesStatus && matchesSearch;
+    return matchesStatus && matchesFloor && matchesCategory && matchesSearch;
   });
+
+  // Monta os dados reais de Extrato/Resumo a partir da hospedagem ativa buscada no banco.
+  // Observação: a quebra de diárias abaixo é 1 linha por pernoite à tarifa contratada — não reproduz
+  // eventuais regras de tolerância/proporcionalidade de checkout tardio definidas no sistema WinDev original.
+  const realStayBilling = useMemo(() => {
+    if (!activeStayDetail) return null;
+
+    const checkIn = new Date(activeStayDetail.checkInDate);
+    const expectedCheckOut = new Date(activeStayDetail.expectedCheckOut);
+    const msPerNight = 24 * 60 * 60 * 1000;
+
+    // A grade de diárias deve refletir exatamente o que foi lançado na conta (StayCharge "Diária",
+    // criada no check-in e a cada virada de diária/rollover) — não uma contagem recalculada por
+    // diferença de datas, que pode ficar dessincronizada do que já foi cobrado de fato.
+    const tariffList: TariffPeriodItem[] = activeStayDetail.dailyCharges.length > 0
+      ? activeStayDetail.dailyCharges.map((charge) => {
+          const start = new Date(charge.referenceDate);
+          const end = new Date(start.getTime() + msPerNight);
+          return {
+            description: charge.description || "Diária",
+            startDate: formatBrDateTime(start.toISOString()).split(" ")[0],
+            endDate: formatBrDateTime(end.toISOString()).split(" ")[0],
+            dailyRate: charge.amount,
+          };
+        })
+      : [{
+          description: "DIÁRIA",
+          startDate: formatBrDateTime(checkIn.toISOString()).split(" ")[0],
+          endDate: formatBrDateTime(new Date(checkIn.getTime() + msPerNight).toISOString()).split(" ")[0],
+          dailyRate: activeStayDetail.totalDaily,
+        }];
+
+    const nights = Math.max(1, tariffList.length);
+
+    // Diárias extras = diárias realmente lançadas (nights, já respeitando o horário de virada
+    // configurado em Tenant.dailyRolloverTime — ver /api/stay/rollover) além das diárias originalmente
+    // reservadas (diferença entre check-in e a saída prevista). Nunca recalculado por diferença de
+    // datas/horas no front, que ignorava o horário de virada e gerava diárias extras precoces.
+    const reservedNights = Math.max(1, Math.round((expectedCheckOut.getTime() - checkIn.getTime()) / msPerNight));
+    const extraDays = Math.max(0, nights - reservedNights);
+
+    const totalDiarias = activeStayDetail.totalDaily;
+    const totalConsumo = activeStayDetail.totalConsumption;
+    const discount = activeStayDetail.discount ?? 0;
+    const totalAdiantamento = activeStayPayments.reduce((acc, p) => acc + p.amount, 0);
+    const totalDespesas = totalDiarias + totalConsumo;
+
+    return {
+      guestName: activeStayDetail.guest.fullName,
+      cpf: activeStayDetail.guest.cpf || "",
+      phone: activeStayDetail.guest.phone || "",
+      cep: activeStayDetail.guest.zipCode || "",
+      neighborhood: activeStayDetail.guest.neighborhood || "",
+      address: [activeStayDetail.guest.street, activeStayDetail.guest.city, activeStayDetail.guest.state].filter(Boolean).join(", "),
+      city: activeStayDetail.guest.city || "",
+      uf: activeStayDetail.guest.state || "",
+      checkInDate: formatBrDateTime(activeStayDetail.checkInDate),
+      prevCheckOutDate: formatBrDateTime(activeStayDetail.expectedCheckOut),
+      actualCheckOutDate: activeStayDetail.actualCheckOut ? formatBrDateTime(activeStayDetail.actualCheckOut) : formatBrDateTime(new Date().toISOString()),
+      nights,
+      extraDays,
+      tariffList,
+      allGuests: [
+        { id: "primary", name: activeStayDetail.guest.fullName, isPrimary: true },
+        ...activeStayDetail.secondaryGuests.map((g) => ({ id: g.id, name: g.name })),
+      ],
+      consumptionList: activeStayDetail.consumptions.map((c, idx) => ({
+        itemNumber: idx + 1,
+        description: c.productName,
+        date: formatBrDateTime(c.createdAt),
+        quantity: c.quantity,
+        unitPrice: c.unitPrice,
+        totalPrice: c.totalPrice,
+        operatorName: c.operatorName,
+        posLocationName: c.posLocationName,
+      })),
+      totalDiarias,
+      totalConsumo,
+      totalDespesas,
+      discount,
+      totalAdiantamento,
+    };
+  }, [activeStayDetail, activeStayPayments]);
 
   const filterTabs = [
     {
@@ -364,9 +660,17 @@ export default function TenantDashboardPage() {
       id: "MAINTENANCE" as FilterType,
       label: "Manutenção",
       count: counts.MAINTENANCE,
-      icon: <Wrench className="w-4 h-4 text-slate-400" />,
-      activeClass: "bg-slate-700 text-white border-slate-600",
-      badgeActiveClass: "bg-slate-900 text-slate-300"
+      icon: <Wrench className="w-4 h-4 text-rose-500" />,
+      activeClass: "bg-rose-700 text-white border-rose-600",
+      badgeActiveClass: "bg-rose-950/40 text-rose-200"
+    },
+    {
+      id: "CHECKOUT_TODAY" as FilterType,
+      label: "Check-out Hoje",
+      count: counts.CHECKOUT_TODAY,
+      icon: <CalendarCheck className="w-4 h-4 text-[#F97316]" />,
+      activeClass: "bg-[#F97316] text-white border-[#F97316]",
+      badgeActiveClass: "bg-white/20 text-white"
     },
   ];
 
@@ -394,6 +698,22 @@ export default function TenantDashboardPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Taxa de Ocupação Atual */}
+            <div
+              title="Ocupados / total de quartos ativos"
+              className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${
+                theme.isDark
+                  ? "bg-slate-900 border-slate-700 text-slate-200"
+                  : "bg-slate-100 border-slate-300 text-slate-700"
+              }`}
+            >
+              <Percent className="w-3.5 h-3.5" style={{ color: theme.primaryColor }} />
+              Taxa de Ocupação:{" "}
+              <span style={{ color: theme.primaryColor }} className="font-bold">
+                {occupancyRate.toFixed(1)}%
+              </span>
+            </div>
+
             {/* Search Box */}
             <div className="relative">
               <Search className={`w-4 h-4 absolute left-3 top-3 ${theme.textMuted}`} />
@@ -454,6 +774,60 @@ export default function TenantDashboardPage() {
           ))}
         </div>
 
+        {/* Sub-filtro por Andar e Categoria */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <label className={`text-[11px] font-semibold ${theme.textMuted}`}>Andar:</label>
+            <select
+              value={floorFilter}
+              onChange={(e) => setFloorFilter(e.target.value)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold focus:outline-none border ${
+                theme.isDark
+                  ? "bg-[#0F172A] border-slate-800 text-slate-200"
+                  : "bg-white border-slate-200 text-slate-700 shadow-sm"
+              }`}
+            >
+              <option value="ALL">Todos os Andares</option>
+              {availableFloors.map(f => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <label className={`text-[11px] font-semibold ${theme.textMuted}`}>Categoria:</label>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold focus:outline-none border ${
+                theme.isDark
+                  ? "bg-[#0F172A] border-slate-800 text-slate-200"
+                  : "bg-white border-slate-200 text-slate-700 shadow-sm"
+              }`}
+            >
+              <option value="ALL">Todas as Categorias</option>
+              {availableCategories.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          {(floorFilter !== "ALL" || categoryFilter !== "ALL") && (
+            <button
+              onClick={() => { setFloorFilter("ALL"); setCategoryFilter("ALL"); }}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-semibold border flex items-center gap-1 transition ${
+                theme.isDark ? "border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800" : "border-slate-300 text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              <X className="w-3 h-3" /> Limpar sub-filtro
+            </button>
+          )}
+
+          <span className={`text-[11px] font-mono ml-auto ${theme.textMuted}`}>
+            {filteredRooms.length} quarto(s) encontrado(s)
+          </span>
+        </div>
+
         {/* Room Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {filteredRooms.map(room => {
@@ -485,8 +859,8 @@ export default function TenantDashboardPage() {
               badgeBg = "bg-[#D97706] text-white border-[#D97706] font-bold";
               statusText = room.status === "OCCUPIED_CLEANING" ? "Limpeza c/ Hóspede" : "Checkout / Limpeza";
             } else if (isMaintenance) {
-              cardBg = theme.isDark ? "bg-slate-900 border-slate-700" : "bg-slate-100 border-slate-300 shadow-sm";
-              badgeBg = "bg-slate-600 text-white border-slate-600 font-bold";
+              cardBg = theme.isDark ? "bg-rose-950/20 border-rose-800/60" : "bg-rose-50 border-rose-300 shadow-sm";
+              badgeBg = "bg-rose-700 text-white border-rose-700 font-bold";
               statusText = "Manutenção";
             } else if (isVacantClean) {
               cardBg = theme.isDark ? "bg-[#10B981]/5 border-[#10B981]/40" : "bg-emerald-50/70 border-emerald-300 shadow-sm";
@@ -498,6 +872,23 @@ export default function TenantDashboardPage() {
               <div
                 key={room.id}
                 onContextMenu={(e) => handleOpenContextMenu(e, room)}
+                onDoubleClick={() => {
+                  if (isInactive || isMaintenance) return;
+                  if (isOccupied) {
+                    // Quarto ocupado: abre a tela de check-out (fechamento de conta) com os dados da hospedagem
+                    setActiveRoom(room);
+                    setShowLancarPagamentoModal(true);
+                  } else if (isVacantClean) {
+                    // Quarto livre: abre a tela de check-in com os dados do quarto
+                    if (hasTodayReservation) {
+                      openSelecaoReservaModal(room);
+                    } else {
+                      setActiveRoom(room);
+                      setTargetRoomNumber(room.number);
+                      setShowCheckinModal(true);
+                    }
+                  }
+                }}
                 className={`group relative p-5 rounded-2xl border ${
                   // Borda pulsante extra quando há reserva hoje + quarto ocupado ou em manutenção
                   hasTodayReservation && (isOccupied || isMaintenance)
@@ -533,7 +924,7 @@ export default function TenantDashboardPage() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3">
                     <div 
-                      style={{ backgroundColor: isVacantClean ? "#10B981" : isOccupied ? "#184176" : isCleaning ? "#D97706" : "#475569" }}
+                      style={{ backgroundColor: isVacantClean ? "#10B981" : isOccupied ? "#184176" : isCleaning ? "#D97706" : isMaintenance ? "#BE123C" : "#475569" }}
                       className="w-11 h-11 rounded-xl text-white font-mono font-bold flex items-center justify-center text-lg shadow-md shrink-0"
                     >
                       {room.number}
@@ -562,10 +953,10 @@ export default function TenantDashboardPage() {
                 {/* Guest & Stay Details */}
                 {isMaintenance ? (
                   <div className={`p-3 rounded-xl border space-y-2 text-xs ${
-                    theme.isDark ? "bg-slate-900/90 border-slate-800" : "bg-slate-100 border-slate-300"
+                    theme.isDark ? "bg-rose-950/40 border-rose-900/60" : "bg-rose-100 border-rose-300"
                   }`}>
                     <div className="flex items-center justify-between font-medium">
-                      <span className="flex items-center gap-1.5 text-[#D97706] font-semibold">
+                      <span className="flex items-center gap-1.5 text-rose-600 font-semibold">
                         <Wrench className="w-3.5 h-3.5" /> Quarto em Manutenção
                       </span>
                     </div>
@@ -664,7 +1055,7 @@ export default function TenantDashboardPage() {
                     <>
                       <button
                         onClick={() => { setActiveRoom(room); setShowConsumptionModal(true); }}
-                        className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 border shadow-sm ${
+                        className={`flex-1 py-2 px-1 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-0.5 border shadow-sm whitespace-nowrap ${
                           theme.isDark
                             ? "bg-[#0284C7]/20 hover:bg-[#0284C7]/30 text-[#38BDF8] border-[#0284C7]/40"
                             : "bg-sky-100 hover:bg-sky-200 text-sky-800 border-sky-300"
@@ -674,25 +1065,25 @@ export default function TenantDashboardPage() {
                       </button>
                       <button
                         onClick={() => { setActiveRoom(room); setShowExtratoModal(true); }}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 border shadow-sm ${
+                        className={`flex-1 py-2 px-1 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-0.5 border shadow-sm whitespace-nowrap ${
                           theme.isDark
                             ? "bg-cyan-950/60 hover:bg-cyan-900/60 text-cyan-400 border-cyan-800/60"
                             : "bg-cyan-100 hover:bg-cyan-200 text-cyan-800 border-cyan-300"
                         }`}
                         title="Imprimir Extrato de Hospedagem (Detalhamento & Whats)"
                       >
-                        <Printer className="w-3.5 h-3.5 text-[#00BCD4]" /> Extrato
+                        <Printer className="w-3 h-3 text-[#00BCD4] shrink-0" /> Extrato
                       </button>
                       <button
                         onClick={() => { setActiveRoom(room); setShowResumoModal(true); }}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 border shadow-sm ${
+                        className={`flex-1 py-2 px-1 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-0.5 border shadow-sm whitespace-nowrap ${
                           theme.isDark
                             ? "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
                             : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
                         }`}
                         title="Imprimir Resumo de Hospedagem"
                       >
-                        <FileText className="w-3.5 h-3.5 text-amber-500" /> Resumo
+                        <FileText className="w-3 h-3 text-amber-500 shrink-0" /> Resumo
                       </button>
                     </>
                   ) : isCleaning ? (
@@ -925,7 +1316,7 @@ export default function TenantDashboardPage() {
                 disabled={contextMenu.room.status !== "OCCUPIED" && contextMenu.room.status !== "OCCUPIED_CLEANING"}
                 onClick={() => {
                   setContextMenu(prev => ({ ...prev, visible: false }));
-                  alert(`Transferência de Débitos do Quarto ${contextMenu.room?.number}`);
+                  toast.info(`Transferência de Débitos do Quarto ${contextMenu.room?.number}`);
                 }}
                 className={`w-full px-3.5 py-2 text-left hover:bg-[#0284C7] hover:text-white flex items-center gap-2.5 transition-colors ${
                   theme.isDark ? "text-slate-200" : "text-slate-800 font-medium"
@@ -996,7 +1387,7 @@ export default function TenantDashboardPage() {
                 disabled={contextMenu.room.status !== "OCCUPIED" && contextMenu.room.status !== "OCCUPIED_CLEANING"}
                 onClick={() => {
                   setContextMenu(prev => ({ ...prev, visible: false }));
-                  alert(`Encerrar hospedagem (Checkout) do Quarto ${contextMenu.room?.number}`);
+                  toast.info(`Encerrar hospedagem (Checkout) do Quarto ${contextMenu.room?.number}`);
                 }}
                 className={`w-full px-3.5 py-2 text-left hover:bg-red-600 hover:text-white flex items-center gap-2.5 transition-colors font-semibold ${
                   theme.isDark ? "text-red-400" : "text-red-700"
@@ -1123,13 +1514,85 @@ export default function TenantDashboardPage() {
           reservationData={reservaParaCheckin ? {
             reservationNumber: reservaParaCheckin.reservationNumber || reservaParaCheckin.id,
             guestName: reservaParaCheckin.guestName,
+            cpf: reservaParaCheckin.cpf || reservaParaCheckin.guestCpf,
             phone: reservaParaCheckin.phone,
+            email: reservaParaCheckin.email,
+            birthDate: reservaParaCheckin.birthDate,
+            gender: reservaParaCheckin.gender,
+            motherName: reservaParaCheckin.motherName,
+            fatherName: reservaParaCheckin.fatherName,
+            identity: reservaParaCheckin.identity,
+            fullAddress: reservaParaCheckin.fullAddress || reservaParaCheckin.address,
             checkInDate: reservaParaCheckin.checkInDate,
             checkOutDate: reservaParaCheckin.checkOutDate,
+            adults: reservaParaCheckin.adults,
+            children: reservaParaCheckin.children,
             totalAmount: reservaParaCheckin.totalAmount,
             depositPaid: reservaParaCheckin.depositPaid,
+            tariffName: reservaParaCheckin.tariffName,
+            dailyRate: reservaParaCheckin.dailyRate,
+            notes: reservaParaCheckin.notes,
+            observations: reservaParaCheckin.observations,
+            payments: reservaParaCheckin.payments,
+            roomNumber: reservaParaCheckin.roomNumber || activeRoom.number,
           } : undefined}
           onSuccess={async (checkinData) => {
+            // Fonte única de verdade: um único POST atômico no backend cria a StayCheckin,
+            // marca o quarto OCCUPIED e sincroniza a Reservation de origem para CHECKED_IN —
+            // tudo dentro da mesma transação de banco (ver POST /api/stay/checkin). Se qualquer
+            // etapa falhar, nada é persistido, e a UI só reflete o estado depois de confirmado.
+            const targetResId = reservaParaCheckin?.id || todayReservationsByRoom[activeRoom.number]?.[0]?.id || null;
+
+            let checkinSaved = false;
+            try {
+              const stayRes = await fetch("/api/stay/checkin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  tenantId: "tenant-hoteisnet-demo",
+                  roomNumber: activeRoom.number,
+                  guestName: checkinData.guestName,
+                  documentType: checkinData.documentType,
+                  documentNumber: checkinData.documentNumber,
+                  phone: checkinData.phone,
+                  checkInDate: brDateTimeToIso(checkinData.checkInDate),
+                  checkOutDate: brDateTimeToIso(checkinData.checkOutDate),
+                  dailyRate: checkinData.dailyRate,
+                  reservationId: targetResId,
+                  totalAmount: checkinData.totalBruto,
+                  tariffId: checkinData.tariffId,
+                  tariffName: checkinData.tariffName,
+                  operatorId: checkinData.operatorId,
+                  operatorName: checkinData.operatorName,
+                  initialPayments: checkinData.initialPayments,
+                  discount: checkinData.discount,
+                  secondaryGuests: checkinData.secondaryGuests,
+                }),
+              });
+              const stayData = await stayRes.json();
+              checkinSaved = !!stayData.success;
+              if (!stayData.success) {
+                console.error("[Checkin] Falha ao registrar hospedagem:", stayData.error);
+                toast.error(
+                  `⚠️ Check-in do Quarto ${activeRoom.number} NÃO foi salvo no banco de dados: ${stayData.error || "erro desconhecido"}. Tente novamente.`,
+                  "Falha ao Registrar Check-in"
+                );
+              }
+            } catch (stayErr) {
+              console.error("[Checkin] Erro ao registrar hospedagem no banco de dados:", stayErr);
+              toast.error(
+                `⚠️ Não foi possível registrar o check-in do Quarto ${activeRoom.number} no banco de dados. Tente novamente.`,
+                "Falha ao Registrar Check-in"
+              );
+            }
+
+            if (!checkinSaved) {
+              setShowCheckinModal(false);
+              setReservaParaCheckin(null);
+              return;
+            }
+
+            // A UI só é atualizada de forma otimista DEPOIS de o backend confirmar sucesso.
             setRooms((prev) =>
               prev.map((r) =>
                 r.id === activeRoom.id
@@ -1144,71 +1607,7 @@ export default function TenantDashboardPage() {
               )
             );
 
-            // 1. Atualizar a reserva no banco de dados para status CHECKED_IN (Hospedagem Ativa)
-            let targetResId = reservaParaCheckin?.id || todayReservationsByRoom[activeRoom.number]?.[0]?.id;
-
-            try {
-              // Se o ID da reserva não foi capturado no estado local, buscar dinamicamente na API de reservas
-              if (!targetResId) {
-                const apiRes = await fetch("/api/reservations?tenantId=TNT-01");
-                const apiData = await apiRes.json();
-                if (apiData.success && Array.isArray(apiData.reservations)) {
-                  const match = apiData.reservations.find((r: any) => {
-                    const rNum = r.rooms?.number ? String(r.rooms.number) : (String(r.roomId || "").match(/\d+/)?.[0] || r.roomDescription?.match(/\d+/)?.[0] || String(r.roomId || ""));
-                    const st = String(r.status || "").toUpperCase();
-                    return rNum === activeRoom.number && st !== "CANCELLED" && !["CHECKED_IN", "CHECKEDIN", "CHECK_IN", "OCCUPIED"].includes(st);
-                  });
-                  if (match) {
-                    targetResId = match.id;
-                  }
-                }
-              }
-
-              if (targetResId) {
-                // Atualizar reserva existente para status CHECKED_IN
-                await fetch("/api/reservations", {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    id: targetResId,
-                    tenantId: "TNT-01",
-                    roomId: activeRoom.number,
-                    guestName: checkinData.guestName,
-                    guestCpf: checkinData.documentNumber,
-                    guestPhone: checkinData.phone,
-                    checkInDate: checkinData.checkInDate,
-                    checkOutDate: checkinData.checkOutDate,
-                    dailyRate: checkinData.dailyRate,
-                    totalAmount: checkinData.totalBruto,
-                    status: "CHECKED_IN",
-                  }),
-                });
-              } else {
-                // Criar novo registro de hospedagem ativada no servidor com status CHECKED_IN
-                await fetch("/api/reservations", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    tenantId: "TNT-01",
-                    roomId: activeRoom.number,
-                    guestName: checkinData.guestName,
-                    guestCpf: checkinData.documentNumber,
-                    guestPhone: checkinData.phone,
-                    checkInDate: checkinData.checkInDate,
-                    checkOutDate: checkinData.checkOutDate,
-                    dailyRate: checkinData.dailyRate,
-                    totalAmount: checkinData.totalBruto,
-                    tariffId: checkinData.tariffId || "TAR-001",
-                    tariffName: checkinData.tariffName || "APTO ESPECIAL DUPLO",
-                    status: "CHECKED_IN",
-                  }),
-                });
-              }
-            } catch (err) {
-              console.error("[Checkin] Erro ao registrar status CHECKED_IN no banco de dados:", err);
-            }
-
-            // 2. Remover da lista de reservas pendentes de hoje (apaga a badge visual de overbooking "RESERVA HOJE")
+            // Remover da lista de reservas pendentes de hoje (apaga a badge visual de overbooking "RESERVA HOJE")
             setTodayReservationsByRoom((prev) => {
               const copy = { ...prev };
               delete copy[activeRoom.number];
@@ -1232,96 +1631,119 @@ export default function TenantDashboardPage() {
       )}
 
       {/* MODAL 1: LANÇAR CONSUMO NO QUARTO */}
-      {showConsumptionModal && activeRoom && (
-        <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${theme.isDark ? "bg-slate-950/80 backdrop-blur-sm" : "bg-slate-900/50 backdrop-blur-sm"}`}>
-          <div className={`border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl ${theme.isDark ? "bg-[#0F172A] border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"}`}>
-            <div className={`flex items-center justify-between pb-3 border-b ${theme.isDark ? "border-slate-800" : "border-slate-200"}`}>
-              <h3 className={`font-bold text-base flex items-center gap-2 ${theme.isDark ? "text-white" : "text-slate-900"}`}>
-                <Wine className="w-5 h-5 text-rose-500" /> Lançar Consumo • Quarto {activeRoom.number}
-              </h3>
-              <button onClick={() => setShowConsumptionModal(false)} className="opacity-70 hover:opacity-100 transition-opacity">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className={`block mb-1 font-semibold ${theme.isDark ? "text-slate-300" : "text-slate-700"}`}>Item de Consumo (Minibar / Restaurante)</label>
-                <select className={`w-full border rounded-xl p-2.5 outline-none ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}>
-                  <option>Água Mineral sem Gás 500ml - R$ 6,00</option>
-                  <option>Cerveja Heineken Long Neck - R$ 14,00</option>
-                  <option>Refrigerante Coca-Cola Lata - R$ 8,00</option>
-                  <option>Chocolate Kopenhagen - R$ 18,00</option>
-                  <option>Porção de Batata Frita Restaurante - R$ 32,00</option>
-                </select>
-              </div>
-
-              <div>
-                <label className={`block mb-1 font-semibold ${theme.isDark ? "text-slate-300" : "text-slate-700"}`}>Quantidade</label>
-                <input type="number" defaultValue="1" className={`w-full border rounded-xl p-2.5 outline-none ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`} />
-              </div>
-            </div>
-
-            <div className={`pt-3 border-t flex items-center justify-end gap-2 ${theme.isDark ? "border-slate-800" : "border-slate-200"}`}>
-              <button onClick={() => setShowConsumptionModal(false)} className={`px-4 py-2 rounded-xl text-xs font-semibold ${theme.isDark ? "bg-slate-800 text-slate-300 hover:bg-slate-700" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>
-                Cancelar
-              </button>
-              <button
-                onClick={() => {
-                  setRooms(prev => prev.map(r => r.id === activeRoom.id ? { ...r, totalConsumption: (r.totalConsumption || 0) + 14 } : r));
-                  setShowConsumptionModal(false);
-                  alert(`Consumo lançado com sucesso no Quarto ${activeRoom.number}!`);
-                }}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md"
-              >
-                Confirmar Lançamento
-              </button>
-            </div>
-          </div>
-        </div>
+      {showConsumptionModal && activeRoom && activeStayDetail && (
+        <LancarConsumoQuartoModal
+          isOpen={showConsumptionModal}
+          onClose={() => setShowConsumptionModal(false)}
+          stayData={{
+            stayCheckinId: activeStayDetail.id,
+            roomNumber: activeRoom.number,
+            guestName: activeStayDetail.guest.fullName,
+            checkInDate: formatBrDateTime(activeStayDetail.checkInDate),
+            checkOutDate: formatBrDateTime(activeStayDetail.actualCheckOut || activeStayDetail.expectedCheckOut),
+            totalBruto: activeStayDetail.totalDaily,
+            desconto: 0,
+            totalAdiantamento: activeStayPayments.reduce((acc, p) => acc + p.amount, 0),
+            initialItems: activeStayDetail.consumptions.map((c) => ({
+              clientId: c.id,
+              id: c.id,
+              productId: c.productId,
+              productName: c.productName,
+              quantity: c.quantity,
+              unitPrice: c.unitPrice,
+              totalPrice: c.totalPrice,
+              posLocationId: c.posLocationId,
+              posLocationName: c.posLocationName,
+              operatorName: c.operatorName,
+            })),
+          }}
+          onSaveSuccess={(updatedTotalConsumption) => {
+            setRooms((prev) => prev.map((r) => (r.id === activeRoom.id ? { ...r, totalConsumption: updatedTotalConsumption } : r)));
+            // Zera activeStayDetail para forçar um novo fetch na próxima abertura do consumo — o modal
+            // tira um snapshot único dos itens ao montar, então sem isso itens cancelados/adicionados
+            // reapareceriam com os dados antigos ao reabrir a tela para o mesmo quarto.
+            setActiveStayDetail(null);
+          }}
+        />
       )}
 
+      {/* Enquanto a hospedagem real ainda não voltou da API, mostra um loading — nunca os dados de amostra do componente */}
+      {((showExtratoModal || showResumoModal || showLancarPagamentoModal || showAlterarTarifaModal) && activeRoom && !realStayBilling) ||
+      (showConsumptionModal && activeRoom && !activeStayDetail) ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm">
+          <div className={`px-6 py-4 rounded-xl border shadow-2xl text-sm font-semibold flex items-center gap-2 ${theme.isDark ? "bg-[#0F172A] border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"}`}>
+            <RefreshCw className="w-4 h-4 animate-spin" /> Carregando dados da hospedagem...
+          </div>
+        </div>
+      ) : null}
+
       {/* MODAL EXTRATO DE HOSPEDAGEM (TELA WINDEV & WHATSAPP) */}
-      {showExtratoModal && activeRoom && (
+      {showExtratoModal && activeRoom && realStayBilling && (
         <ImprimirExtratoHospedagemModal
           isOpen={showExtratoModal}
           onClose={() => setShowExtratoModal(false)}
           roomData={{
             number: activeRoom.number,
             category: activeRoom.category,
-            guestName: activeRoom.guest || "FAUSTO DE OLIVEIRA DA COSTA",
-            cpf: "865.172.281-87",
-            checkInDate: "23/01/2026 21:18:49",
-            prevCheckOutDate: "24/01/2026 14:00:00",
-            actualCheckOutDate: "11/08/2026 16:39:04",
-            extrasAmount: 200,
-            phone: "(62) 99988-7766",
+            guestName: realStayBilling?.guestName || activeRoom.guest || "",
+            cpf: realStayBilling?.cpf || "",
+            phone: realStayBilling?.phone || "",
+            cep: realStayBilling?.cep || "",
+            neighborhood: realStayBilling?.neighborhood || "",
+            city: realStayBilling?.city || "",
+            uf: realStayBilling?.uf || "",
+            address: realStayBilling?.address || "",
+            checkInDate: realStayBilling?.checkInDate || "",
+            prevCheckOutDate: realStayBilling?.prevCheckOutDate || "",
+            actualCheckOutDate: realStayBilling?.actualCheckOutDate || "",
+            extrasAmount: realStayBilling?.extraDays ?? 0,
+            adiantamento: realStayBilling?.totalAdiantamento ?? 0,
+            desconto: realStayBilling?.discount ?? 0,
+            allGuests: realStayBilling?.allGuests,
+            tariffList: realStayBilling?.tariffList,
+            consumptionList: realStayBilling?.consumptionList,
           }}
         />
       )}
 
       {/* MODAL RESUMO DE HOSPEDAGEM (PDF IMPRESSÃO) */}
-      {showResumoModal && activeRoom && (
+      {showResumoModal && activeRoom && realStayBilling && (
         <ImprimirResumoHospedagemModal
           isOpen={showResumoModal}
           onClose={() => setShowResumoModal(false)}
           roomData={{
             number: activeRoom.number,
             category: activeRoom.category,
-            guestName: activeRoom.guest || "FAUSTO DE OLIVEIRA DA COSTA",
-            cpf: "865.172.281-87",
-            checkInDate: "23/01/2026 21:18:49",
-            prevCheckOutDate: "24/01/2026 14:00:00",
-            calculatedUntil: "11/08/2026 16:37:11",
-            diariasCount: 1,
-            totalDiarias: 28140.0,
-            totalConsumo: 62.0,
+            guestName: realStayBilling?.guestName || activeRoom.guest || "",
+            cpf: realStayBilling?.cpf || "",
+            phone: realStayBilling?.phone || "",
+            cep: realStayBilling?.cep || "",
+            neighborhood: realStayBilling?.neighborhood || "",
+            city: realStayBilling?.city || "",
+            uf: realStayBilling?.uf || "",
+            address: realStayBilling?.address || "",
+            checkInDate: realStayBilling?.checkInDate || "",
+            prevCheckOutDate: realStayBilling?.prevCheckOutDate || "",
+            calculatedUntil: realStayBilling?.actualCheckOutDate || "",
+            diariasCount: realStayBilling?.nights || 0,
+            totalDiarias: realStayBilling?.totalDiarias || 0,
+            totalConsumo: realStayBilling?.totalConsumo || 0,
             outrosDebitos: 0.0,
-            totalDespesas: 28202.0,
-            pagamentosAmount: 0.0,
+            totalDespesas: realStayBilling?.totalDespesas || 0,
+            pagamentosAmount: realStayBilling?.totalAdiantamento ?? 0,
             totalAFaturar: 0.0,
-            descontos: 0.0,
-            saldoAPagar: 28202.0,
+            descontos: realStayBilling?.discount ?? 0,
+            saldoAPagar: Math.max(
+              0,
+              (realStayBilling?.totalDespesas || 0) - (realStayBilling?.totalAdiantamento ?? 0) - (realStayBilling?.discount ?? 0)
+            ),
+            consumptionItems: realStayBilling?.consumptionList?.map((c) => ({
+              dateTime: c.date,
+              description: c.description,
+              unitPrice: c.unitPrice,
+              quantity: c.quantity,
+              totalPrice: c.totalPrice,
+            })),
           }}
         />
       )}
@@ -1395,18 +1817,34 @@ export default function TenantDashboardPage() {
 
             <div className="space-y-3 text-xs">
               <button
-                onClick={() => {
-                  setRooms(prev => prev.map(r => r.id === activeRoom.id ? { 
-                    ...r, 
-                    status: "VACANT_CLEAN", 
-                    guest: null, 
+                onClick={async () => {
+                  const room = activeRoom;
+                  setShowStatusModal(false);
+                  setIsSettingMaintenance(false);
+                  try {
+                    const res = await fetch("/api/reservations/rooms", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ roomNumber: room.number, status: "VACANT_CLEAN", notes: "Quarto Higienizado & Vistoriado" }),
+                    });
+                    const data = await res.json();
+                    if (!data.success) {
+                      toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados: ${data.error || "erro desconhecido"}.`, "Falha ao Alterar Situação");
+                      return;
+                    }
+                  } catch (err) {
+                    toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados.`, "Falha ao Alterar Situação");
+                    return;
+                  }
+                  setRooms(prev => prev.map(r => r.id === room.id ? {
+                    ...r,
+                    status: "VACANT_CLEAN",
+                    guest: null,
                     dates: "Disponível para Check-in",
                     maintenanceUntil: undefined,
                     notes: "Quarto Higienizado & Vistoriado"
                   } : r));
-                  setShowStatusModal(false);
-                  setIsSettingMaintenance(false);
-                  toast.success(`Quarto ${activeRoom.number} alterado para Livre / Higienizado.`);
+                  toast.success(`Quarto ${room.number} alterado para Livre / Higienizado.`);
                 }}
                 className={`w-full p-3 rounded-xl border text-left font-semibold flex items-center justify-between transition-colors ${
                   theme.isDark ? "bg-[#10B981]/15 hover:bg-[#10B981]/25 border-[#10B981]/30 text-white" : "bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-900"
@@ -1417,18 +1855,34 @@ export default function TenantDashboardPage() {
               </button>
 
               <button
-                onClick={() => {
-                  setRooms(prev => prev.map(r => r.id === activeRoom.id ? { 
-                    ...r, 
+                onClick={async () => {
+                  const room = activeRoom;
+                  setShowStatusModal(false);
+                  setIsSettingMaintenance(false);
+                  try {
+                    const res = await fetch("/api/reservations/rooms", {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ roomNumber: room.number, status: "VACANT_DIRTY", notes: "Pendente troca de enxoval & higienização" }),
+                    });
+                    const data = await res.json();
+                    if (!data.success) {
+                      toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados: ${data.error || "erro desconhecido"}.`, "Falha ao Alterar Situação");
+                      return;
+                    }
+                  } catch (err) {
+                    toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados.`, "Falha ao Alterar Situação");
+                    return;
+                  }
+                  setRooms(prev => prev.map(r => r.id === room.id ? {
+                    ...r,
                     status: "VACANT_DIRTY",
                     guest: null,
                     dates: "Checkout / Limpeza",
                     maintenanceUntil: undefined,
                     notes: "Pendente troca de enxoval & higienização"
                   } : r));
-                  setShowStatusModal(false);
-                  setIsSettingMaintenance(false);
-                  toast.success(`Quarto ${activeRoom.number} alterado para Pendente Limpeza (Sujo).`);
+                  toast.success(`Quarto ${room.number} alterado para Pendente Limpeza (Sujo).`);
                 }}
                 className={`w-full p-3 rounded-xl border text-left font-semibold flex items-center justify-between transition-colors ${
                   theme.isDark ? "bg-[#EAB308]/15 hover:bg-[#EAB308]/25 border-[#EAB308]/30 text-white" : "bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-900"
@@ -1480,18 +1934,35 @@ export default function TenantDashboardPage() {
                   </div>
 
                   <button
-                    onClick={() => {
-                      setRooms(prev => prev.map(r => r.id === activeRoom.id ? { 
-                        ...r, 
-                        status: "MAINTENANCE", 
+                    onClick={async () => {
+                      const room = activeRoom;
+                      const maintenanceNotes = maintenanceNotesInput || "Em Manutenção";
+                      setShowStatusModal(false);
+                      setIsSettingMaintenance(false);
+                      try {
+                        const res = await fetch("/api/reservations/rooms", {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ roomNumber: room.number, status: "MAINTENANCE", notes: maintenanceNotes }),
+                        });
+                        const data = await res.json();
+                        if (!data.success) {
+                          toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados: ${data.error || "erro desconhecido"}.`, "Falha ao Alterar Situação");
+                          return;
+                        }
+                      } catch (err) {
+                        toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados.`, "Falha ao Alterar Situação");
+                        return;
+                      }
+                      setRooms(prev => prev.map(r => r.id === room.id ? {
+                        ...r,
+                        status: "MAINTENANCE",
                         guest: null,
                         dates: "Bloqueado para Manutenção",
                         maintenanceUntil: maintenanceUntilInput || "20/08/2026 18:00",
-                        notes: maintenanceNotesInput || "Em Manutenção"
+                        notes: maintenanceNotes
                       } : r));
-                      setShowStatusModal(false);
-                      setIsSettingMaintenance(false);
-                      toast.warning(`Quarto ${activeRoom.number} colocado em Manutenção / Bloqueado.`);
+                      toast.warning(`Quarto ${room.number} colocado em Manutenção / Bloqueado.`);
                     }}
                     className="w-full py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-1.5"
                   >
@@ -1530,31 +2001,39 @@ export default function TenantDashboardPage() {
               dates: `Check-out: ${updatedData.checkOutDate.split(" ")[0]}`,
               ratePerNight: updatedData.ratePerNight,
             } : r));
-            alert(`Período de hospedagem atualizado com sucesso!\n\nNovo Check-out: ${updatedData.checkOutDate}\nTarifa: ${updatedData.tariffName} (R$ ${updatedData.ratePerNight.toFixed(2)}/dia)\nDiárias Totais: ${updatedData.totalNights}\nSaldo a Pagar: R$ ${updatedData.saldoAPagar.toFixed(2)}`);
+            toast.success(`Período de hospedagem atualizado com sucesso!\n\nNovo Check-out: ${updatedData.checkOutDate}\nTarifa: ${updatedData.tariffName} (R$ ${updatedData.ratePerNight.toFixed(2)}/dia)\nDiárias Totais: ${updatedData.totalNights}\nSaldo a Pagar: R$ ${updatedData.saldoAPagar.toFixed(2)}`);
           }}
         />
       )}
 
       {/* ALTERAR TARIFA DA HOSPEDAGEM MODAL (PRINTS 1 & 2) */}
-      {showAlterarTarifaModal && activeRoom && (
+      {showAlterarTarifaModal && activeRoom && activeStayDetail && realStayBilling && (
         <AlterarTarifaHospedagemModal
           isOpen={showAlterarTarifaModal}
           onClose={() => setShowAlterarTarifaModal(false)}
           stayData={{
-            idHospedagem: `2627`,
-            cpf: "64320430182",
-            guestName: activeRoom.guest || "CARLOS DAVI SOUZA FERREIRA",
+            idHospedagem: activeStayDetail.id,
+            cpf: realStayBilling.cpf || "",
+            guestName: realStayBilling.guestName || activeRoom.guest || "",
             roomNumber: activeRoom.number,
-            roomDescription: "1 CAMA DE CASA + 1 SOLTEIRO",
-            checkInDate: "06/02/2026 16:24:42",
-            checkOutDate: "07/02/2026 14:00:00",
+            roomDescription: activeRoom.category,
+            checkInDate: realStayBilling.checkInDate,
+            checkOutDate: realStayBilling.prevCheckOutDate,
             adults: 1,
             children: 0,
-            nights: 1,
-            totalBruto: activeRoom.ratePerNight || 170,
-            totalAdvance: 0,
+            nights: realStayBilling.nights,
+            totalBruto: realStayBilling.totalDiarias,
+            totalAdvance: activeStayPayments.reduce((acc, p) => acc + p.amount, 0),
             discount: 0,
-            totalConsumption: activeRoom.totalConsumption || 0,
+            totalConsumption: realStayBilling.totalConsumo,
+            dailyRates: realStayBilling.tariffList.map((t, idx) => ({
+              id: `d${idx + 1}`,
+              tariffName: activeRoom.category,
+              startDate: t.startDate,
+              endDate: t.endDate,
+              rateValue: t.dailyRate,
+              selected: false,
+            })),
           }}
           onSave={(updatedData) => {
             setRooms((prev) =>
@@ -1580,35 +2059,80 @@ export default function TenantDashboardPage() {
       )}
 
       {/* LANÇAR PAGAMENTO NA HOSPEDAGEM MODAL (WINDEV WIN_PAGAMENTOHOSPEDAGEM) */}
-      {showLancarPagamentoModal && activeRoom && (
+      {showLancarPagamentoModal && activeRoom && activeStayDetail && realStayBilling && (
         <LancarPagamentoHospedagemModal
           isOpen={showLancarPagamentoModal}
           onClose={() => setShowLancarPagamentoModal(false)}
           stayData={{
-            idHospedagem: `HPD-${activeRoom.number}`,
+            idHospedagem: activeStayDetail.id,
             roomNumber: activeRoom.number,
-            primaryGuestName: activeRoom.guest || "PEDRO RICARDO DA SILVA FAGUNDES",
-            checkInDate: "05/02/2026 13:08:42",
-            expectedCheckOutDate: "08/02/2026 14:00:00",
-            actualCheckOutDate: "12/08/2026 09:39:20",
-            dailyCount: 3,
-            extrasCount: 185,
-            totalDiarias: (activeRoom.ratePerNight || 380) * 3,
-            totalConsumo: activeRoom.totalConsumption || 28.0,
+            primaryGuestId: activeStayDetail.guest.id,
+            primaryGuestName: realStayBilling.guestName || activeRoom.guest || "",
+            checkInDate: realStayBilling.checkInDate,
+            expectedCheckOutDate: realStayBilling.prevCheckOutDate,
+            actualCheckOutDate: realStayBilling.actualCheckOutDate,
+            dailyCount: realStayBilling.nights,
+            extrasCount: realStayBilling.extraDays,
+            totalDiarias: realStayBilling.totalDiarias,
+            totalConsumo: realStayBilling.totalConsumo,
             outrosDebitos: 0.0,
-            desconto: 0.0,
+            desconto: realStayBilling.discount,
             guestsList: [
-              { id: "G-1", name: activeRoom.guest || "PEDRO RICARDO DA SILVA FAGUNDES" }
+              { id: "G-1", name: realStayBilling.guestName || activeRoom.guest || "" }
             ],
+            initialPayments: activeStayPayments,
           }}
-          onSaveSuccess={(updatedData) => {
-            setShowLancarPagamentoModal(false);
-            toast.success(
-              `Crédito/Pagamento salvo para o Quarto ${activeRoom.number}!\n\n` +
-              `Total Pagamentos: R$ ${updatedData.totalPagamentos.toFixed(2)}\n` +
-              `Saldo Restante: R$ ${updatedData.saldoAPagar.toFixed(2)}`,
-              "Lançamento Salvo"
-            );
+          onOpenConsumo={() => setShowConsumptionModal(true)}
+          onCheckoutConfirmed={async () => {
+            const room = activeRoom;
+            const stayId = activeStayDetail?.id;
+
+            if (!stayId) {
+              toast.error(
+                `⚠️ Não foi possível localizar a hospedagem ativa do Quarto ${room.number}. Checkout NÃO realizado.`,
+                "Falha ao Encerrar Hospedagem"
+              );
+              return;
+            }
+
+            // PATCH /api/stay/checkin é a ÚNICA fonte de verdade para encerrar uma hospedagem:
+            // dentro de uma transação, fecha a StayCheckin, libera o quarto (VACANT_DIRTY) e
+            // sincroniza a Reservation para CHECKED_OUT — nada mais precisa (nem deve) tocar
+            // nesses três registros em paralelo.
+            try {
+              const res = await fetch("/api/stay/checkin", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ stayCheckinId: stayId }),
+              });
+              const data = await res.json();
+              if (!data.success) {
+                console.error("[Checkout] Falha ao encerrar hospedagem:", data.error);
+                toast.error(
+                  `⚠️ Checkout do Quarto ${room.number} NÃO foi salvo no banco de dados: ${data.error || "erro desconhecido"}. Tente novamente.`,
+                  "Falha ao Encerrar Hospedagem"
+                );
+                return;
+              }
+            } catch (err) {
+              console.error("[Checkout] Erro ao encerrar hospedagem no banco de dados:", err);
+              toast.error(
+                `⚠️ Não foi possível registrar o checkout do Quarto ${room.number} no banco de dados. Tente novamente.`,
+                "Falha ao Encerrar Hospedagem"
+              );
+              return;
+            }
+
+            setRooms(prev => prev.map(r => r.id === room.id ? {
+              ...r,
+              status: "VACANT_DIRTY",
+              guest: null,
+              dates: "Checkout / Limpeza",
+              totalConsumption: 0,
+              maintenanceUntil: undefined,
+              notes: "Pendente troca de enxoval & higienização",
+            } : r));
+            toast.success(`Check-out do Quarto ${room.number} efetuado com sucesso! Quarto encaminhado para Governança (Limpeza).`, "Check-out Concluído");
           }}
         />
       )}

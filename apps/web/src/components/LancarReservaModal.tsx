@@ -246,7 +246,6 @@ export default function LancarReservaModal({
 
   // ── Save state ─────────────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
-  const [migrationDone, setMigrationDone] = useState(false);
 
   // ─── Derived calculations ──────────────────────────────────────────────────
   const totalDiarias = nights * (selectedTariff?.price || 0);
@@ -429,15 +428,6 @@ export default function LancarReservaModal({
       })
       .catch(() => {});
   }, [isOpen, tenantId]);
-
-  // Run migration on first open
-  useEffect(() => {
-    if (!isOpen || migrationDone) return;
-    fetch("/api/reservations/migrate", { method: "POST" })
-      .then(r => r.json())
-      .then(() => setMigrationDone(true))
-      .catch(() => setMigrationDone(true));
-  }, [isOpen, migrationDone]);
 
   // Recalculate nights
   useEffect(() => {

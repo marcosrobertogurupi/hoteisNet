@@ -16,6 +16,7 @@ import {
   Filter
 } from "lucide-react";
 import CustomDatePicker from "@/components/CustomDatePicker";
+import { useToast } from "@/context/ToastContext";
 
 export interface TariffOption {
   id: string;
@@ -49,36 +50,7 @@ export interface ExistingReservation {
 }
 
 // Sample active reservations to check conflicts against
-const MOCK_EXISTING_RESERVATIONS: ExistingReservation[] = [
-  {
-    id: "RES-4092",
-    guestName: "Juliana Andrade",
-    roomNumber: "312",
-    checkInDate: "2026-02-10",
-    checkOutDate: "2026-02-15",
-  },
-  {
-    id: "RES-4093",
-    guestName: "Roberto Almeida",
-    roomNumber: "102",
-    checkInDate: "2026-08-16",
-    checkOutDate: "2026-08-20",
-  },
-  {
-    id: "RES-4094",
-    guestName: "Empresa Vale S.A.",
-    roomNumber: "203",
-    checkInDate: "2026-08-18",
-    checkOutDate: "2026-08-22",
-  },
-  {
-    id: "RES-4095",
-    guestName: "Clara Ferreira Lima",
-    roomNumber: "105",
-    checkInDate: "2026-08-18",
-    checkOutDate: "2026-08-21",
-  }
-];
+const MOCK_EXISTING_RESERVATIONS: ExistingReservation[] = [];
 
 interface AlterarPeriodoModalProps {
   isOpen: boolean;
@@ -117,6 +89,8 @@ export default function AlterarPeriodoModal({
   stayData,
   onSave,
 }: AlterarPeriodoModalProps) {
+  const toast = useToast();
+
   // Parsing date utilities
   const parseDateTime = (dtStr: string): Date => {
     if (!dtStr) return new Date();
@@ -223,10 +197,7 @@ export default function AlterarPeriodoModal({
   // Reservation Conflict Detection Rule:
   // "ao alterar o check-out tenho que respeitar se tem reserva feita no periodo"
   const reservationConflict = useMemo(() => {
-    const allReservations = [
-      ...MOCK_EXISTING_RESERVATIONS,
-      ...(stayData.existingReservations || [])
-    ];
+    const allReservations = stayData.existingReservations || [];
 
     const currentRoomNo = stayData.roomNumber;
     const cinYMD = formatDateToInputValue(initialCheckin);
@@ -273,7 +244,7 @@ export default function AlterarPeriodoModal({
 
   const handleSave = () => {
     if (reservationConflict) {
-      alert(`CONFLITO DE RESERVA DETECTADO!\n\nNão é possível salvar a alteração. O quarto ${stayData.roomNumber} possui uma reserva confirmada (${reservationConflict.id} - ${reservationConflict.guestName}) do dia ${reservationConflict.checkInDate} até ${reservationConflict.checkOutDate}.`);
+      toast.error(`CONFLITO DE RESERVA DETECTADO!\n\nNão é possível salvar a alteração. O quarto ${stayData.roomNumber} possui uma reserva confirmada (${reservationConflict.id} - ${reservationConflict.guestName}) do dia ${reservationConflict.checkInDate} até ${reservationConflict.checkOutDate}.`);
       return;
     }
 
@@ -357,12 +328,12 @@ export default function AlterarPeriodoModal({
     const dateYMD = formatDateToInputValue(newDate);
 
     if (occupiedDates.includes(dateYMD)) {
-      alert("Atenção: Esta data está ocupada por outra reserva para este quarto!");
+      toast.warning("Atenção: Esta data está ocupada por outra reserva para este quarto!");
       return;
     }
 
     if (newDate < new Date(initialCheckin.getFullYear(), initialCheckin.getMonth(), initialCheckin.getDate())) {
-      alert("A data de check-out não pode ser anterior à data de chegada!");
+      toast.warning("A data de check-out não pode ser anterior à data de chegada!");
       return;
     }
     setCheckOutDate(newDate);
@@ -482,7 +453,7 @@ export default function AlterarPeriodoModal({
                           const [y, m, d] = v.split("-").map(Number);
                           const newDate = new Date(y, m - 1, d);
                           if (newDate < new Date(initialCheckin.getFullYear(), initialCheckin.getMonth(), initialCheckin.getDate())) {
-                            alert("A data de saída não pode ser menor que a data de chegada!");
+                            toast.warning("A data de saída não pode ser menor que a data de chegada!");
                             return;
                           }
                           setCheckOutDate(newDate);
