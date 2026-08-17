@@ -212,7 +212,9 @@ export default function TenantDashboardPage() {
               ? "Disponível para Check-in"
               : activeStay?.expectedCheckOut
               ? `Check-out: ${new Date(activeStay.expectedCheckOut).toLocaleDateString("pt-BR")}`
-              : existing?.dates || "Disponível";
+              : dbStatus === "VACANT_DIRTY" || dbStatus === "OCCUPIED_CLEANING"
+              ? "Aguardando Limpeza"
+              : "Disponível";
           const dbExpectedCheckOutDate =
             dbStatus === "VACANT_CLEAN" || !activeStay?.expectedCheckOut
               ? null
@@ -987,7 +989,7 @@ export default function TenantDashboardPage() {
                       </div>
                     )}
 
-                    {room.dates && !room.dates.includes("Disponível") && !room.dates.toLowerCase().includes("checkout") && !room.dates.toLowerCase().includes("bloqueado") && !room.dates.toLowerCase().includes("manutenção") && (
+                    {room.dates && !room.dates.includes("Disponível") && !room.dates.toLowerCase().includes("checkout") && !room.dates.toLowerCase().includes("check-out") && !room.dates.toLowerCase().includes("bloqueado") && !room.dates.toLowerCase().includes("manutenção") && (
                       <div className={`flex items-center justify-between ${theme.textMuted}`}>
                         <span>Período / Status:</span>
                         <span className={`font-mono ${theme.isDark ? "text-slate-200" : "text-slate-800"}`}>{room.dates}</span>
