@@ -45,7 +45,7 @@ export default function ApartamentosPage() {
           const num = String(r.number);
           const existing = prevMap.get(num);
 
-          let st = "LIVRE";
+          let st: ApartamentoFormData["status"] = "LIVRE";
           if (r.status === "OCCUPIED" || r.status === "OCCUPIED_CLEANING") st = "OCUPADO";
           else if (r.status === "VACANT_DIRTY") st = "LIMPEZA";
           else if (r.status === "MAINTENANCE") st = "MANUTENCAO";
