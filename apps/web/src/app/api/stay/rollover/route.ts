@@ -1,17 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { dateOnlyBrasilia as dateOnly } from "@/lib/brasiliaDate";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-// Ancora a meia-noite local de Brasília (UTC-3, sem horário de verão desde 2019) de forma
-// independente do fuso horário do processo Node — em produção (Vercel) o servidor roda em UTC,
-// então usar getFullYear/getMonth/getDate (fuso do processo) gerava referenceDate 3h adiantado
-// em relação ao que era criado em ambiente local, fazendo a diária aparecer no dia errado.
-function dateOnly(d: Date) {
-  const brDateStr = d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-  const [y, m, day] = brDateStr.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, day, 3, 0, 0));
-}
 
 function parseLimitTime(limitTime?: string | null) {
   const [h, m] = (limitTime || "14:30").split(":").map(Number);

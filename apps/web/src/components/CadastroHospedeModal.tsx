@@ -214,7 +214,9 @@ export default function CadastroHospedeModal({
         setHistResumoData({
           ...baseGuest,
           number: stay.roomNumber,
-          calculatedUntil: stay.actualCheckOut ? formatBrDateTime(stay.actualCheckOut) : formatBrDateTime(new Date().toISOString()),
+          calculatedUntil:
+            tariffList[tariffList.length - 1]?.endDate ||
+            (stay.actualCheckOut ? formatBrDateTime(stay.actualCheckOut) : formatBrDateTime(new Date().toISOString())),
           diariasCount: nights,
           totalDiarias,
           totalConsumo,

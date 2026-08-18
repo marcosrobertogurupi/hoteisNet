@@ -5,6 +5,15 @@ import { X, Eye, Printer, Filter, Search, ChevronDown, Check } from "lucide-reac
 import { INITIAL_TARIFFS, TariffItem } from "./CadastroTarifasModal";
 import { useToast } from "@/context/ToastContext";
 
+function parseBRDate(dateStr: string): Date | null {
+  const [datePart] = dateStr.split(" ");
+  const [day, month, year] = (datePart || "").split("/").map(Number);
+  if (!day || !month || !year) return null;
+  const parsed = new Date(year, month - 1, day);
+  parsed.setHours(0, 0, 0, 0);
+  return parsed;
+}
+
 export interface DailyRateItem {
   id: string;
   tariffName: string;
@@ -12,6 +21,7 @@ export interface DailyRateItem {
   endDate: string;   // DD/MM/YYYY
   rateValue: number;
   selected: boolean;
+  referenceDate?: string; // ISO da diária (StayCharge.referenceDate) — chave real usada para persistir no banco
 }
 
 export interface StayTariffData {
@@ -60,6 +70,7 @@ export default function AlterarTarifaHospedagemModal({
   );
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [customDailyValue, setCustomDailyValue] = useState<number>(selectedTariff.price);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Initialize daily rates table based on stay date range or provided dailyRates
   const [dailyRates, setDailyRates] = useState<DailyRateItem[]>(() => {
@@ -123,17 +134,23 @@ export default function AlterarTarifaHospedagemModal({
     );
   };
 
-  // Apply Action 2: Apply from TODAY onwards
+  // Apply Action 2: Apply from TODAY onwards (diária corrente e subsequentes)
   const handleApplyFromToday = () => {
-    const todayStr = new Date().toLocaleDateString("pt-BR");
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     setDailyRates((prev) =>
       prev.map((item) => {
-        // If start date is today or later
-        return {
-          ...item,
-          tariffName: selectedTariff.name,
-          rateValue: customDailyValue,
-        };
+        const itemStart = parseBRDate(item.startDate);
+        // Somente diárias de hoje em diante recebem a nova tarifa
+        if (itemStart && itemStart >= today) {
+          return {
+            ...item,
+            tariffName: selectedTariff.name,
+            rateValue: customDailyValue,
+          };
+        }
+        return item;
       })
     );
   };
@@ -162,16 +179,48 @@ export default function AlterarTarifaHospedagemModal({
     );
   };
 
-  const handleSave = () => {
-    if (onSave) {
-      onSave({
-        totalBruto: totalBrutoCalculated,
-        saldoAPagar,
-        dailyRates,
-      });
+  const handleSave = async () => {
+    if (isSaving) return;
+
+    const missingReference = dailyRates.some((item) => !item.referenceDate);
+    if (missingReference) {
+      toast.error("Não foi possível identificar as diárias desta hospedagem no banco de dados.", "Erro ao Salvar");
+      return;
     }
-    toast.success(`Novas tarifas salvas com sucesso para o Hóspede ${stayData.guestName}!\n\nNovo Saldo a Pagar: R$ ${saldoAPagar.toFixed(2).replace(".", ",")}`);
-    onClose();
+
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/stay/tariff", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stayCheckinId: stayData.idHospedagem,
+          dailyRates: dailyRates.map((item) => ({
+            referenceDate: item.referenceDate,
+            tariffName: item.tariffName,
+            rateValue: item.rateValue,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || "Falha ao gravar a nova tarifa no banco de dados.");
+      }
+
+      if (onSave) {
+        onSave({
+          totalBruto: totalBrutoCalculated,
+          saldoAPagar,
+          dailyRates,
+        });
+      }
+      toast.success(`Novas tarifas salvas com sucesso para o Hóspede ${stayData.guestName}!\n\nNovo Saldo a Pagar: R$ ${saldoAPagar.toFixed(2).replace(".", ",")}`);
+      onClose();
+    } catch (e: any) {
+      toast.error(e.message || "Não foi possível gravar a nova tarifa. Tente novamente.", "Erro ao Salvar");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -557,9 +606,10 @@ export default function AlterarTarifaHospedagemModal({
             <div className="pt-4 flex items-center justify-end">
               <button
                 onClick={handleSave}
-                className="px-6 py-3 bg-[#00b4d8] hover:bg-[#0096c7] text-white font-bold text-xs rounded-xs shadow-md active:scale-95 transition-all"
+                disabled={isSaving}
+                className="px-6 py-3 bg-[#00b4d8] hover:bg-[#0096c7] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xs shadow-md active:scale-95 transition-all"
               >
-                Salvar novas tarifas na hospedagem
+                {isSaving ? "Salvando..." : "Salvar novas tarifas na hospedagem"}
               </button>
             </div>
 

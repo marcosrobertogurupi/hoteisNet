@@ -150,15 +150,7 @@ export default function LancarPagamentoHospedagemModal({
 
   // Observations State
   const [observations, setObservations] = useState<ObservationLog[]>(
-    stayData.initialObservations || [
-      {
-        id: "OBS-101",
-        dateTime: new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
-        type: "SISTEMA",
-        user: activeOperatorName,
-        note: "Hospedagem iniciada com pagamento parcial pendente."
-      }
-    ]
+    stayData.initialObservations || []
   );
   const [selectedObsId, setSelectedObsId] = useState<string | null>(null);
   const [newObsText, setNewObsText] = useState<string>("");
@@ -677,7 +669,7 @@ export default function LancarPagamentoHospedagemModal({
           <div className="flex items-center gap-2">
             <Building2 className="w-5 h-5 text-sky-200" />
             <h2 className="font-bold text-sm tracking-wide">
-              Lançamento de crédito/pagamento para hospedagem
+              Check-out/lançamento de crédito
             </h2>
           </div>
           <button

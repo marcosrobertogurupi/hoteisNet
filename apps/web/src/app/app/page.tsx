@@ -564,6 +564,7 @@ export default function TenantDashboardPage() {
             startDate: formatBrDateTime(start.toISOString()).split(" ")[0],
             endDate: formatBrDateTime(end.toISOString()).split(" ")[0],
             dailyRate: charge.amount,
+            referenceDateISO: start.toISOString(),
           };
         })
       : [{
@@ -571,6 +572,7 @@ export default function TenantDashboardPage() {
           startDate: formatBrDateTime(checkIn.toISOString()).split(" ")[0],
           endDate: formatBrDateTime(new Date(checkIn.getTime() + msPerNight).toISOString()).split(" ")[0],
           dailyRate: activeStayDetail.totalDaily,
+          referenceDateISO: checkIn.toISOString(),
         }];
 
     const nights = Math.max(1, tariffList.length);
@@ -1726,7 +1728,10 @@ export default function TenantDashboardPage() {
             address: realStayBilling?.address || "",
             checkInDate: realStayBilling?.checkInDate || "",
             prevCheckOutDate: realStayBilling?.prevCheckOutDate || "",
-            calculatedUntil: realStayBilling?.actualCheckOutDate || "",
+            calculatedUntil:
+              realStayBilling?.tariffList?.[realStayBilling.tariffList.length - 1]?.endDate ||
+              realStayBilling?.actualCheckOutDate ||
+              "",
             diariasCount: realStayBilling?.nights || 0,
             totalDiarias: realStayBilling?.totalDiarias || 0,
             totalConsumo: realStayBilling?.totalConsumo || 0,
@@ -2030,23 +2035,35 @@ export default function TenantDashboardPage() {
             totalConsumption: realStayBilling.totalConsumo,
             dailyRates: realStayBilling.tariffList.map((t, idx) => ({
               id: `d${idx + 1}`,
-              tariffName: activeRoom.category,
+              tariffName: t.description,
               startDate: t.startDate,
               endDate: t.endDate,
               rateValue: t.dailyRate,
+              referenceDate: t.referenceDateISO,
               selected: false,
             })),
           }}
           onSave={(updatedData) => {
+            const lastRate = updatedData.dailyRates[updatedData.dailyRates.length - 1]?.rateValue;
             setRooms((prev) =>
               prev.map((r) =>
                 r.id === activeRoom.id
-                  ? {
-                      ...r,
-                      ratePerNight: updatedData.dailyRates[0]?.rateValue || r.ratePerNight,
-                    }
+                  ? { ...r, ratePerNight: lastRate ?? r.ratePerNight }
                   : r
               )
+            );
+            setActiveStayDetail((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    totalDaily: updatedData.totalBruto,
+                    dailyCharges: updatedData.dailyRates.map((d) => ({
+                      referenceDate: d.referenceDate || "",
+                      amount: d.rateValue,
+                      description: d.tariffName,
+                    })),
+                  }
+                : prev
             );
           }}
         />

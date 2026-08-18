@@ -27,6 +27,7 @@ export interface TariffPeriodItem {
   startDate: string; // YYYY-MM-DD or DD/MM/YYYY
   endDate: string;
   dailyRate: number;
+  referenceDateISO?: string; // data exata (ISO) do StayCharge de origem, usada para persistir alterações de tarifa
 }
 
 export interface ExtratoRoomData {
@@ -222,6 +223,13 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
       return itemStart >= startDt && itemStart <= endDt;
     });
   }, [rawTariffs, appliedStartDate, appliedEndDate]);
+
+  // "Calculado ate" deve refletir a data de saida/final da ultima tarifa realmente aplicada
+  // na hospedagem (ultima diaria lancada), e nao a data corrente/filtro aplicado.
+  const lastTariffEndDate = useMemo(() => {
+    const source = filteredTariffs.length > 0 ? filteredTariffs : rawTariffs;
+    return source.length > 0 ? source[source.length - 1].endDate : appliedEndDate;
+  }, [filteredTariffs, rawTariffs, appliedEndDate]);
 
   // Filter consumption items based on applied filter dates
   const filteredConsumptions = useMemo(() => {
@@ -505,7 +513,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
               <span><strong>Dt.Cheg:</strong> {roomData.checkInDate || "23/01/2026 21:18:49"}</span>
               <span><strong>Dt.Prev.Sai:</strong> {roomData.prevCheckOutDate || "24/01/2026 14:00:00"}</span>
               <span><strong>Diarias:</strong> {filteredTariffs.length}</span>
-              <span><strong>Calculado ate:</strong> {appliedEndDate}</span>
+              <span><strong>Calculado ate:</strong> {lastTariffEndDate}</span>
             </div>
             <div className="flex flex-wrap gap-x-6">
               <span><strong>Quarto:</strong> {roomData.number || "310"}</span>
