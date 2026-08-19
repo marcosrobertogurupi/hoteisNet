@@ -19,6 +19,7 @@ interface SentMessage {
   mediaUrl: string | null;
   mimeType: string | null;
   senderName: string | null;
+  externalId: string | null;
   createdAt: string;
 }
 
@@ -120,6 +121,34 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
       if (el) el.scrollTop = el.scrollHeight;
     });
   }, [messages]);
+
+  // A URL de mídia que chega no webhook é a original criptografada do WhatsApp e não pode ser
+  // exibida diretamente — para cada mensagem de anexo ainda sem mediaUrl resolvido, busca sob
+  // demanda a URL pública descriptografada via api/uazapi/messages/download. attemptedDownloadsRef
+  // evita repetir a chamada a cada ciclo do polling para uma mensagem que já falhou ou já foi resolvida.
+  const attemptedDownloadsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const pending = messages.filter(
+      (m) => m.type === "media" && !m.mediaUrl && m.externalId && !attemptedDownloadsRef.current.has(m.id)
+    );
+    pending.forEach((m) => {
+      attemptedDownloadsRef.current.add(m.id);
+      fetch("/api/uazapi/messages/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: m.externalId, tenantId }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success) {
+            setMessages((prev) =>
+              prev.map((pm) => (pm.id === m.id ? { ...pm, mediaUrl: data.fileURL, mimeType: data.mimetype } : pm))
+            );
+          }
+        })
+        .catch(() => {});
+    });
+  }, [messages, tenantId]);
 
   const logSentMessage = async (type: string, content: string | null, filename: string | null) => {
     try {
@@ -347,40 +376,43 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
         </div>
 
         {/* TOP INFO PANEL */}
-        <div className={`px-4 py-2.5 flex items-center gap-3 border-b ${theme.isDark ? "border-slate-800" : "border-slate-200"}`}>
-          {/* Foto */}
-          <div className={`w-11 h-11 shrink-0 rounded-full overflow-hidden flex items-center justify-center border-2 ${hasWhatsapp ? "border-emerald-500" : "border-slate-500"} ${theme.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
-            {loadingProfile ? (
-              <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-            ) : profileImage ? (
-              <img src={profileImage} alt={roomData.guestName} className="w-full h-full object-cover" />
-            ) : (
-              <UserRound className={`w-6 h-6 ${theme.isDark ? "text-slate-500" : "text-slate-400"}`} />
-            )}
+        <div className={`px-4 py-2.5 border-b space-y-2.5 ${theme.isDark ? "border-slate-800" : "border-slate-200"}`}>
+          {/* Dados da hospedagem */}
+          <div className="flex items-center gap-3">
+            {/* Foto */}
+            <div className={`w-11 h-11 shrink-0 rounded-full overflow-hidden flex items-center justify-center border-2 ${hasWhatsapp ? "border-emerald-500" : "border-slate-500"} ${theme.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+              {loadingProfile ? (
+                <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+              ) : profileImage ? (
+                <img src={profileImage} alt={roomData.guestName} className="w-full h-full object-cover" />
+              ) : (
+                <UserRound className={`w-6 h-6 ${theme.isDark ? "text-slate-500" : "text-slate-400"}`} />
+              )}
+            </div>
+
+            {/* Dados resumidos */}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold truncate">{roomData.guestName || "-"}</span>
+                <span className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${hasWhatsapp ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}>
+                  {loadingProfile ? "..." : hasWhatsapp ? "Ativo" : "Indisponível"}
+                </span>
+              </div>
+              <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] ${theme.textMuted}`}>
+                <span>Qto <b className={theme.isDark ? "text-white" : "text-slate-900"}>{roomData.number || "-"}</b></span>
+                <span>{roomData.checkInDate || "-"} → {roomData.actualCheckOutDate || roomData.prevCheckOutDate || "-"}</span>
+                <span className="flex items-center gap-1 font-mono">
+                  {phoneVisible ? phone || "-" : maskedPhone || "-"}
+                  <button onClick={() => setPhoneVisible((v) => !v)} className={theme.isDark ? "text-slate-400 hover:text-white" : "text-slate-500 hover:text-slate-900"}>
+                    {phoneVisible ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  </button>
+                </span>
+              </div>
+            </div>
           </div>
 
-          {/* Dados resumidos */}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-bold truncate">{roomData.guestName || "-"}</span>
-              <span className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${hasWhatsapp ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}>
-                {loadingProfile ? "..." : hasWhatsapp ? "Ativo" : "Indisponível"}
-              </span>
-            </div>
-            <div className={`flex items-center gap-3 text-[11px] ${theme.textMuted}`}>
-              <span>Qto <b className={theme.isDark ? "text-white" : "text-slate-900"}>{roomData.number || "-"}</b></span>
-              <span className="hidden sm:inline">{roomData.checkInDate || "-"} → {roomData.actualCheckOutDate || roomData.prevCheckOutDate || "-"}</span>
-              <span className="flex items-center gap-1 font-mono">
-                {phoneVisible ? phone || "-" : maskedPhone || "-"}
-                <button onClick={() => setPhoneVisible((v) => !v)} className={theme.isDark ? "text-slate-400 hover:text-white" : "text-slate-500 hover:text-slate-900"}>
-                  {phoneVisible ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                </button>
-              </span>
-            </div>
-          </div>
-
-          {/* Ações — uma única linha */}
-          <div className="flex flex-nowrap gap-1.5 shrink-0">
+          {/* Ações */}
+          <div className="flex flex-wrap gap-1.5">
             <button
               onClick={handleSendResumo}
               disabled={!canSend || sendingDocType !== null}
@@ -440,7 +472,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
           ) : (
             messages.map((m) => {
               const isIn = m.direction === "IN";
-              const isImage = m.mimeType === "image";
+              const isImage = m.mimeType === "image" || !!m.mimeType?.startsWith("image/");
               const hasAttachment = !!m.mediaUrl;
               return (
                 <div key={m.id} className={`flex ${isIn ? "justify-start" : "justify-end"}`}>
