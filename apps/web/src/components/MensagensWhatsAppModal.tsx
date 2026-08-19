@@ -110,15 +110,38 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, roomData.stayId]);
 
-  // Mantém a última mensagem sempre visível — rola a conversa para o fim toda vez que a lista muda
-  // (nova mensagem enviada, recebida via polling, ou histórico inicial carregado). Seta scrollTop
-  // diretamente no container (em vez de scrollIntoView) porque é mais confiável dentro de um modal
-  // com várias camadas de flexbox; o requestAnimationFrame garante que roda só depois do navegador
-  // já ter recalculado a altura do conteúdo recém-renderizado.
+  // Rola para o fim só ao abrir a conversa e enquanto o usuário estiver acompanhando as mensagens
+  // mais recentes (perto do fim da rolagem) — nunca enquanto ele tiver subido a tela para ver
+  // mensagens antigas, senão o polling de 4s puxa a tela de volta pro fim a cada ciclo e o usuário
+  // nunca consegue ler o histórico. isNearBottomRef é atualizado pelo listener de scroll abaixo;
+  // justOpenedRef força a ida ao fim uma única vez quando a janela é aberta.
+  const isNearBottomRef = useRef(true);
+  const justOpenedRef = useRef(false);
+
   useEffect(() => {
+    if (isOpen) justOpenedRef.current = true;
+  }, [isOpen]);
+
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      isNearBottomRef.current = distanceFromBottom < 80;
+    };
+    el.addEventListener("scroll", handleScroll);
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, [isOpen]);
+
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const shouldScroll = justOpenedRef.current || isNearBottomRef.current;
+    justOpenedRef.current = false;
+    if (!shouldScroll) return;
     requestAnimationFrame(() => {
-      const el = messagesContainerRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      el.scrollTop = el.scrollHeight;
+      isNearBottomRef.current = true;
     });
   }, [messages]);
 
