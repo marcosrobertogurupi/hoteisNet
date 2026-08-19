@@ -41,6 +41,7 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json", token: setting.instanceToken },
       body: JSON.stringify({
         url,
+        enabled: true,
         events: ["messages", "connection"],
         excludeMessages: ["wasSentByApi"],
       }),
