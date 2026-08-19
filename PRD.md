@@ -1,7 +1,7 @@
-# Product Requirement Document (PRD) — HoteisNet PMS SaaS
+# Product Requirement Document (PRD) — Hoteis.Net PMS SaaS
 
-**Versão:** 1.1.0
-**Data:** 15 de Agosto de 2026
+**Versão:** 1.2.0
+**Data:** 19 de Agosto de 2026
 **Status:** Documento Oficial de Referência do Projeto — **atualizado a cada alteração relevante no sistema** (ver regra em `.agents/AGENTS.md`)
 
 ### Legenda de Status de Implementação
@@ -15,7 +15,7 @@ Cada funcionalidade abaixo é marcada com o status real observado no código-fon
 ## 1. Visão Geral do Produto (Product Overview)
 
 ### 1.1. Propósito
-O **HoteisNet PMS SaaS** é uma plataforma moderna de Gestão Hoteleira (Property Management System) baseada em nuvem, concebida para modernizar e substituir o sistema desktop legado desenvolvido em WinDev. O produto atende hotéis, pousadas, resorts e hospedagens de todos os portes com uma experiência de uso fluida, intuitiva, altamente performática e esteticamente impecável.
+O **Hoteis.Net PMS SaaS** é uma plataforma moderna de Gestão Hoteleira (Property Management System) baseada em nuvem, concebida para modernizar e substituir o sistema desktop legado desenvolvido em WinDev. O produto atende hotéis, pousadas, resorts e hospedagens de todos os portes com uma experiência de uso fluida, intuitiva, altamente performática e esteticamente impecável.
 
 ### 1.2. Principais Objetivos
 1. **Migração & Modernização:** Transicionar todas as regras de negócio consolidadas do sistema WinDev desktop para uma arquitetura SaaS multi-tenant web-native.
@@ -44,7 +44,7 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * Todo login/logout gera um registro em `AuditLog` com terminal e IP de origem.
 
 ### 2.3. Perfis de Usuários (User Roles)
-* **`SUPER_ADMIN`:** Administrador geral da plataforma SaaS HoteisNet (gestão de tenants, planos, cotas de IA e cobrança).
+* **`SUPER_ADMIN`:** Administrador geral da plataforma SaaS Hoteis.Net (gestão de tenants, planos, cotas de IA e cobrança).
 * **`TENANT_ADMIN`:** Proprietário ou gerente geral do estabelecimento (acesso total às configurações, tarifários, relatórios e usuários do hotel).
 * **`RECEPCIONIST`:** Operador da recepção (mapa de quartos, mapa de reservas, check-in, check-out, alteração de período, lançamentos de consumo e FNRH).
 * **`GOVERNESS`:** Equipe de governança e limpeza (mudança de status de limpeza dos quartos, conferência de frigobar).
@@ -74,6 +74,7 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * **Interatividade:** Duplo clique em células de datas para criar/editar reservas diretamente no mapa.
 * **Prevenção de Overbooking:** Verificação automática em tempo real que bloqueia reservas conflitantes no mesmo apartamento.
 * **Comunicação por WhatsApp ✅:** Envio de comprovante de reserva em PDF via Uazapi (`api/uazapi/send-reserva`), com fallback de servidor/token padrão embutido no código (pendência de segurança — mover para configuração por tenant).
+* **Reservas Múltiplas em Lote ✅:** `api/reservations/batch` grava várias reservas de uma só vez dentro de uma única transação Prisma, equivalente ao botão "Salvar Reservas" da tela de Reservas Múltiplas do WinDev original — o usuário monta o lote em grade local e só é persistido no clique final; se qualquer reserva do lote colidir ou falhar, nenhuma é gravada.
 
 ### 3.3. Check-in, Hospedagem & Alteração de Período ✅
 * **Entrada de Hóspedes (Check-in):** Vinculação do hóspede principal e acompanhantes, aplicação da tabela tarifária vigente e cálculo automático das diárias.
@@ -81,6 +82,12 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
   * Bloqueio fixo da data de início (check-in já realizado).
   * Flexibilidade na prorrogação ou antecipação do check-out com ajuste automático do saldo devedor.
   * Checagem de colisão com reservas futuras para o mesmo apartamento.
+  * **Persistência real ✅:** `api/stay/period` (PATCH) é a única fonte de verdade para `StayCheckin.expectedCheckOut` (e, se informado, a tarifa/nome da diária corrente) — alterar apenas a `Reservation` ou apenas o estado local do front não é suficiente, sob pena do Mapa de Quartos e da tela de check-out mostrarem a previsão antiga.
+* **Diárias Extras por Virada Automática ✅:** `StayCheckin.extraDailiesCount` contabiliza separadamente, com fuso horário de Brasília, as diárias lançadas automaticamente pela virada (`api/stay/rollover`) além da previsão original de saída — equivalente a `hpd_qtddiariasextras` do sistema legado.
+* **Ocupantes por Hospedagem ✅:** `StayCheckin.adults`/`children` registram a composição de hóspedes da diária.
+* **Auditoria de Ciclo de Vida da Hospedagem ✅:** `StayCheckin` grava snapshots de quem fez o check-in, o check-out e quem operava o caixa no fechamento (`checkedInByUser*`, `checkedOutByUser*`, `closingOperator*` — equivalentes a `hpd_idusucheckin`/`hpd_idusucheckout`/`hpd_operadorfechou`). Os campos de cancelamento de hospedagem (`isCanceled`, `canceledAt`, `canceledByUser*`) já existem no schema, mas **ainda não há fluxo de UI que os grave** ⏳.
+* **Totais Financeiros Consolidados ✅:** `totalAdvance`, `balanceDue` e `otherDebits` são recalculados a cada pagamento/fechamento e persistidos na própria hospedagem (equivalentes a `hpd_totaladiant`/`hpd_saldopagar`/`hpd_outrosdeb`), preservando o valor histórico mesmo após o encerramento.
+* **Transferência de Débitos entre Quartos ✅:** `api/stay/transfer-debit` (POST) replica a tela `WIN_TRANSFERENCIADEBITO` do WinDev — move total ou parte do débito de uma hospedagem ativa para outra dentro de uma única transação: o quarto de origem recebe um pagamento com a forma "TRANSF.DEBITO" quitando o valor, e o quarto de destino recebe o mesmo valor incrementado em `otherDebits`. Todo movimento é auditável no novo modelo `StayDebitTransfer` (origem, destino, valor, operador, data), preservado mesmo após ambas as hospedagens encerrarem.
 
 ### 3.4. FNRH Eletrônica & SNRHos (Ministério do Turismo) ⏳
 * **Status real:** apenas a intenção do produto. O modelo `FNRHRecord` existe no schema Prisma mas **não é referenciado em nenhum ponto do código**; não existe nenhuma rota de API relacionada a FNRH/SNRHos.
@@ -106,9 +113,14 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * **Painel da Governança:** Painel exclusivo para camareiras e supervisão de governança ordenando os quartos por prioridade de limpeza pós check-out.
 * **Controle de Manutenção:** Agendamento de reparos com bloqueio temporário de inventário de quartos.
 
-### 3.8. Self Check-in & WhatsApp (Uazapi)
+### 3.8. Self Check-in & WhatsApp (Uazapi) ✅ (parcialmente — ver ressalvas)
 * **Pre-Checkin Antecipado ⏳/🟡:** Wizard de UI existe (ver 3.4) mas ainda não está conectado a dados reais nem ao envio/recebimento via WhatsApp.
-* **Envio de Extrato por WhatsApp ✅:** `api/uazapi/send-extrato` envia o extrato de consumo/hospedagem em PDF via Uazapi, com o mesmo padrão de fallback de credencial embutida no código citado em 3.2 — recomenda-se mover para configuração segura por tenant (tabela `UazapiSetting`, hoje não conectada às rotas).
+* **Gestão de Instância por Tenant ✅:** `UazapiSetting` foi reformulado para representar o ciclo de vida completo de uma instância uazapi própria do tenant (`serverUrl`, `adminToken`, `instanceId`/`instanceName`/`instanceToken`, `status` — disconnected/connecting/connected/hibernated —, `qrCodeUrl`, `pairCode`, `webhookUrl`), substituindo o modelo simplificado anterior. Rotas em `api/uazapi/instance/{connect,disconnect,status,link,webhook}` conectam/desconectam a instância, consultam status e recebem webhook — tela "Configuração do Sistema > API WhatsApp".
+* **Foto de Perfil do Contato ✅:** `api/uazapi/profile-picture` consulta `POST {serverUrl}/chat/details` da uazapi para exibir o avatar de WhatsApp do hóspede quando disponível.
+* **Histórico Local de Mensagens ✅:** Cada envio (resumo, consumo, extrato PDF ou texto avulso) feito pela tela "Mensagens WhatsApp" do quarto ocupado é gravado no novo modelo `WhatsappSentMessage` (tenant, hospedagem, telefone, tipo, conteúdo) e listado via `api/uazapi/messages`/`api/tenant/whatsapp-messages`. **Não sincroniza respostas do hóspede** — exigiria webhook bidirecional, fora do escopo atual.
+* **Mensagens Automáticas Configuráveis ✅:** `WhatsappMessageSetting` (via `api/tenant/whatsapp-messages`) permite habilitar/customizar por tenant os textos de confirmação de reserva, boas-vindas no check-in, aviso de previsão de check-out e mensagem de check-out, com placeholders (`{HOTEL}`, `{HOSPEDE}`, `{QUARTO}`).
+* **Envio de Extrato por WhatsApp ✅:** `api/uazapi/send-extrato` envia o extrato de consumo/hospedagem em PDF via Uazapi.
+* **Dívida de segurança remanescente ⚠️:** `api/uazapi/send-reserva` e `api/uazapi/send-extrato` ainda usam fallback de servidor/token padrão embutido no código quando o tenant não tem instância própria configurada — deve ser removido (ver seção 4).
 * **QR Code Expresso:** ⏳ não implementado.
 
 ### 3.9. Central de Ajuda & Suporte com Inteligência Artificial (RAG) 🟡
@@ -141,6 +153,15 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * `api/stay/hub-consult-cpf` integra com a API paga do "Hub do Desenvolvedor" (`ws.hubdodesenvolvedor.com.br`) para resolver CPF em dados da Receita Federal (nome, nascimento, filiação, endereço, telefones, e-mails), agilizando o cadastro do hóspede.
 * **Pendências de segurança/robustez:** há um token/contrato padrão **embutido no código-fonte** (`DEFAULT_HUB_TOKEN`/`DEFAULT_HUB_CONTRACT`) usado quando a variável de ambiente não está configurada — deve ser removido do código. O controle de cota por tenant é mantido em **memória do processo** (`TENANT_USAGE_STORE`), sendo perdido a cada reinício/deploy — precisa ser persistido no banco.
 
+### 3.15. Dashboard Operacional ✅
+* `api/dashboard/metrics` calcula, com fuso de Brasília: ocupação atual (quartos ocupados/vagos, taxa de ocupação), chegadas e saídas do dia, série histórica de ocupação x vacância dos últimos 15 dias (a partir dos snapshots horários de `RoomOccupancySnapshot`) e ranking dos quartos mais/menos ocupados nos últimos 30 dias. Métricas operacionais, não financeiras.
+
+### 3.16. Relatórios Operacionais ✅
+* `api/relatorios/quartos-ocupados`: lista quartos ocupados no momento com soma de pessoas hospedadas (hóspede principal + acompanhantes), usado para dimensionar o café da manhã.
+* `api/relatorios/quartos-limpeza`: lista quartos pendentes de higienização para a governança.
+* `api/relatorios/reservas-por-periodo`: lista reservas dentro de um intervalo de datas.
+* Os PDFs gerados a partir desses relatórios têm exemplos de referência em `Exemplo de impressao/*.pdf` na raiz do projeto.
+
 ---
 
 ## 4. Requisitos Não-Funcionais
@@ -167,3 +188,6 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * [ ] **Fase 7:** Módulo Completo de Faturamento Corporativo e Contas a Receber Faturadas — cadastro de Empresas pronto; emissão/consolidação de faturas (`CorporateInvoice`) ainda não conectada a UI.
 * [ ] **Fase 8 (nova):** Sair do estágio de protótipo de UI para as telas de Fiscal/NFe, Painel Super Admin (tenants/telemetria IA/suporte) e Central de Ajuda com IA — hoje totalmente mockadas, sem nenhuma chamada de API.
 * [ ] **Fase 9 (nova):** Unificar acesso a dados de Tarifas (eliminar rota paralela via Supabase) e migrar configuração de e-mail/WhatsApp para as tabelas `EmailSetting`/`UazapiSetting` por tenant, removendo credenciais padrão embutidas no código.
+* [x] **Fase 10 (nova):** Transferência de Débitos entre Quartos (`api/stay/transfer-debit` + `StayDebitTransfer`), Reservas Múltiplas em Lote (`api/reservations/batch`), Dashboard Operacional (`api/dashboard/metrics`) e Relatórios de Governança/Café da Manhã/Reservas por Período (`api/relatorios/*`) — implementados e conectados ao banco.
+* [~] **Fase 11 (nova):** Reformulação da Integração WhatsApp (Uazapi) — gestão completa de instância por tenant (`api/uazapi/instance/*`), histórico local de mensagens (`WhatsappSentMessage`) e mensagens automáticas configuráveis (`WhatsappMessageSetting`) já implementados; pendente remover o fallback de credencial padrão embutida no código em `send-reserva`/`send-extrato` para tenants sem instância própria configurada.
+* [ ] **Fase 12 (nova):** Implementar fluxo de UI para cancelamento de hospedagem (`StayCheckin.isCanceled`/`canceledAt`/`canceledByUser*`), campos já existentes no schema mas ainda não gravados por nenhuma tela.

@@ -63,6 +63,10 @@ export async function runDailyRollover(): Promise<void> {
       const rate = Number(lastCharge?.amount ?? stay.totalDaily ?? 0);
       const description = lastCharge?.description || "Diária";
 
+      // Diária lançada em data igual/posterior à previsão original de saída = estadia
+      // ultrapassou o combinado no check-in (equivalente a hpd_qtddiariasextras do legado).
+      const isExtra = referenceDate >= stay.expectedCheckOut;
+
       try {
         await prisma.$transaction([
           prisma.stayCharge.create({
@@ -78,6 +82,7 @@ export async function runDailyRollover(): Promise<void> {
             where: { id: stay.id },
             data: {
               dailiesCount: { increment: 1 },
+              ...(isExtra ? { extraDailiesCount: { increment: 1 } } : {}),
               totalDaily: { increment: rate },
               lastRolloverDate: new Date(),
             },

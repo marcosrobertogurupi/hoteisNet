@@ -59,7 +59,7 @@ export default function SuperAdminSupportPage() {
     },
     {
       sender: "AI_AGENT",
-      senderName: "IA de Suporte HoteisNet (RAG Bot - 62% Confiança)",
+      senderName: "IA de Suporte Hoteis.Net (RAG Bot - 62% Confiança)",
       content: "Identificamos que para habilitar o faturamento corporativo, é necessário verificar se o contrato da empresa possui limite de crédito cadastrado superior a R$ 0,00.",
       time: "10:45",
       lowConfidence: true,

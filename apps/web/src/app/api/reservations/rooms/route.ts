@@ -51,6 +51,7 @@ function formatRoom(r: any) {
           checkInDate: activeStay.checkInDate,
           expectedCheckOut: activeStay.expectedCheckOut,
           totalConsumption: Number(activeStay.totalConsumption),
+          unreadWhatsappCount: activeStay._count?.whatsappMessages ?? 0,
         }
       : null,
   };
@@ -100,7 +101,10 @@ export async function GET(req: NextRequest) {
       where: { isClosed: false },
       orderBy: { checkInDate: "desc" as const },
       take: 1,
-      include: { primaryGuest: true },
+      include: {
+        primaryGuest: true,
+        _count: { select: { whatsappMessages: { where: { direction: "IN", read: false } } } },
+      },
     };
 
     const rooms = await withDbRetry(() =>

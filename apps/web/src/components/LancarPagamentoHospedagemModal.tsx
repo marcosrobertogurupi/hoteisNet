@@ -17,14 +17,15 @@ import {
   Building2,
   ChevronDown,
   Mail,
-  Loader2
+  Loader2,
+  LogOut
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
 import { useOperator } from "@/context/OperatorContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { usePrompt } from "@/context/PromptContext";
-import { generateReciboPdfBase64 } from "@/utils/pdfGenerator";
+import { generateReciboPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
 import CadastroHospedeModal, { HospedeFormData } from "@/components/CadastroHospedeModal";
 
 
@@ -65,7 +66,9 @@ export interface LancarPagamentoHospedagemModalProps {
     extrasCount?: number;
     totalDiarias: number;
     totalConsumo: number;
+    consumptionsDetail?: { dateTime: string; productName: string; quantity: number; unitPrice: number; totalPrice: number }[];
     outrosDebitos?: number;
+    outrosDebitosDetail?: { id: string; amount: number; createdAt: string; fromRoomNumber: string; fromGuestName: string; operatorName: string | null }[];
     desconto?: number;
     guestsList?: GuestItem[];
     initialPayments?: PaymentCreditItem[];
@@ -81,6 +84,14 @@ export interface LancarPagamentoHospedagemModalProps {
   onCheckoutConfirmed?: () => void;
   // Chamado ao clicar no "+" de Consumo — abre a tela real de Lançamento de Consumo do Quarto por cima deste modal.
   onOpenConsumo?: () => void;
+  // Chamado ao clicar no olho de Total Diárias — abre o Extrato de Hospedagem real por cima deste modal.
+  onOpenExtrato?: () => void;
+  // Chamado ao clicar em "Imprimir resumo de hospedagem" — abre o Resumo de Hospedagem real por cima deste modal.
+  onOpenResumo?: () => void;
+  // Quando o modal é aberto a partir do item "Encerrar Hospedagem (Checkout)" do menu de contexto,
+  // o botão principal já deve exibir "Check-out" (em vez de "Salvar Crédito") para não confundir o usuário,
+  // mesmo que ainda haja saldo a pagar.
+  checkoutIntent?: boolean;
 }
 
 const PRE_REGISTERED_PAYMENT_METHODS = [
@@ -99,6 +110,9 @@ export default function LancarPagamentoHospedagemModal({
   onSaveSuccess,
   onCheckoutConfirmed,
   onOpenConsumo,
+  onOpenExtrato,
+  onOpenResumo,
+  checkoutIntent = false,
 }: LancarPagamentoHospedagemModalProps) {
   const {
     theme,
@@ -129,6 +143,8 @@ export default function LancarPagamentoHospedagemModal({
     setTotalConsumo(stayData.totalConsumo ?? 0.0);
   }, [stayData.totalConsumo]);
   const outrosDebitos = stayData.outrosDebitos ?? 0.0;
+  const outrosDebitosDetail = stayData.outrosDebitosDetail ?? [];
+  const [showOutrosDebitosModal, setShowOutrosDebitosModal] = useState<boolean>(false);
   const [desconto, setDesconto] = useState<number>(stayData.desconto || 0.0);
   // Mesmo motivo do totalConsumo/payments acima: sem isto, reabrir a tela mantém o desconto da
   // hospedagem/quarto anterior em vez do valor real vindo do banco pela prop.
@@ -181,6 +197,7 @@ export default function LancarPagamentoHospedagemModal({
   // "olho" e "carro" ao lado do nome do hóspede principal)
   const [showCadastroHospede, setShowCadastroHospede] = useState<boolean>(false);
   const [cadastroHospedeTab, setCadastroHospedeTab] = useState<"dados" | "veiculos">("dados");
+  const [cadastroHospedeReadOnly, setCadastroHospedeReadOnly] = useState<boolean>(false);
   const [cadastroHospedeData, setCadastroHospedeData] = useState<HospedeFormData | null>(null);
   const [loadingCadastroHospede, setLoadingCadastroHospede] = useState<boolean>(false);
 
@@ -190,6 +207,7 @@ export default function LancarPagamentoHospedagemModal({
       return;
     }
     setCadastroHospedeTab(tab);
+    setCadastroHospedeReadOnly(tab === "veiculos");
     setLoadingCadastroHospede(true);
     try {
       const res = await fetch(`/api/cadastros/hospedes/${stayData.primaryGuestId}`);
@@ -390,6 +408,58 @@ export default function LancarPagamentoHospedagemModal({
     setTimeout(cleanup, 60000);
   };
 
+  const handlePrintConsumo = () => {
+    const items = stayData.consumptionsDetail || [];
+    if (items.length === 0) {
+      toast.warning("Nenhum consumo lançado nesta hospedagem.", "Consumo Vazio");
+      return;
+    }
+
+    const pdfBase64 = generateConsumoPdfBase64({
+      hotelName: hotelName || "HOTEL IDEAL",
+      guestName: stayData.primaryGuestName,
+      roomNumber: stayData.roomNumber,
+      items: items.map((i) => ({
+        dateTime: i.dateTime,
+        description: i.productName,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        totalPrice: i.totalPrice,
+      })),
+    });
+    const base64Data = pdfBase64.split(",")[1];
+    const byteChars = atob(base64Data);
+    const byteNumbers = new Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "none";
+    iframe.src = url;
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+      if (iframe.parentNode) document.body.removeChild(iframe);
+      URL.revokeObjectURL(url);
+    };
+
+    iframe.onload = () => {
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      }, 250);
+    };
+
+    setTimeout(cleanup, 60000);
+  };
+
   const handleSendWhatsAppPaymentReceipt = async (paymentsForRecibo: PaymentCreditItem[]) => {
     if (paymentsForRecibo.length === 0) return;
 
@@ -547,6 +617,23 @@ export default function LancarPagamentoHospedagemModal({
 
     // Nada foi incluído, excluído ou alterado nesta sessão: não há o que gravar no caixa.
     if (pendingPayments.length === 0 && pendingDeletions.length === 0 && !discountChanged) {
+      // Mas se a conta já está quitada (ex.: zerada por uma Transferência de Débito antes de abrir
+      // esta tela), não há pagamento novo a lançar — pula direto para a pergunta de check-out, em
+      // vez de só informar "Nada a Salvar" e fechar sem dar chance de encerrar a hospedagem.
+      if (saldoAPagar <= 0.001) {
+        const wantsCheckout = await confirmDialog({
+          title: "Conta Quitada",
+          message: `O débito da hospedagem do Quarto ${stayData.roomNumber} está quitado.\n\nDeseja efetuar o check-out do hóspede agora?`,
+          confirmLabel: "Fazer Check-out",
+          cancelLabel: "Agora Não",
+        });
+        if (wantsCheckout) {
+          onCheckoutConfirmed?.();
+        }
+        onClose();
+        return;
+      }
+
       toast.info("Nenhuma alteração feita na hospedagem", "Nada a Salvar");
       onClose();
       return;
@@ -843,7 +930,13 @@ export default function LancarPagamentoHospedagemModal({
                       }`}
                     />
                     <button
-                      onClick={() => toast.info(`Detalhamento de Diárias: ${fmtCurrency(totalDiarias)}`)}
+                      onClick={() => {
+                        if (onOpenExtrato) {
+                          onOpenExtrato();
+                        } else {
+                          toast.info(`Detalhamento de Diárias: ${fmtCurrency(totalDiarias)}`);
+                        }
+                      }}
                       className="p-1 rounded bg-cyan-600 text-white shrink-0 hover:bg-cyan-500"
                       title="Ver Diárias"
                     >
@@ -872,7 +965,7 @@ export default function LancarPagamentoHospedagemModal({
                       <Plus className="w-3 h-3" />
                     </button>
                     <button
-                      onClick={() => toast.info(`Imprimir comprovante de consumo`)}
+                      onClick={handlePrintConsumo}
                       className="p-1 rounded bg-cyan-700 text-white shrink-0 hover:bg-cyan-600"
                       title="Imprimir Consumo"
                     >
@@ -894,7 +987,13 @@ export default function LancarPagamentoHospedagemModal({
                       }`}
                     />
                     <button
-                      onClick={() => toast.info(`Outros Débitos: ${fmtCurrency(outrosDebitos)}`)}
+                      onClick={() => {
+                        if (outrosDebitosDetail.length === 0) {
+                          toast.info("Nenhum outro débito lançado nesta hospedagem.", "Outros Débitos");
+                          return;
+                        }
+                        setShowOutrosDebitosModal(true);
+                      }}
                       className="p-1 rounded bg-cyan-600 text-white shrink-0 hover:bg-cyan-500"
                       title="Ver Outros Débitos"
                     >
@@ -942,7 +1041,7 @@ export default function LancarPagamentoHospedagemModal({
               </div>
 
               <button
-                onClick={() => toast.info(`Imprimindo Resumo de Hospedagem do Quarto ${stayData.roomNumber}...`)}
+                onClick={() => onOpenResumo?.()}
                 className="w-full py-2 px-3 rounded-lg bg-[#00BCD4] hover:bg-cyan-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
               >
                 <Printer className="w-4 h-4" />
@@ -1152,15 +1251,17 @@ export default function LancarPagamentoHospedagemModal({
                 <button
                   onClick={handleSaveCredit}
                   disabled={isSaving}
-                  title={isSaving ? "Gravando no caixa... Aguarde" : "Salvar Crédito"}
+                  title={isSaving ? "Gravando no caixa... Aguarde" : saldoAPagar <= 0.001 || checkoutIntent ? "Fazer Check-out" : "Salvar Crédito"}
                   className="w-full py-3 px-4 rounded-xl bg-[#00BCD4] hover:bg-cyan-600 text-white font-extrabold text-base flex items-center justify-center gap-2 shadow-lg transition-all transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isSaving ? (
                     <Loader2 className="w-6 h-6 animate-spin" />
+                  ) : saldoAPagar <= 0.001 || checkoutIntent ? (
+                    <LogOut className="w-6 h-6 stroke-[3]" />
                   ) : (
                     <Check className="w-6 h-6 stroke-[3]" />
                   )}
-                  {isSaving ? "Gravando... Aguarde" : "Salvar Crédito"}
+                  {isSaving ? "Gravando... Aguarde" : saldoAPagar <= 0.001 || checkoutIntent ? "Check-out" : "Salvar Crédito"}
                 </button>
               </div>
             </div>
@@ -1337,6 +1438,66 @@ export default function LancarPagamentoHospedagemModal({
         </div>
       )}
 
+      {/* QUICK MODAL: DETALHAMENTO DE OUTROS DÉBITOS (origem das transferências recebidas) */}
+      {showOutrosDebitosModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className={`w-full max-w-lg p-5 rounded-2xl border shadow-2xl space-y-4 ${
+            theme.isDark ? "bg-[#0F172A] border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"
+          }`}>
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="font-bold text-base flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-cyan-500" /> Outros Débitos — Origem dos Lançamentos
+              </h3>
+              <button onClick={() => setShowOutrosDebitosModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="border rounded overflow-hidden max-h-64 overflow-y-auto">
+              <table className="w-full text-left text-[11px] border-collapse">
+                <thead>
+                  <tr className="bg-[#00BCD4] text-white font-bold select-none">
+                    <th className="p-1.5 border-r border-cyan-400/50">Data/Hora</th>
+                    <th className="p-1.5 border-r border-cyan-400/50">Quarto Origem</th>
+                    <th className="p-1.5 border-r border-cyan-400/50">Hóspede Origem</th>
+                    <th className="p-1.5 border-r border-cyan-400/50">Operador</th>
+                    <th className="p-1.5 text-right">Valor (R$)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {outrosDebitosDetail.map((d, idx) => (
+                    <tr
+                      key={d.id}
+                      className={`border-b last:border-b-0 ${
+                        idx % 2 === 0 ? (theme.isDark ? "bg-slate-900/40" : "bg-slate-50") : ""
+                      }`}
+                    >
+                      <td className="p-1.5 font-mono">{new Date(d.createdAt).toLocaleString("pt-BR")}</td>
+                      <td className="p-1.5 font-bold">{d.fromRoomNumber}</td>
+                      <td className="p-1.5 uppercase">{d.fromGuestName}</td>
+                      <td className="p-1.5 uppercase text-slate-500 dark:text-slate-400">{d.operatorName || "—"}</td>
+                      <td className="p-1.5 font-mono font-bold text-right text-red-600 dark:text-red-400">{fmtCurrency(d.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-xs font-bold text-slate-500 uppercase">Total de Outros Débitos</span>
+              <span className="text-base font-extrabold text-red-600 dark:text-red-400 font-mono">{fmtCurrency(outrosDebitos)}</span>
+            </div>
+
+            <button
+              onClick={() => setShowOutrosDebitosModal(false)}
+              className="w-full py-2 px-3 rounded-xl text-xs font-semibold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* CADASTRO DO HÓSPEDE (Visualizar/Editar dados ou Veículos) */}
       <CadastroHospedeModal
         isOpen={showCadastroHospede}
@@ -1344,6 +1505,7 @@ export default function LancarPagamentoHospedagemModal({
         onSave={handleSaveCadastroHospede}
         initialData={cadastroHospedeData}
         initialTab={cadastroHospedeTab}
+        readOnly={cadastroHospedeReadOnly}
       />
 
     </div>

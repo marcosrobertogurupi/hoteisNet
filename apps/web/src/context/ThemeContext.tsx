@@ -96,6 +96,8 @@ export interface ThemeContextType {
   setUazapiServerUrl: (url: string) => void;
   uazapiInstanceToken: string;
   setUazapiInstanceToken: (token: string) => void;
+  whatsappSoundEnabled: boolean;
+  setWhatsappSoundEnabled: (val: boolean) => void;
   reservationToleranceHours: number;
   setReservationToleranceHours: (hours: number) => void;
 
@@ -138,6 +140,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Uazapi Integration default values (Subscriber settings, customizable per tenant)
   const [uazapiServerUrl, setUazapiServerUrlState] = useState<string>("https://netservice.uazapi.com");
   const [uazapiInstanceToken, setUazapiInstanceTokenState] = useState<string>("fbe5bfbb-226a-47a2-9d1d-6b657933318c");
+  const [whatsappSoundEnabled, setWhatsappSoundEnabledState] = useState<boolean>(true);
 
   // Tolerância de Reserva
   const [reservationToleranceHours, setReservationToleranceHoursState] = useState<number>(24);
@@ -192,6 +195,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
       const savedUazapiToken = localStorage.getItem("hoteisnet_uazapi_token");
       if (savedUazapiToken) setUazapiInstanceTokenState(savedUazapiToken);
+
+      const savedWaSound = localStorage.getItem("hoteisnet_wa_sound_enabled");
+      if (savedWaSound !== null) setWhatsappSoundEnabledState(savedWaSound === "true");
 
       const savedTolerance = localStorage.getItem("hoteisnet_reservation_tolerance");
       if (savedTolerance) setReservationToleranceHoursState(Number(savedTolerance));
@@ -288,6 +294,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("hoteisnet_uazapi_token", token);
   };
 
+  const setWhatsappSoundEnabled = (val: boolean) => {
+    setWhatsappSoundEnabledState(val);
+    localStorage.setItem("hoteisnet_wa_sound_enabled", String(val));
+  };
+
   const setReservationToleranceHours = (hours: number) => {
     setReservationToleranceHoursState(hours);
     localStorage.setItem("hoteisnet_reservation_tolerance", String(hours));
@@ -370,6 +381,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         setUazapiServerUrl,
         uazapiInstanceToken,
         setUazapiInstanceToken,
+        whatsappSoundEnabled,
+        setWhatsappSoundEnabled,
         reservationToleranceHours,
         setReservationToleranceHours,
         emailSmtpHost,

@@ -516,7 +516,7 @@ export default function SuperAdminDashboardPage() {
                     </div>
 
                     <p className="text-[11px] text-slate-400">
-                      Escaneie o QR Code no seu aplicativo WhatsApp para autorizar o Concierge Inteligente HoteisNet.
+                      Escaneie o QR Code no seu aplicativo WhatsApp para autorizar o Concierge Inteligente Hoteis.Net.
                     </p>
                   </div>
                 </div>
@@ -736,7 +736,7 @@ export default function SuperAdminDashboardPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="text-slate-300 font-semibold block mb-1">Razão Social</label>
-                    <input type="text" defaultValue="HOTEISNET HOTELARIA & SERVICOS LTDA" className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white" />
+                    <input type="text" defaultValue="HOTEIS.NET HOTELARIA & SERVICOS LTDA" className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white" />
                   </div>
                   <div>
                     <label className="text-slate-300 font-semibold block mb-1">CNPJ</label>

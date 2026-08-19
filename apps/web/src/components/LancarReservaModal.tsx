@@ -18,6 +18,7 @@ import {
   PdfReservaPayment,
 } from "@/utils/pdfGenerator";
 import CustomDatePicker from "@/components/CustomDatePicker";
+import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ export interface RoomOption {
 
 const PAYMENT_METHODS = ["DINHEIRO", "CARTÃO", "PIX", "FATURA", "SALDO DE CLIENTE", "TRANSF.DÉBITO"];
 
-const DEFAULT_ROOM_OPTIONS: RoomOption[] = [
+export const DEFAULT_ROOM_OPTIONS: RoomOption[] = [
   { id: "101", number: "101", floor: "1º ANDAR", status: "VACANT_CLEAN", room_categories: { name: "SUÍTE LUXO MAR", description: "Suíte Luxo Mar" } },
   { id: "102", number: "102", floor: "1º ANDAR", status: "VACANT_CLEAN", room_categories: { name: "SUÍTE LUXO MAR", description: "Suíte Luxo Mar" } },
   { id: "103", number: "103", floor: "1º ANDAR", status: "VACANT_CLEAN", room_categories: { name: "STANDARD SUPERIOR", description: "Standard Superior" } },
@@ -345,11 +346,13 @@ export default function LancarReservaModal({
       setDocNumber(editReservationData.cpf || editReservationData.guestCpf || "");
       setGuestPhone(editReservationData.phone || editReservationData.guestPhone || "");
 
-      const inDate = editReservationData.checkInDate ? editReservationData.checkInDate.split("T")[0] : getTodayDateStr();
+      const inDate = editReservationData.checkInDateRaw
+        || (editReservationData.checkInDate ? editReservationData.checkInDate.split("T")[0].split(" ")[0] : getTodayDateStr());
       const inTime = editReservationData.checkInTime || defaultCheckInTime || "14:00";
       setDtChegadaLocal(`${inDate}T${inTime}`);
 
-      const outDate = editReservationData.checkOutDate ? editReservationData.checkOutDate.split("T")[0] : tomorrowStr();
+      const outDate = editReservationData.checkOutDateRaw
+        || (editReservationData.checkOutDate ? editReservationData.checkOutDate.split("T")[0].split(" ")[0] : tomorrowStr());
       const outTime = editReservationData.checkOutTime || defaultCheckOutTime || "12:00";
       setDtSaidaLocal(`${outDate}T${outTime}`);
 
@@ -789,9 +792,25 @@ export default function LancarReservaModal({
       document.body.appendChild(iframe);
       iframe.onload = () => { setTimeout(() => { iframe.contentWindow?.print(); }, 400); };
 
-      // 4. Send via WhatsApp if has active WhatsApp
-      if (hasWhatsapp && guestPhone) {
-        const caption = `Segue confirmação da reserva para ${guestName.toUpperCase()} no período: checkin: ${dtChegada} a checkout: ${dtSaida}`;
+      // 4. Send via WhatsApp if has active WhatsApp — apenas se a "Confirmação de reserva"
+      // estiver habilitada em Configurações > Mensagens Automáticas de WhatsApp.
+      let waReservaEnabled = true;
+      let waReservaMessage = "";
+      try {
+        const waRes = await fetch("/api/tenant/whatsapp-messages");
+        const waData = await waRes.json();
+        if (waData.success && waData.settings) {
+          waReservaEnabled = !!waData.settings.reservationConfirmEnabled;
+          waReservaMessage = waData.settings.reservationConfirmMessage || "";
+        }
+      } catch {
+        // Se a consulta falhar, mantém o comportamento padrão (habilitado) para não travar a reserva.
+      }
+
+      if (hasWhatsapp && guestPhone && waReservaEnabled) {
+        const caption = waReservaMessage
+          ? renderWhatsappTemplate(waReservaMessage, { hospede: guestName.toUpperCase(), hotel: hotelName || "" })
+          : `Segue confirmação da reserva para ${guestName.toUpperCase()} no período: checkin: ${dtChegada} a checkout: ${dtSaida}`;
         const wppRes = await fetch("/api/uazapi/send-reserva", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

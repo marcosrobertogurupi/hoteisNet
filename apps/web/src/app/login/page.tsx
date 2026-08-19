@@ -47,10 +47,12 @@ function LoginForm() {
     <div className="min-h-screen flex items-center justify-center bg-slate-100 px-4">
       <div className="w-full max-w-sm bg-white border border-slate-200 rounded-2xl p-8 shadow-xl">
         <div className="flex flex-col items-center mb-6">
-          <div className="w-12 h-12 rounded-xl bg-[#0284C7]/10 flex items-center justify-center mb-3">
-            <Lock className="w-6 h-6 text-[#0284C7]" />
-          </div>
-          <h1 className="text-lg font-bold text-slate-900">HoteisNet PMS SaaS</h1>
+          <img
+            src="/brand/icon.png"
+            alt="Hoteis.Net"
+            className="w-12 h-12 rounded-xl object-contain mb-3"
+          />
+          <h1 className="text-lg font-bold text-slate-900">Hoteis.Net PMS SaaS</h1>
           <p className="text-xs text-slate-500 mt-1">Entre com seu e-mail e senha</p>
         </div>
 

@@ -766,3 +766,352 @@ export function generateReciboPdfBase64(data: PdfReciboData): string {
 
   return doc.output("datauristring");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF RESUMO DA HOSPEDAGEM
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PdfResumoConsumptionItem {
+  dateTime: string;
+  description: string;
+  unitPrice: number;
+  quantity: number;
+  totalPrice: number;
+}
+
+export interface PdfResumoData {
+  hotelName: string;
+  hotelCnpj?: string;
+  hotelAddress?: string;
+  roomNumber: string;
+  guestName: string;
+  cpf?: string;
+  checkInDate: string;
+  prevCheckOutDate: string;
+  calculatedUntil?: string;
+  diariasCount?: number;
+  totalDiarias: number;
+  totalConsumo: number;
+  outrosDebitos: number;
+  totalDespesas: number;
+  pagamentosAmount: number;
+  descontos: number;
+  saldoAPagar: number;
+  consumptionItems?: PdfResumoConsumptionItem[];
+}
+
+/**
+ * Gera o PDF do Resumo da Hospedagem (mesmo layout usado na impressão via ImprimirResumoHospedagemModal),
+ * retornando como Data URL (base64), para envio por WhatsApp.
+ */
+export function generateResumoPdfBase64(data: PdfResumoData): string {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginL = 10;
+  const marginR = pageWidth - 10;
+  let y = 14;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text((data.hotelName || "HOTEL IDEAL").toUpperCase(), pageWidth / 2, y, { align: "center" });
+
+  y += 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  const cnpjStr = data.hotelCnpj ? `CNPJ: ${data.hotelCnpj}` : "CNPJ: 40.904.811/0001-31";
+  const addrStr = data.hotelAddress || "RUA MARECHAL RONDON, SN - ALTO PARANA - REDENCAO - PA CEP: 68550303 - (063) 3415-4614";
+  doc.text(`${addrStr} - ${cnpjStr}`, pageWidth / 2, y, { align: "center" });
+
+  y += 4;
+  doc.setLineWidth(0.5);
+  doc.line(marginL, y, marginR, y);
+
+  y += 6;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text("RESUMO DA HOSPEDAGEM", pageWidth / 2, y, { align: "center" });
+
+  // ── DADOS DO HÓSPEDE ──────────────────────────────────────────────────────
+  y += 6;
+  doc.setFontSize(8.5);
+  const box1H = 22;
+  doc.rect(marginL, y, pageWidth - 20, box1H);
+  let bY = y + 5;
+
+  doc.setFont("helvetica", "bold");
+  doc.text("Quarto:", marginL + 2, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.roomNumber || "-", marginL + 18, bY);
+
+  doc.setFont("helvetica", "bold");
+  doc.text("Hóspede Principal:", marginL + 45, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text((data.guestName || "-").toUpperCase(), marginL + 78, bY);
+
+  doc.setFont("helvetica", "bold");
+  doc.text("CPF:", marginL + 155, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.cpf || "-", marginL + 163, bY);
+
+  bY += 6;
+  doc.setFont("helvetica", "bold");
+  doc.text("Dt. Cheg.:", marginL + 2, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.checkInDate || "-", marginL + 20, bY);
+
+  doc.setFont("helvetica", "bold");
+  doc.text("Dt. Prev. Saída:", marginL + 70, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.prevCheckOutDate || "-", marginL + 97, bY);
+
+  doc.setFont("helvetica", "bold");
+  doc.text("DD:", marginL + 150, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text(String(data.diariasCount ?? 1), marginL + 158, bY);
+
+  bY += 6;
+  doc.setFont("helvetica", "bold");
+  doc.text("Calculado até:", marginL + 2, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text(data.calculatedUntil || "-", marginL + 28, bY);
+
+  y += box1H + 4;
+
+  // ── CONSUMO DA HOSPEDAGEM ─────────────────────────────────────────────────
+  const consumptions = data.consumptionItems || [];
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("CONSUMO DA HOSPEDAGEM", marginL, y);
+
+  y += 3;
+  doc.setFillColor(240, 240, 240);
+  doc.rect(marginL, y, pageWidth - 20, 6, "F");
+  doc.rect(marginL, y, pageWidth - 20, 6, "S");
+  doc.setFontSize(8);
+  doc.text("Data/Hora", marginL + 2, y + 4);
+  doc.text("Descrição", marginL + 42, y + 4);
+  doc.text("Vlr Unit (R$)", marginL + 120, y + 4);
+  doc.text("Qtd", marginL + 150, y + 4);
+  doc.text("Total (R$)", marginR - 2, y + 4, { align: "right" });
+
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  if (consumptions.length === 0) {
+    doc.setFont("helvetica", "italic");
+    doc.text("Nenhum consumo registrado.", marginL + 2, y + 4);
+    doc.setFont("helvetica", "normal");
+    y += 6;
+  } else {
+    for (const item of consumptions) {
+      if (y > 260) {
+        doc.addPage();
+        y = 15;
+      }
+      doc.text(item.dateTime, marginL + 2, y + 4);
+      doc.text(item.description, marginL + 42, y + 4, { maxWidth: 75 });
+      doc.text(`R$ ${item.unitPrice.toFixed(2).replace(".", ",")}`, marginL + 120, y + 4);
+      doc.text(item.quantity.toFixed(2).replace(".", ","), marginL + 150, y + 4);
+      doc.text(`R$ ${item.totalPrice.toFixed(2).replace(".", ",")}`, marginR - 2, y + 4, { align: "right" });
+      y += 5;
+      doc.setLineWidth(0.1);
+      doc.line(marginL, y, marginR, y);
+    }
+  }
+
+  y += 6;
+
+  // ── TOTAIS DA HOSPEDAGEM ──────────────────────────────────────────────────
+  if (y > 230) {
+    doc.addPage();
+    y = 15;
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("TOTAIS DA HOSPEDAGEM", marginL, y);
+  y += 3;
+  doc.rect(marginL, y, pageWidth - 20, 22);
+
+  doc.setFontSize(8);
+  let fy = y + 5;
+  const col1X = marginL + 5;
+  const col2X = marginL + 100;
+
+  doc.setFont("helvetica", "normal");
+  doc.text("Total diárias (R$):", col1X, fy);
+  doc.setFont("helvetica", "bold");
+  doc.text(`R$ ${data.totalDiarias.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col1X + 38, fy);
+
+  doc.setFont("helvetica", "normal");
+  doc.text("Total consumo (R$):", col2X, fy);
+  doc.setFont("helvetica", "bold");
+  doc.text(`R$ ${data.totalConsumo.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col2X + 40, fy);
+
+  fy += 6;
+  doc.setFont("helvetica", "normal");
+  doc.text("Outros débitos (R$):", col1X, fy);
+  doc.setFont("helvetica", "bold");
+  doc.text(`R$ ${data.outrosDebitos.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col1X + 38, fy);
+
+  doc.setFont("helvetica", "normal");
+  doc.text("Total despesas (R$):", col2X, fy);
+  doc.setFont("helvetica", "bold");
+  doc.text(`R$ ${data.totalDespesas.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col2X + 40, fy);
+
+  y += 26;
+
+  // ── PAGAMENTOS ────────────────────────────────────────────────────────────
+  if (y > 240) {
+    doc.addPage();
+    y = 15;
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("PAGAMENTOS", marginL, y);
+  y += 3;
+  doc.rect(marginL, y, pageWidth - 20, 26);
+
+  doc.setFontSize(8);
+  fy = y + 5;
+  doc.setFont("helvetica", "normal");
+  doc.text("Pagamentos (R$):", col1X, fy);
+  doc.setFont("helvetica", "bold");
+  doc.text(`R$ ${data.pagamentosAmount.toFixed(2).replace(".", ",")}`, col1X + 38, fy);
+
+  doc.setFont("helvetica", "normal");
+  doc.text("Descontos (R$):", col2X, fy);
+  doc.setFont("helvetica", "bold");
+  doc.text(`R$ ${data.descontos.toFixed(2).replace(".", ",")}`, col2X + 40, fy);
+
+  fy += 8;
+  doc.setLineWidth(0.3);
+  doc.line(col1X, fy - 2, marginR - 5, fy - 2);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text("SALDO A PAGAR (R$):", col1X, fy + 3);
+  doc.setTextColor(200, 0, 0);
+  doc.text(`R$ ${data.saldoAPagar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col1X + 55, fy + 3);
+  doc.setTextColor(0, 0, 0);
+
+  y += 34;
+
+  // ── ASSINATURA ────────────────────────────────────────────────────────────
+  if (y > 270) {
+    doc.addPage();
+    y = 30;
+  }
+  doc.setLineWidth(0.4);
+  doc.line(pageWidth / 2 - 40, y, pageWidth / 2 + 40, y);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "italic");
+  doc.text("Assinatura do Hóspede", pageWidth / 2, y + 4, { align: "center" });
+
+  return doc.output("datauristring");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF COMPROVANTE DE CONSUMO DA HOSPEDAGEM
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PdfConsumoItemRow {
+  dateTime: string;   // "18/08/2026 13:33"
+  description: string; // nomePdv
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
+export interface PdfConsumoData {
+  hotelName: string;
+  hotelCnpj?: string;
+  hotelAddress?: string;
+  guestName: string;
+  roomNumber?: string;
+  items: PdfConsumoItemRow[];
+}
+
+/**
+ * Gera o PDF do comprovante de consumo da hospedagem (produtos lançados no quarto),
+ * com data/hora, descrição, quantidade, valor unitário, valor total e o total geral.
+ */
+export function generateConsumoPdfBase64(data: PdfConsumoData): string {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginL = 15;
+  const marginR = pageWidth - 15;
+  let y = 18;
+
+  const total = data.items.reduce((acc, i) => acc + (i.totalPrice || 0), 0);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text((data.hotelName || "HOTEL IDEAL").toUpperCase(), marginL, y);
+
+  doc.setFontSize(10);
+  const cnpjStr = `CNPJ: ${data.hotelCnpj || "40.904.811/0001-31"}`;
+  doc.text(cnpjStr, marginR, y, { align: "right" });
+
+  y += 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  const addrStr = data.hotelAddress || "RUA MARECHAL RONDON BAIRRO: ALTO PARANA NUMERO: SN CIDADE: REDENCAO/PA";
+  const addrLines = doc.splitTextToSize(addrStr, marginR - marginL);
+  doc.text(addrLines, marginL, y);
+  y += addrLines.length * 4 + 6;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text("COMPROVANTE DE CONSUMO", pageWidth / 2, y, { align: "center" });
+
+  y += 8;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "bold");
+  doc.text("Hóspede:", marginL, y);
+  doc.setFont("helvetica", "normal");
+  doc.text((data.guestName || "-").toUpperCase(), marginL + 20, y);
+
+  if (data.roomNumber) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Quarto:", marginR - 30, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(data.roomNumber, marginR, y, { align: "right" });
+  }
+
+  y += 8;
+  doc.setFillColor(235, 235, 235);
+  doc.rect(marginL, y, marginR - marginL, 6, "F");
+  doc.rect(marginL, y, marginR - marginL, 6, "S");
+  doc.setFontSize(8);
+  doc.text("Data/Hora", marginL + 2, y + 4);
+  doc.text("Descrição", marginL + 30, y + 4);
+  doc.text("Qtd", marginL + 115, y + 4);
+  doc.text("Vlr Unit. (R$)", marginL + 135, y + 4);
+  doc.text("Total (R$)", marginR - 2, y + 4, { align: "right" });
+
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  for (const item of data.items) {
+    if (y > 265) {
+      doc.addPage();
+      y = 15;
+    }
+    doc.text(item.dateTime, marginL + 2, y + 4);
+    doc.text(item.description, marginL + 30, y + 4, { maxWidth: 82 });
+    doc.text(String(item.quantity), marginL + 115, y + 4);
+    doc.text(item.unitPrice.toLocaleString("pt-BR", { minimumFractionDigits: 2 }), marginL + 135, y + 4);
+    doc.text(item.totalPrice.toLocaleString("pt-BR", { minimumFractionDigits: 2 }), marginR - 2, y + 4, { align: "right" });
+    y += 6;
+    doc.setLineWidth(0.1);
+    doc.line(marginL, y - 1, marginR, y - 1);
+  }
+
+  y += 3;
+  doc.setLineWidth(0.3);
+  doc.line(marginL, y, marginR, y);
+  y += 6;
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text("TOTAL (R$):", marginR - 45, y);
+  doc.text(total.toLocaleString("pt-BR", { minimumFractionDigits: 2 }), marginR, y, { align: "right" });
+
+  return doc.output("datauristring");
+}

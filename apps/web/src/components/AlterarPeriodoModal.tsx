@@ -72,6 +72,7 @@ interface AlterarPeriodoModalProps {
   };
   onSave: (updatedData: {
     checkOutDate: string;
+    checkOutDateISO: string;
     tariffName: string;
     ratePerNight: number;
     totalNights: number;
@@ -253,6 +254,7 @@ export default function AlterarPeriodoModal({
 
     onSave({
       checkOutDate: formatDateTimeDisplay(finalCout),
+      checkOutDateISO: finalCout.toISOString(),
       tariffName: currentTariff.name,
       ratePerNight: currentTariff.ratePerNight,
       totalNights: calculatedNights,
@@ -848,13 +850,21 @@ export default function AlterarPeriodoModal({
                   </div>
                 </div>
 
-                {/* SAVE BUTTON */}
-                <div className="pt-2 flex justify-end">
+                {/* CANCELAR / SALVAR BUTTONS */}
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="flex-1 py-2.5 px-4 rounded border-2 border-slate-400 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold flex items-center justify-center gap-2 shadow transition-all text-sm active:scale-[0.98]"
+                  >
+                    <X className="w-5 h-5" />
+                    Cancelar
+                  </button>
                   <button
                     type="button"
                     onClick={handleSave}
                     disabled={!!reservationConflict}
-                    className={`w-full py-2.5 px-4 rounded text-white font-bold flex items-center justify-center gap-2 shadow-lg transition-all text-sm ${
+                    className={`flex-1 py-2.5 px-4 rounded text-white font-bold flex items-center justify-center gap-2 shadow-lg transition-all text-sm ${
                       reservationConflict
                         ? "bg-slate-400 cursor-not-allowed"
                         : "bg-cyan-600 hover:bg-cyan-700 active:scale-[0.98]"

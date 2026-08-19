@@ -91,6 +91,7 @@ interface CadastroHospedeModalProps {
   onSave: (data: HospedeFormData) => void;
   initialData?: HospedeFormData | null;
   initialTab?: "dados" | "contatos" | "veiculos" | "empresa" | "obs" | "historico";
+  readOnly?: boolean;
 }
 
 interface HospedagemHistoricoItem {
@@ -109,6 +110,7 @@ export default function CadastroHospedeModal({
   onSave,
   initialData,
   initialTab,
+  readOnly = false,
 }: CadastroHospedeModalProps) {
   const toast = useToast();
   const { theme } = useTheme();
@@ -332,8 +334,8 @@ export default function CadastroHospedeModal({
       setDocChoice("CPF");
       setHubFeedback(null);
     }
-    setActiveTab("dados");
-  }, [initialData, isOpen]);
+    setActiveTab(initialTab || "dados");
+  }, [initialData, isOpen, initialTab]);
 
   useEffect(() => {
     if (!isOpen || !initialData?.id) {
@@ -596,7 +598,7 @@ export default function CadastroHospedeModal({
             </div>
             <div>
               <h2 className={`text-xl font-bold ${isDark ? "text-white" : "text-slate-900"}`}>
-                {initialData ? "Editar Ficha de Hóspede" : "Novo Cadastro de Hóspede"}
+                {readOnly ? "Visualizar Ficha de Hóspede" : initialData ? "Editar Ficha de Hóspede" : "Novo Cadastro de Hóspede"}
               </h2>
               <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>
                 WinDev Form: Win_IncHospede / Win_VisCadasHospede (FNRH)
@@ -695,6 +697,7 @@ export default function CadastroHospedeModal({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-6">
+          <fieldset disabled={readOnly} className="contents">
           {/* TAB 1: DADOS PESSOAIS & ENDEREÇO */}
           {activeTab === "dados" && (
             <div className="space-y-6">
@@ -1499,6 +1502,7 @@ export default function CadastroHospedeModal({
               </div>
             </div>
           )}
+          </fieldset>
 
           {/* TAB 6: HISTÓRICO DE HOSPEDAGENS */}
           {activeTab === "historico" && (
@@ -1624,15 +1628,17 @@ export default function CadastroHospedeModal({
                 isDark ? "border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800" : "border-slate-300 text-slate-700 hover:bg-slate-100"
               }`}
             >
-              Cancelar
+              {readOnly ? "Fechar" : "Cancelar"}
             </button>
 
-            <button
-              type="submit"
-              className="px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-sky-600/20 transition"
-            >
-              <Check className="w-4 h-4" /> Salvar Hóspede (FNRH)
-            </button>
+            {!readOnly && (
+              <button
+                type="submit"
+                className="px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-sky-600/20 transition"
+              >
+                <Check className="w-4 h-4" /> Salvar Hóspede (FNRH)
+              </button>
+            )}
           </div>
         </form>
       </div>

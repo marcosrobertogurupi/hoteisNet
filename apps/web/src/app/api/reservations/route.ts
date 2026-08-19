@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
+import { resolveRoomId } from "@/lib/reservationHelpers";
 
 // Calcula até quando o quarto está efetivamente ocupado, com base nas diárias já lançadas na
 // hospedagem (StayCheckin.dailiesCount, incrementado pelo rollover automático de diária). Retorna
@@ -109,26 +110,6 @@ export async function GET(req: NextRequest) {
     console.error("[GET /api/reservations] Erro:", error);
     return NextResponse.json({ success: false, error: error.message });
   }
-}
-
-// Resolve o UUID real do quarto a partir de um id ou número; cria o quarto se não existir.
-async function resolveRoomId(tx: typeof prisma, roomIdOrNumber: string, tenantId: string): Promise<string> {
-  const room = await tx.room.findFirst({
-    where: { OR: [{ id: roomIdOrNumber }, { number: roomIdOrNumber }] },
-  });
-  if (room) return room.id;
-
-  const category = await tx.roomCategory.findFirst({ where: { tenantId } });
-  const created = await tx.room.create({
-    data: {
-      number: String(roomIdOrNumber),
-      floor: "1",
-      status: "VACANT_CLEAN",
-      tenantId,
-      categoryId: category?.id || (await tx.roomCategory.create({ data: { tenantId, name: "STANDARD", dailyPrice: 0, capacity: 2 } })).id,
-    },
-  });
-  return created.id;
 }
 
 // POST /api/reservations — cria uma nova reserva

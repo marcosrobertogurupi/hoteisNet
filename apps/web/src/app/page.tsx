@@ -11,11 +11,13 @@ export default function HomePage() {
       {/* Header */}
       <header className="flex items-center justify-between z-10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#0284C7] to-[#10B981] flex items-center justify-center font-bold text-white shadow-lg shadow-[#0284C7]/20">
-            H
-          </div>
+          <img
+            src="/brand/icon.png"
+            alt="Hoteis.Net"
+            className="w-10 h-10 rounded-xl object-contain shadow-lg shadow-[#0284C7]/20"
+          />
           <div>
-            <span className="text-xl font-bold tracking-tight text-white">HoteisNet <span className="text-[#0284C7] text-xs px-2 py-0.5 rounded-full bg-[#0284C7]/15 border border-[#0284C7]/30">SaaS</span></span>
+            <span className="text-xl font-bold tracking-tight text-white">Hoteis.Net <span className="text-[#0284C7] text-xs px-2 py-0.5 rounded-full bg-[#0284C7]/15 border border-[#0284C7]/30">SaaS</span></span>
             <p className="text-xs text-slate-400">Plataforma Cloud PMS Hoteleira</p>
           </div>
         </div>
@@ -52,7 +54,7 @@ export default function HomePage() {
         </h1>
 
         <p className="text-slate-400 text-base md:text-lg max-w-2xl mx-auto leading-relaxed">
-          Modernização do sistema WinDev HoteisNet para a nuvem. Mapa Gantt interativo de quartos, 
+          Modernização do sistema WinDev Hoteis.Net para a nuvem. Mapa Gantt interativo de quartos,
           FNRH com assinatura digital Touch, faturamento corporativo para empresas e IA de suporte.
         </p>
 

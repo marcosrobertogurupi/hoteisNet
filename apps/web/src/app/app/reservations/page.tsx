@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { CalendarDays, Plus, Search, PhoneCall, Building2, CheckCircle2, Clock, LayoutGrid, List, RefreshCw } from "lucide-react";
+import { CalendarDays, Plus, Layers, Search, PhoneCall, Building2, CheckCircle2, Clock, LayoutGrid, List, RefreshCw } from "lucide-react";
 import ReservationGridMap from "@/components/ReservationGridMap";
 import LancarReservaModal from "@/components/LancarReservaModal";
+import ReservasMultiplasModal from "@/components/ReservasMultiplasModal";
 import { useTheme } from "@/context/ThemeContext";
 import { isReservationExpired } from "@/utils/reservationTolerance";
 
@@ -11,6 +12,7 @@ export default function TenantReservationsPage() {
   const { defaultCheckInTime, reservationToleranceHours } = useTheme();
   const [activeTab, setActiveTab] = useState<"GRID" | "LIST">("GRID");
   const [showLancarModal, setShowLancarModal] = useState(false);
+  const [showMultiplasModal, setShowMultiplasModal] = useState(false);
   const [uazapiSentSuccess, setUazapiSentSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -37,11 +39,11 @@ export default function TenantReservationsPage() {
   // digitando (padrão herdado do projeto original em WinDev: telas de mapa atualizam sozinhas,
   // janelas abertas por cima pausam a atualização).
   useEffect(() => {
-    if (showLancarModal) return;
+    if (showLancarModal || showMultiplasModal) return;
     fetchReservations();
     const interval = setInterval(fetchReservations, 3000);
     return () => clearInterval(interval);
-  }, [fetchReservations, showLancarModal]);
+  }, [fetchReservations, showLancarModal, showMultiplasModal]);
 
   const handleSendUazapiLink = (resId: string) => {
     setUazapiSentSuccess(`Link de Pré-Checkin FNRH enviado com sucesso via WhatsApp Uazapi para a Reserva ${resId}!`);
@@ -99,6 +101,15 @@ export default function TenantReservationsPage() {
           >
             <Plus className="w-4 h-4" />
             Lançar Nova Reserva
+          </button>
+
+          <button
+            onClick={() => setShowMultiplasModal(true)}
+            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg transition-all"
+            title="Lançar várias reservas de uma vez, salvando tudo no final"
+          >
+            <Layers className="w-4 h-4 text-[#00b4d8]" />
+            Reservas Múltiplas
           </button>
 
           <div className="flex items-center rounded-xl bg-[#1E293B] border border-slate-700 p-1">
@@ -253,6 +264,17 @@ export default function TenantReservationsPage() {
       <LancarReservaModal
         isOpen={showLancarModal}
         onClose={() => setShowLancarModal(false)}
+        onSuccess={() => {
+          fetchReservations();
+        }}
+        existingReservations={reservations}
+        tenantId="TNT-01"
+      />
+
+      {/* MODAL DE RESERVAS MÚLTIPLAS */}
+      <ReservasMultiplasModal
+        isOpen={showMultiplasModal}
+        onClose={() => setShowMultiplasModal(false)}
         onSuccess={() => {
           fetchReservations();
         }}

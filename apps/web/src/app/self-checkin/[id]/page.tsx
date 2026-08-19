@@ -314,7 +314,7 @@ export default function SelfCheckinPage() {
 
       {/* Footer info */}
       <footer className="py-2 border-t border-slate-800/60 text-center text-[10px] text-slate-500">
-        HoteisNet PMS SaaS • Conformidade SNRHos Ministério do Turismo
+        Hoteis.Net PMS SaaS • Conformidade SNRHos Ministério do Turismo
       </footer>
     </div>
   );

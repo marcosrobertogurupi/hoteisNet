@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
 
       let addedCount = 0;
       let addedAmount = 0;
+      let addedExtraCount = 0;
       for (let i = 1; i <= daysLate; i++) {
         const refDate = new Date(lastRollover);
         refDate.setUTCDate(refDate.getUTCDate() + i);
@@ -87,6 +88,9 @@ export async function POST(req: NextRequest) {
           });
           addedCount++;
           addedAmount += rate;
+          // Diária lançada em data igual/posterior à previsão original de saída = estadia
+          // ultrapassou o combinado no check-in (equivalente a hpd_qtddiariasextras do legado).
+          if (refDate >= stay.expectedCheckOut) addedExtraCount++;
         } catch {
           // Já existe lançamento para esse dia (constraint única stayCheckinId+referenceDate) — ignora
         }
@@ -100,6 +104,7 @@ export async function POST(req: NextRequest) {
           where: { id: stay.id },
           data: {
             dailiesCount: { increment: addedCount },
+            ...(addedExtraCount > 0 ? { extraDailiesCount: { increment: addedExtraCount } } : {}),
             totalDaily: { increment: addedAmount },
             lastRolloverDate: newLastRollover,
           },

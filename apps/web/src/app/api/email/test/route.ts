@@ -44,17 +44,17 @@ export async function POST(request: Request) {
 
     if (testTarget) {
       await transporter.sendMail({
-        from: `"${fromName || "HoteisNet SaaS"}" <${fromEmail || smtpUser}>`,
+        from: `"${fromName || "Hoteis.Net SaaS"}" <${fromEmail || smtpUser}>`,
         to: testTarget,
-        subject: "🎉 Teste de Conexão SMTP - HoteisNet SaaS",
+        subject: "🎉 Teste de Conexão SMTP - Hoteis.Net SaaS",
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background-color: #ffffff;">
             <div style="text-align: center; border-bottom: 2px solid #0284c7; padding-bottom: 16px; margin-bottom: 20px;">
-              <h2 style="color: #0284c7; margin: 0;">HoteisNet PMS SaaS</h2>
+              <h2 style="color: #0284c7; margin: 0;">Hoteis.Net PMS SaaS</h2>
               <p style="color: #64748b; font-size: 14px; margin-top: 4px;">Validação de Configuração de E-mail</p>
             </div>
             <p style="color: #334155; font-size: 15px; line-height: 1.6;">
-              Olá! Este é um <strong>e-mail de teste</strong> enviado com sucesso a partir das suas configurações de SMTP salvas no <strong>HoteisNet SaaS</strong>.
+              Olá! Este é um <strong>e-mail de teste</strong> enviado com sucesso a partir das suas configurações de SMTP salvas no <strong>Hoteis.Net SaaS</strong>.
             </p>
             <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; margin: 20px 0; font-size: 13px; color: #475569;">
               <p style="margin: 0 0 8px 0;"><strong>Servidor SMTP:</strong> ${smtpHost}:${smtpPort} (${smtpSecure.toUpperCase()})</p>
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
               ✅ Seu servidor de e-mail está pronto para enviar Vouchers, Recibos e Confirmações de Pagamento!
             </p>
             <div style="border-top: 1px solid #e2e8f0; margin-top: 24px; padding-top: 16px; text-align: center; font-size: 12px; color: #94a3b8;">
-              HoteisNet PMS - Sistema de Gestão Hoteleira SaaS
+              Hoteis.Net PMS - Sistema de Gestão Hoteleira SaaS
             </div>
           </div>
         `,

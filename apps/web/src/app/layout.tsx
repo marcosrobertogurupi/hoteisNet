@@ -8,7 +8,7 @@ import { PromptProvider } from "@/context/PromptContext";
 import { SessionProvider } from "@/context/SessionContext";
 
 export const metadata: Metadata = {
-  title: "HoteisNet PMS SaaS | Gestão Hoteleira Inteligente",
+  title: "Hoteis.Net PMS SaaS | Gestão Hoteleira Inteligente",
   description: "Plataforma SaaS para Gestão de Hotéis, Pousadas, Reservas, FNRH Digital e Atendimento WhatsApp com IA.",
 };
 

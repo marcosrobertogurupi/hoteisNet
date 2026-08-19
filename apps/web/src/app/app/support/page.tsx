@@ -42,8 +42,8 @@ export default function TenantSupportPage() {
     },
     {
       sender: "AI_AGENT",
-      senderName: "IA de Suporte HoteisNet (RAG Bot)",
-      content: "Olá Carlos! Analisei nosso histórico de soluções e identificamos que o sistema SNRHos do Governo passa por janelas de manutenção às 10h. O HoteisNet SaaS re-enviará automaticamente a ficha em 15 minutos sem necessidade de re-digitação.",
+      senderName: "IA de Suporte Hoteis.Net (RAG Bot)",
+      content: "Olá Carlos! Analisei nosso histórico de soluções e identificamos que o sistema SNRHos do Governo passa por janelas de manutenção às 10h. O Hoteis.Net SaaS re-enviará automaticamente a ficha em 15 minutos sem necessidade de re-digitação.",
       time: "10:12",
       confidence: 94,
     },
@@ -65,7 +65,7 @@ export default function TenantSupportPage() {
     setTimeout(() => {
       const aiReply = {
         sender: "AI_AGENT",
-        senderName: "IA de Suporte HoteisNet (RAG Bot)",
+        senderName: "IA de Suporte Hoteis.Net (RAG Bot)",
         content: "Entendido! Caso precise de auxílio imediato para faturamento corporativo ou QR Code do WhatsApp Uazapi, também posso te guiar passo a passo.",
         time: "Agora",
         confidence: 92,

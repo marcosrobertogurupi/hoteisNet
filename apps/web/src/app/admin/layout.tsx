@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ShieldCheck, Users, Activity, Cpu, LifeBuoy, DollarSign, LogOut, Bell, Sparkles } from "lucide-react";
+import { Users, Activity, Cpu, LifeBuoy, DollarSign, LogOut, Bell, Sparkles } from "lucide-react";
 
 export default function AdminLayout({
   children,
@@ -13,9 +13,11 @@ export default function AdminLayout({
         <div className="space-y-6">
           {/* Brand Logo SuperAdmin */}
           <div className="flex items-center gap-3 px-2 py-1">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#F59E0B] to-[#D97706] flex items-center justify-center font-bold text-white shadow-md shadow-[#F59E0B]/20">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
+            <img
+              src="/brand/icon.png"
+              alt="Hoteis.Net"
+              className="w-9 h-9 rounded-lg object-contain shadow-md shadow-[#F59E0B]/20"
+            />
             <div>
               <span className="font-semibold text-white text-sm tracking-tight block">SuperAdmin SaaS</span>
               <span className="text-[10px] font-mono text-[#F59E0B] bg-[#F59E0B]/15 px-1.5 py-0.5 rounded border border-[#F59E0B]/30">Plataforma Master</span>

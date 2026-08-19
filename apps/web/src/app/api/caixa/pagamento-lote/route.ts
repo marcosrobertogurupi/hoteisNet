@@ -102,13 +102,21 @@ export async function POST(req: NextRequest) {
       const [charges, paymentsAgg, stayAfter] = await Promise.all([
         prisma.stayCharge.aggregate({ where: { stayCheckinId: stay.id }, _sum: { amount: true } }),
         prisma.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA" }, _sum: { amount: true } }),
-        prisma.stayCheckin.findUnique({ where: { id: stay.id }, select: { discount: true } }),
+        prisma.stayCheckin.findUnique({ where: { id: stay.id }, select: { discount: true, otherDebits: true } }),
       ]);
       const totalDiarias = Number(charges._sum.amount || 0);
       const totalConsumo = Number(stay.totalConsumption);
       const totalPago = Number(paymentsAgg._sum.amount || 0);
       const totalDesconto = Number(stayAfter?.discount || 0);
-      saldoContaQuarto = Math.max(0, totalDiarias + totalConsumo - totalPago - totalDesconto);
+      const totalOutrosDebitos = Number(stayAfter?.otherDebits || 0);
+      saldoContaQuarto = Math.max(0, totalDiarias + totalConsumo + totalOutrosDebitos - totalPago - totalDesconto);
+
+      // Mantém o snapshot financeiro da hospedagem atualizado a cada lançamento de caixa, não só
+      // no check-out final — equivalentes a hpd_totaladiant e hpd_saldopagar do sistema legado.
+      await prisma.stayCheckin.update({
+        where: { id: stay.id },
+        data: { totalAdvance: totalPago, balanceDue: saldoContaQuarto },
+      });
     }
 
     const session = await getSessionUser(req);

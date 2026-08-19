@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
+import { sendUazapiText } from "@/lib/uazapi";
+import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -72,10 +74,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Detalhamento de "Outros Débitos": de qual(is) hospedagem(ns) — quarto/hóspede/operador/data —
+    // veio cada valor somado em stay.otherDebits, para o botão "olho" ao lado do campo no modal de
+    // pagamento poder mostrar a origem em vez de só o total.
+    const debitTransfersIn = await prisma.stayDebitTransfer.findMany({
+      where: { toStayCheckinId: stay.id },
+      orderBy: { createdAt: "desc" },
+      include: { fromStay: { include: { room: true, primaryGuest: true } } },
+    });
+
     return NextResponse.json({
       success: true,
       stay: {
         id: stay.id,
+        roomId: stay.roomId,
         roomNumber: stay.room.number,
         isClosed: stay.isClosed,
         checkInDate: stay.checkInDate,
@@ -85,6 +97,18 @@ export async function GET(req: NextRequest) {
         totalConsumption: Number(stay.totalConsumption),
         discount: Number(stay.discount),
         dailiesCount: stay.dailiesCount,
+        extraDailiesCount: stay.extraDailiesCount,
+        totalAdvance: Number(stay.totalAdvance),
+        balanceDue: Number(stay.balanceDue),
+        otherDebits: Number(stay.otherDebits),
+        otherDebitsDetail: debitTransfersIn.map((t) => ({
+          id: t.id,
+          amount: Number(t.amount),
+          createdAt: t.createdAt,
+          fromRoomNumber: t.fromStay.room.number,
+          fromGuestName: t.fromStay.primaryGuest.fullName,
+          operatorName: t.operatorName,
+        })),
         dailyCharges: stay.charges.map((c) => ({
           referenceDate: c.referenceDate,
           amount: Number(c.amount),
@@ -95,6 +119,7 @@ export async function GET(req: NextRequest) {
           fullName: stay.primaryGuest.fullName,
           cpf: stay.primaryGuest.cpf,
           phone: stay.primaryGuest.phone,
+          whatsappPhone: stay.primaryGuest.whatsappPhone,
           city: stay.primaryGuest.city,
           state: stay.primaryGuest.state,
           street: stay.primaryGuest.street,
@@ -156,6 +181,8 @@ export async function POST(req: NextRequest) {
       initialPayments,
       discount,
       secondaryGuests,
+      adults,
+      children,
     } = body;
 
     const roomTarget = String(roomId || roomNumber || "");
@@ -165,6 +192,8 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    const session = await getSessionUser(req);
 
     const result = await prisma.$transaction(async (tx) => {
       const room = await tx.room.findFirst({
@@ -274,9 +303,13 @@ export async function POST(req: NextRequest) {
           totalDaily: dailyRate || 0,
           totalConsumption: 0,
           discount: discount || 0,
+          adults: adults || 1,
+          children: children || 0,
           dailiesCount: 1,
           lastRolloverDate: checkInAt,
           isClosed: false,
+          checkedInByUserId: session?.userId || null,
+          checkedInByUserName: session?.name || null,
         },
       });
 
@@ -336,6 +369,7 @@ export async function POST(req: NextRequest) {
           });
         }
 
+        let totalPagoCheckin = 0;
         for (const p of validPayments) {
           const valorNum = Number(p.valor);
           const fpg = (p.formaPagamento || "DINHEIRO").toUpperCase();
@@ -353,13 +387,30 @@ export async function POST(req: NextRequest) {
               guestName: String(guestName).toUpperCase(),
             },
           });
+          totalPagoCheckin += valorNum;
         }
+
+        // Sem isto, o snapshot financeiro da hospedagem (totalAdvance/balanceDue) nasce zerado
+        // mesmo com adiantamento já pago no check-in — só seria corrigido no próximo pagamento
+        // avulso ou no checkout, deixando qualquer leitura nesse meio-tempo (ex.: Transferência de
+        // Débitos) com o saldo devedor desatualizado.
+        const saldoAposCheckin = Math.max(0, Number(dailyRate || 0) - totalPagoCheckin - Number(discount || 0));
+        await tx.stayCheckin.update({
+          where: { id: stay.id },
+          data: { totalAdvance: totalPagoCheckin, balanceDue: saldoAposCheckin },
+        });
       }
 
-      return { stayCheckinId: stay.id, guestId: guest.id, reservationId: targetReservationId };
+      return {
+        stayCheckinId: stay.id,
+        guestId: guest.id,
+        reservationId: targetReservationId,
+        roomNumber: room.number,
+        tenantId: room.tenantId,
+        guestPhone: phone || null,
+      };
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
       tenantId: session?.tenantId || DEFAULT_TENANT_ID,
       userId: session?.userId,
@@ -371,6 +422,32 @@ export async function POST(req: NextRequest) {
       terminal: getTerminalName(req),
       ipAddress: getClientIp(req),
     });
+
+    // Mensagem de boas-vindas via WhatsApp — dispara em segundo plano, sem bloquear a resposta
+    // do check-in nem falhar a operação caso o envio dê erro.
+    if (result.guestPhone) {
+      (async () => {
+        try {
+          const [waSettings, tenant] = await Promise.all([
+            prisma.whatsappMessageSetting.findUnique({ where: { tenantId: result.tenantId } }),
+            prisma.tenant.findUnique({ where: { id: result.tenantId }, select: { name: true } }),
+          ]);
+          const enabled = waSettings ? waSettings.checkinWelcomeEnabled : true;
+          if (!enabled) return;
+          const template =
+            waSettings?.checkinWelcomeMessage ||
+            "*Bem-vindo(a) ao {HOTEL}!*\n\nDesejamos a você uma excelente estadia.";
+          const message = renderWhatsappTemplate(template, {
+            hospede: String(guestName).toUpperCase(),
+            hotel: tenant?.name || "",
+            quarto: result.roomNumber,
+          });
+          await sendUazapiText(result.guestPhone!, message, result.tenantId);
+        } catch (err) {
+          console.error("[POST /api/stay/checkin] Falha ao enviar boas-vindas por WhatsApp:", err);
+        }
+      })();
+    }
 
     return NextResponse.json({ success: true, ...result });
   } catch (error: any) {
@@ -389,6 +466,8 @@ export async function PATCH(req: NextRequest) {
     if (!stayCheckinId) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });
     }
+
+    const session = await getSessionUser(req);
 
     const stay = await prisma.$transaction(async (tx) => {
       // Garante, dentro da própria transação, que o saldo devedor está quitado antes de permitir
@@ -411,7 +490,8 @@ export async function PATCH(req: NextRequest) {
       const totalConsumo = Number(stayBeforeClose.totalConsumption);
       const totalPago = Number(paymentsAgg._sum.amount || 0);
       const totalDesconto = Number(stayBeforeClose.discount);
-      const saldoDevedor = totalDiarias + totalConsumo - totalPago - totalDesconto;
+      const totalOutrosDebitos = Number(stayBeforeClose.otherDebits);
+      const saldoDevedor = totalDiarias + totalConsumo + totalOutrosDebitos - totalPago - totalDesconto;
 
       if (saldoDevedor > 0.01) {
         throw new Error(
@@ -419,9 +499,27 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      // Operador de caixa que efetuou o último pagamento da hospedagem = quem "fechou" a conta
+      // financeiramente (equivalente a hpd_operadorfechou), que pode ser diferente do usuário
+      // logado que está clicando em "Check-out" agora (hpd_idusucheckout).
+      const lastPayment = await tx.cashTransaction.findFirst({
+        where: { stayCheckinId, type: "ENTRADA" },
+        orderBy: { createdAt: "desc" },
+        include: { cashRegister: true },
+      });
+
       const closedStay = await tx.stayCheckin.update({
         where: { id: stayCheckinId },
-        data: { isClosed: true, actualCheckOut: new Date() },
+        data: {
+          isClosed: true,
+          actualCheckOut: new Date(),
+          checkedOutByUserId: session?.userId || null,
+          checkedOutByUserName: session?.name || null,
+          closingOperatorId: lastPayment?.cashRegister?.operatorId || null,
+          closingOperatorName: lastPayment?.cashRegister?.operatorName || null,
+          totalAdvance: totalPago,
+          balanceDue: Math.max(0, saldoDevedor),
+        },
       });
 
       await tx.room.update({
@@ -448,7 +546,6 @@ export async function PATCH(req: NextRequest) {
       return closedStay;
     });
 
-    const session = await getSessionUser(req);
     const room = await prisma.room.findUnique({ where: { id: stay.roomId }, select: { number: true, tenantId: true } });
     await logActivity({
       tenantId: session?.tenantId || room?.tenantId || DEFAULT_TENANT_ID,
@@ -461,6 +558,31 @@ export async function PATCH(req: NextRequest) {
       terminal: getTerminalName(req),
       ipAddress: getClientIp(req),
     });
+
+    // Mensagem de checkout via WhatsApp — dispara em segundo plano, sem bloquear a resposta
+    // do checkout nem falhar a operação caso o envio dê erro.
+    const tenantIdForWa = room?.tenantId || DEFAULT_TENANT_ID;
+    (async () => {
+      try {
+        const [waSettings, tenant, guest] = await Promise.all([
+          prisma.whatsappMessageSetting.findUnique({ where: { tenantId: tenantIdForWa } }),
+          prisma.tenant.findUnique({ where: { id: tenantIdForWa }, select: { name: true } }),
+          prisma.guest.findUnique({ where: { id: stay.primaryGuestId }, select: { fullName: true, phone: true, whatsappPhone: true } }),
+        ]);
+        const enabled = waSettings ? waSettings.checkoutEnabled : false;
+        const phone = guest?.whatsappPhone || guest?.phone;
+        if (!enabled || !phone) return;
+        const template = waSettings?.checkoutMessage || "Checkout feito com sucesso. Esperamos que seja breve o seu retorno.";
+        const message = renderWhatsappTemplate(template, {
+          hospede: guest?.fullName || "",
+          hotel: tenant?.name || "",
+          quarto: room?.number || "",
+        });
+        await sendUazapiText(phone, message, tenantIdForWa);
+      } catch (err) {
+        console.error("[PATCH /api/stay/checkin] Falha ao enviar mensagem de checkout por WhatsApp:", err);
+      }
+    })();
 
     return NextResponse.json({ success: true, stayCheckinId: stay.id });
   } catch (error: any) {

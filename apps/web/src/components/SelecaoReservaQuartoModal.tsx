@@ -38,6 +38,7 @@ export interface ReservaItemQuarto {
   checkInDate: string;
   checkOutDate: string;
   checkInTime?: string;
+  checkOutTime?: string;
   checkInDateRaw?: string;
   checkOutDateRaw?: string;
   status: string;
@@ -65,6 +66,7 @@ interface SelecaoReservaQuartoModalProps {
   onSelectLancarPagamento: (reserva: ReservaItemQuarto) => void;
   onEfetuarCheckin?: (reserva: ReservaItemQuarto) => void;
   onLancarNovaReservaQuarto: (roomNumber: string) => void;
+  onSelectAlterarReserva?: (reserva: ReservaItemQuarto) => void;
   loading?: boolean;
 }
 
@@ -79,6 +81,7 @@ export default function SelecaoReservaQuartoModal({
   onSelectLancarPagamento,
   onEfetuarCheckin,
   onLancarNovaReservaQuarto,
+  onSelectAlterarReserva,
   loading = false,
 }: SelecaoReservaQuartoModalProps) {
   const { theme } = useTheme();
@@ -115,7 +118,7 @@ export default function SelecaoReservaQuartoModal({
                 </h2>
               </div>
               <p className={`text-xs mt-0.5 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                {roomCategory} • Selecione qual reserva você deseja alterar ou lançar.
+                {roomCategory} • Dê um duplo clique em uma reserva para alterá-la, ou use as ações abaixo.
               </p>
             </div>
           </div>
@@ -187,7 +190,16 @@ export default function SelecaoReservaQuartoModal({
             reservations.map((res, index) => (
               <div
                 key={res.id || index}
+                onDoubleClick={() => {
+                  if (onSelectAlterarReserva) {
+                    onClose();
+                    onSelectAlterarReserva(res);
+                  }
+                }}
+                title={onSelectAlterarReserva ? "Dê um duplo clique para alterar esta reserva" : undefined}
                 className={`p-5 rounded-2xl border space-y-4 transition-all ${
+                  onSelectAlterarReserva ? "cursor-pointer" : ""
+                } ${
                   isDark
                     ? "bg-slate-900/90 border-slate-800 hover:border-[#0284C7]/50"
                     : "bg-white border-slate-200 shadow-sm hover:border-[#0284C7]/50"

@@ -321,7 +321,7 @@ export default function CadastrosHubPage() {
             <div className="space-y-2">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 text-xs font-semibold">
                 <Sparkles className="w-3.5 h-3.5" />
-                Módulo Base SaaS (Fidelidade WinDev HoteisNet)
+                Módulo Base SaaS (Fidelidade WinDev Hoteis.Net)
               </div>
               <h1 className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">
                 Central de Cadastros

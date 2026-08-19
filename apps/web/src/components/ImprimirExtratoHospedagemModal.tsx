@@ -496,7 +496,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-transparent print:static print:block">
+    <div className="fixed inset-0 z-[65] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-transparent print:static print:block">
       {/* Printable CSS container when window.print() is triggered */}
       {showPrintPreview && (
         <div className="fixed inset-0 bg-white text-black z-[100] p-6 overflow-y-auto print-container print:block hidden font-mono text-xs">

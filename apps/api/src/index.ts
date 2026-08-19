@@ -28,7 +28,7 @@ server.register(caixaRoutes);
 
 // Health check
 server.get("/health", async () => {
-  return { status: "OK", service: "HoteisNet PMS SaaS API Engine", timestamp: new Date().toISOString() };
+  return { status: "OK", service: "Hoteis.Net PMS SaaS API Engine", timestamp: new Date().toISOString() };
 });
 
 // CPF Lookup API Endpoint (Hub do Desenvolvedor Integration Proxy)
@@ -163,7 +163,7 @@ const start = async () => {
   try {
     const port = Number(process.env.PORT) || 4000;
     await server.listen({ port, host: "0.0.0.0" });
-    console.log(`🚀 HoteisNet API rodando na porta ${port}`);
+    console.log(`🚀 Hoteis.Net API rodando na porta ${port}`);
   } catch (err) {
     server.log.error(err);
     process.exit(1);

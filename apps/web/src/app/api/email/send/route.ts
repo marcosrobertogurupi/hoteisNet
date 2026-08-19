@@ -139,7 +139,7 @@ export async function POST(request: Request) {
 
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; text-align: center; font-size: 12px; color: #94a3b8;">
-          <p style="margin: 0;">Enviado por <strong>${fromName}</strong> via HoteisNet PMS SaaS.</p>
+          <p style="margin: 0;">Enviado por <strong>${fromName}</strong> via Hoteis.Net PMS SaaS.</p>
         </div>
       </div>
     `;
