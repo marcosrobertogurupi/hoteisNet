@@ -152,6 +152,9 @@ export default function SubscriberSettingsPage() {
   const [uazDisconnecting, setUazDisconnecting] = useState(false);
   const [uazSavingWebhook, setUazSavingWebhook] = useState(false);
   const [uazStatusMsg, setUazStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  // Feedback do botão "Conectar WebHook" mostrado logo abaixo dele — uazStatusMsg fica no topo da
+  // seção, longe do botão, então sem isso o usuário não via nenhuma resposta ao clicar.
+  const [uazWebhookMsg, setUazWebhookMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Vincular instância já existente (criada fora do HoteisNet, ex. direto no painel da uazapi) —
   // não exige admin token, só servidor + token da própria instância.
@@ -288,7 +291,7 @@ export default function SubscriberSettingsPage() {
 
   const handleSaveUazapiWebhook = async () => {
     setUazSavingWebhook(true);
-    setUazStatusMsg(null);
+    setUazWebhookMsg(null);
     try {
       const res = await fetch("/api/uazapi/instance/webhook", {
         method: "POST",
@@ -297,12 +300,12 @@ export default function SubscriberSettingsPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setUazStatusMsg({ type: "error", text: data.error || "Erro ao configurar webhook." });
+        setUazWebhookMsg({ type: "error", text: data.error || "Erro ao configurar webhook." });
         return;
       }
-      setUazStatusMsg({ type: "success", text: "Webhook configurado com sucesso!" });
+      setUazWebhookMsg({ type: "success", text: "Webhook configurado com sucesso!" });
     } catch (err: any) {
-      setUazStatusMsg({ type: "error", text: err.message || "Erro de rede ao configurar webhook." });
+      setUazWebhookMsg({ type: "error", text: err.message || "Erro de rede ao configurar webhook." });
     } finally {
       setUazSavingWebhook(false);
     }
@@ -1637,6 +1640,12 @@ export default function SubscriberSettingsPage() {
               >
                 {uazSavingWebhook ? "Salvando..." : "Conectar WebHook"}
               </button>
+              {uazWebhookMsg && (
+                <p className={`text-[11px] font-semibold flex items-center gap-1.5 ${uazWebhookMsg.type === "success" ? "text-emerald-400" : "text-red-400"}`}>
+                  {uazWebhookMsg.type === "success" ? <Check className="w-3.5 h-3.5" /> : null}
+                  {uazWebhookMsg.text}
+                </p>
+              )}
             </div>
 
             <div className={`pt-3 border-t ${theme.borderColor}`}>
