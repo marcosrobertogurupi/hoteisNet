@@ -659,6 +659,8 @@ model WhatsappMessage {
   type       String       // "text" | "document" | "media"
   content    String?      // texto da mensagem ou legenda (caption) do documento
   filename   String?
+  mediaUrl   String?      // URL do anexo (imagem/documento/áudio/vídeo) recebido do hóspede via webhook
+  mimeType   String?      // tipo bruto do anexo reportado pela uazapi (image, document, audio, video, ptt, sticker)
   senderName String?      // nome de perfil do WhatsApp de quem enviou (preenchido em mensagens IN)
   externalId String?      // messageid da uazapi — evita duplicar em reentregas de webhook
   read       Boolean      @default(true) // mensagens IN começam false até o operador abrir a conversa

@@ -63,10 +63,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
       stayId = match?.id || null;
     }
 
-    // data.type é o tipo simplificado ("text", "image", "document", ...); data.messageType é o
-    // nome bruto do protocolo (ex: "Conversation", "ExtendedTextMessage") e não deve ser usado
-    // para essa checagem.
-    const type = (data?.type || "text") === "text" ? "text" : "media";
+    // data.type é o tipo simplificado ("text", "image", "document", "video", "audio", "ptt",
+    // "sticker", ...); data.messageType é o nome bruto do protocolo (ex: "Conversation",
+    // "ExtendedTextMessage") e não deve ser usado para essa checagem.
+    const rawType: string = data?.type || "text";
+    const type = rawType === "text" ? "text" : "media";
+    const mediaUrl: string | null = data?.fileURL || data?.fileUrl || data?.url || null;
+    // DEBUG TEMPORÁRIO: enquanto o nome real do campo de URL de mídia não é confirmado, grava o
+    // payload bruto no content para inspeção via banco (será removido assim que identificado).
+    const debugContent = type === "media" && !mediaUrl ? `[DEBUG-RAW] ${JSON.stringify(data)}` : null;
 
     await prisma.whatsappMessage.create({
       data: {
@@ -75,8 +80,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
         phone,
         direction: "IN",
         type,
-        content: data?.text || null,
-        filename: data?.fileURL || null,
+        content: debugContent || data?.text || data?.caption || null,
+        filename: data?.fileName || data?.filename || null,
+        mediaUrl,
+        mimeType: mediaUrl ? rawType : null,
         senderName: data?.senderName || null,
         externalId,
         read: false,

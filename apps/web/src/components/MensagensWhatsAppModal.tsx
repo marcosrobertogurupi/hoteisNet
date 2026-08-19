@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound } from "lucide-react";
+import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound, Download } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { generateExtratoPdfBase64, generateResumoPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
 import type { ExtratoRoomData } from "@/components/ImprimirExtratoHospedagemModal";
@@ -16,6 +16,8 @@ interface SentMessage {
   direction: "IN" | "OUT";
   content: string | null;
   filename: string | null;
+  mediaUrl: string | null;
+  mimeType: string | null;
   senderName: string | null;
   createdAt: string;
 }
@@ -438,6 +440,8 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
           ) : (
             messages.map((m) => {
               const isIn = m.direction === "IN";
+              const isImage = m.mimeType === "image";
+              const hasAttachment = !!m.mediaUrl;
               return (
                 <div key={m.id} className={`flex ${isIn ? "justify-start" : "justify-end"}`}>
                   <div
@@ -454,6 +458,24 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
                       </span>
                       <span className={`text-[10px] ${isIn ? theme.textMuted : "text-emerald-100"}`}>{new Date(m.createdAt).toLocaleString("pt-BR")}</span>
                     </div>
+                    {hasAttachment && isImage && (
+                      <a href={m.mediaUrl!} target="_blank" rel="noopener noreferrer" className="block mt-1 mb-1">
+                        <img src={m.mediaUrl!} alt={m.filename || "Imagem recebida"} className="max-h-48 rounded-lg border border-black/10 object-contain" />
+                      </a>
+                    )}
+                    {hasAttachment && !isImage && (
+                      <a
+                        href={m.mediaUrl!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`flex items-center gap-1.5 mt-1 mb-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold underline-offset-2 hover:underline ${
+                          isIn ? (theme.isDark ? "bg-slate-700 text-slate-100" : "bg-white text-slate-900") : "bg-emerald-700 text-white"
+                        }`}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        {m.filename || "Abrir anexo"}
+                      </a>
+                    )}
                     {m.content && <p>{m.content}</p>}
                   </div>
                 </div>
