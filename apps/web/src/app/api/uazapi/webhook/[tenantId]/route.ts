@@ -1,12 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-// Compara só os últimos 10-11 dígitos (DDD + número), ignorando DDI/formatação — números salvos no
-// cadastro do hóspede nem sempre têm o mesmo prefixo/pontuação que o chatid recebido da uazapi.
-function phoneTail(phone: string): string {
-  const digits = String(phone || "").replace(/\D/g, "");
-  return digits.slice(-11);
-}
+import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 
 // POST /api/uazapi/webhook/[tenantId] — recebe eventos da uazapi (configurados em Configurações >
 // API Whatsapp > URL WebHook). Só processa mensagens recebidas do hóspede (fromMe=false); mensagens
@@ -43,20 +37,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
       if (existing) return NextResponse.json({ success: true, duplicate: true });
     }
 
-    // Encontra a hospedagem em aberto do tenant cujo hóspede tem esse telefone (comparando só os
-    // últimos dígitos, já que DDI/formatação podem variar entre o cadastro e o chatid da uazapi).
-    const tail = phoneTail(phone);
+    // Encontra a hospedagem em aberto do tenant cujo hóspede tem esse telefone. Compara por
+    // interseção de variantes (com/sem o 9º dígito), não igualdade direta — o chatid que a uazapi
+    // entrega às vezes vem sem o 9 mesmo quando o cadastro do hóspede foi salvo com ele (ou
+    // vice-versa), o que faria uma comparação exata de dígitos nunca bater.
+    const chatVariants = brazilPhoneVariants(phone);
     let stayId: string | null = null;
-    if (tail) {
+    if (chatVariants.length > 0) {
       const openStays = await prisma.stayCheckin.findMany({
         where: { tenantId, isClosed: false },
         orderBy: { checkInDate: "desc" },
         include: { primaryGuest: { select: { phone: true, whatsappPhone: true } } },
       });
       const match = openStays.find((s) => {
-        const p1 = phoneTail(s.primaryGuest?.phone || "");
-        const p2 = phoneTail(s.primaryGuest?.whatsappPhone || "");
-        return (p1 && p1 === tail) || (p2 && p2 === tail);
+        const guestVariants = [
+          ...brazilPhoneVariants(s.primaryGuest?.phone || ""),
+          ...brazilPhoneVariants(s.primaryGuest?.whatsappPhone || ""),
+        ];
+        return guestVariants.some((v) => chatVariants.includes(v));
       });
       stayId = match?.id || null;
     }

@@ -34,3 +34,31 @@ export function normalizeUazapiPhone(phone: string): string {
   }
   return clean;
 }
+
+// Gera as variações possíveis (com e sem o 9º dígito) de um telefone celular brasileiro, sem DDI.
+// Números celulares no Brasil "deveriam" ter 9 dígitos (DDD + 9 + 8 dígitos), mas várias contas de
+// WhatsApp continuam registradas na forma antiga de 8 dígitos (sem o 9) — o chatid que a uazapi
+// entrega no webhook às vezes vem em um formato e o telefone salvo no cadastro do hóspede em
+// outro, então uma comparação direta de dígitos falha silenciosamente. Retorna sempre DDD+8 e
+// DDD+9 (quando aplicável), para que a busca por hospedagem compare por interseção, não igualdade.
+export function brazilPhoneVariants(phone: string): string[] {
+  let digits = String(phone || "").replace(/\D/g, "");
+  if (digits.startsWith("55") && digits.length > 11) {
+    digits = digits.slice(2);
+  }
+  if (digits.length < 10 || digits.length > 11) {
+    return digits ? [digits] : [];
+  }
+
+  const ddd = digits.slice(0, 2);
+  const subscriber = digits.slice(2);
+  const variants = new Set<string>([ddd + subscriber]);
+
+  if (subscriber.length === 9 && subscriber.startsWith("9")) {
+    variants.add(ddd + subscriber.slice(1));
+  } else if (subscriber.length === 8) {
+    variants.add(ddd + "9" + subscriber);
+  }
+
+  return Array.from(variants);
+}
