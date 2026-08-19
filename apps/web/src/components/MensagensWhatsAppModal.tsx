@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { generateExtratoPdfBase64, generateResumoPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
@@ -68,6 +68,8 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
       .finally(() => setLoadingProfile(false));
   }, [isOpen, phone, tenantId]);
 
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
   const loadMessages = (showLoading = false) => {
     if (!roomData.stayId) return;
     if (showLoading) setLoadingMessages(true);
@@ -103,6 +105,12 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, roomData.stayId]);
+
+  // Mantém a última mensagem sempre visível — rola a conversa para o fim toda vez que a lista muda
+  // (nova mensagem enviada, recebida via polling, ou histórico inicial carregado).
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages]);
 
   const logSentMessage = async (type: string, content: string | null, filename: string | null) => {
     try {
@@ -317,7 +325,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4">
-      <div className={`w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] border ${theme.isDark ? "bg-[#0F172A] border-slate-800" : "bg-white border-slate-200"}`}>
+      <div className={`w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[88vh] max-h-[88vh] border ${theme.isDark ? "bg-[#0F172A] border-slate-800" : "bg-white border-slate-200"}`}>
         {/* HEADER */}
         <div className={`px-4 py-3 flex items-center justify-between border-b ${theme.isDark ? "border-slate-800 bg-slate-900/60" : "border-slate-200 bg-slate-50"}`}>
           <div className="flex items-center gap-2">
@@ -453,6 +461,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
               );
             })
           )}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* COMPOR MENSAGEM */}
