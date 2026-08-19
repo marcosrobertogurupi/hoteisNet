@@ -12,14 +12,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
     const body = await req.json().catch(() => null);
     if (!body) return NextResponse.json({ success: true }); // uazapi só precisa de um 200
 
-    const data = body.data || body;
+    // Formato real de entrega da uazapi: { EventType: "messages", message: {...}, chat: {...},
+    // instanceName, owner, token }. A documentação OpenAPI descreve um envelope genérico
+    // { event, instance, data } que NÃO é o que a uazapi de fato envia — por isso o payload real
+    // (confirmado testando com webhook.site) precede qualquer suposição da doc.
+    const data = body.message || body.data || body;
     const fromMe = !!data?.fromMe;
     const wasSentByApi = !!data?.wasSentByApi;
     if (fromMe || wasSentByApi) {
       return NextResponse.json({ success: true, ignored: "outbound" });
     }
 
-    const chatId: string = data?.chatid || data?.sender || "";
+    const chatId: string = data?.chatid || data?.sender_pn || data?.sender || "";
     const isGroup = !!data?.isGroup || chatId.includes("@g.us");
     if (!chatId || isGroup) {
       return NextResponse.json({ success: true, ignored: "no-chatid-or-group" });
@@ -59,8 +63,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
       stayId = match?.id || null;
     }
 
-    const messageType: string = data?.messageType || "text";
-    const type = messageType === "text" || messageType === "extendedTextMessage" ? "text" : "media";
+    // data.type é o tipo simplificado ("text", "image", "document", ...); data.messageType é o
+    // nome bruto do protocolo (ex: "Conversation", "ExtendedTextMessage") e não deve ser usado
+    // para essa checagem.
+    const type = (data?.type || "text") === "text" ? "text" : "media";
 
     await prisma.whatsappMessage.create({
       data: {
