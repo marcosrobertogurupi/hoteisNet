@@ -1,8 +1,14 @@
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
+
+// Aceita tanto o client Prisma completo quanto o client de dentro de uma `prisma.$transaction`
+// (que não expõe $connect/$disconnect/$transaction/$extends) — as duas formas são usadas nas
+// chamadas destas funções.
+type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
 // Resolve o UUID real do quarto a partir de um id ou número; cria o quarto se não existir.
 export async function resolveRoomId(
-  tx: typeof prisma,
+  tx: PrismaClientOrTx,
   roomIdOrNumber: string,
   tenantId: string
 ): Promise<string> {
@@ -32,7 +38,7 @@ export async function resolveRoomId(
 // uma validação de UI — duas reservas do mesmo lote para o mesmo quarto também são pegas aqui,
 // pois cada `create` anterior já fica visível para os `findFirst` seguintes dentro da mesma tx.
 export async function findConflictingReservation(
-  tx: typeof prisma,
+  tx: PrismaClientOrTx,
   roomId: string,
   checkInDate: Date,
   checkOutDate: Date,
