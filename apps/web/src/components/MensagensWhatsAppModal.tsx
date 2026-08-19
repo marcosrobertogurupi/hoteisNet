@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound, Download } from "lucide-react";
+import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound, Download, Image as ImageIcon } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { generateExtratoPdfBase64, generateResumoPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
 import type { ExtratoRoomData } from "@/components/ImprimirExtratoHospedagemModal";
@@ -123,32 +123,60 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   }, [messages]);
 
   // A URL de mídia que chega no webhook é a original criptografada do WhatsApp e não pode ser
-  // exibida diretamente — para cada mensagem de anexo ainda sem mediaUrl resolvido, busca sob
-  // demanda a URL pública descriptografada via api/uazapi/messages/download. attemptedDownloadsRef
-  // evita repetir a chamada a cada ciclo do polling para uma mensagem que já falhou ou já foi resolvida.
-  const attemptedDownloadsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const pending = messages.filter(
-      (m) => m.type === "media" && !m.mediaUrl && m.externalId && !attemptedDownloadsRef.current.has(m.id)
-    );
-    pending.forEach((m) => {
-      attemptedDownloadsRef.current.add(m.id);
-      fetch("/api/uazapi/messages/download", {
+  // exibida diretamente — a URL pública descriptografada só é buscada quando o operador clica em
+  // "Ver anexo" (handleViewAttachment), não automaticamente, para não baixar de anexos que
+  // ninguém vai abrir. openAttachmentIds controla quais anexos de imagem estão expandidos na tela.
+  const [openAttachmentIds, setOpenAttachmentIds] = useState<Set<string>>(new Set());
+  const [loadingAttachmentIds, setLoadingAttachmentIds] = useState<Set<string>>(new Set());
+
+  const handleViewAttachment = async (m: SentMessage) => {
+    const isImage = m.mimeType === "image" || !!m.mimeType?.startsWith("image/");
+
+    if (m.mediaUrl) {
+      if (isImage) {
+        setOpenAttachmentIds((prev) => {
+          const next = new Set(prev);
+          next.has(m.id) ? next.delete(m.id) : next.add(m.id);
+          return next;
+        });
+      } else {
+        window.open(m.mediaUrl, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+
+    if (!m.externalId || loadingAttachmentIds.has(m.id)) return;
+    setLoadingAttachmentIds((prev) => new Set(prev).add(m.id));
+    try {
+      const res = await fetch("/api/uazapi/messages/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messageId: m.externalId, tenantId }),
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.success) {
-            setMessages((prev) =>
-              prev.map((pm) => (pm.id === m.id ? { ...pm, mediaUrl: data.fileURL, mimeType: data.mimetype } : pm))
-            );
-          }
-        })
-        .catch(() => {});
-    });
-  }, [messages, tenantId]);
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        setMessages((prev) =>
+          prev.map((pm) => (pm.id === m.id ? { ...pm, mediaUrl: data.fileURL, mimeType: data.mimetype } : pm))
+        );
+        const resolvedIsImage = data.mimetype === "image" || !!data.mimetype?.startsWith("image/");
+        if (resolvedIsImage) {
+          setOpenAttachmentIds((prev) => new Set(prev).add(m.id));
+        } else if (data.fileURL) {
+          window.open(data.fileURL, "_blank", "noopener,noreferrer");
+        }
+      } else {
+        setStatusMsg({ type: "error", text: data.error || "Falha ao baixar anexo." });
+      }
+    } catch {
+      setStatusMsg({ type: "error", text: "Falha ao baixar anexo." });
+    } finally {
+      setLoadingAttachmentIds((prev) => {
+        const next = new Set(prev);
+        next.delete(m.id);
+        return next;
+      });
+    }
+  };
 
   const logSentMessage = async (type: string, content: string | null, filename: string | null) => {
     try {
@@ -473,7 +501,8 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
             messages.map((m) => {
               const isIn = m.direction === "IN";
               const isImage = m.mimeType === "image" || !!m.mimeType?.startsWith("image/");
-              const hasAttachment = !!m.mediaUrl;
+              const isOpenImage = isImage && !!m.mediaUrl && openAttachmentIds.has(m.id);
+              const isLoadingAttachment = loadingAttachmentIds.has(m.id);
               return (
                 <div key={m.id} className={`flex ${isIn ? "justify-start" : "justify-end"}`}>
                   <div
@@ -490,23 +519,40 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
                       </span>
                       <span className={`text-[10px] ${isIn ? theme.textMuted : "text-emerald-100"}`}>{new Date(m.createdAt).toLocaleString("pt-BR")}</span>
                     </div>
-                    {hasAttachment && isImage && (
-                      <a href={m.mediaUrl!} target="_blank" rel="noopener noreferrer" className="block mt-1 mb-1">
-                        <img src={m.mediaUrl!} alt={m.filename || "Imagem recebida"} className="max-h-48 rounded-lg border border-black/10 object-contain" />
-                      </a>
-                    )}
-                    {hasAttachment && !isImage && (
-                      <a
-                        href={m.mediaUrl!}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className={`flex items-center gap-1.5 mt-1 mb-1 px-2 py-1.5 rounded-lg text-[11px] font-semibold underline-offset-2 hover:underline ${
-                          isIn ? (theme.isDark ? "bg-slate-700 text-slate-100" : "bg-white text-slate-900") : "bg-emerald-700 text-white"
-                        }`}
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        {m.filename || "Abrir anexo"}
-                      </a>
+                    {m.type === "media" && (
+                      <div className="mt-1 mb-1">
+                        <button
+                          onClick={() => handleViewAttachment(m)}
+                          disabled={isLoadingAttachment}
+                          className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-60 ${
+                            isIn
+                              ? theme.isDark ? "bg-slate-700 hover:bg-slate-600 text-slate-100" : "bg-white hover:bg-slate-50 text-slate-900 border border-slate-300"
+                              : "bg-emerald-700 hover:bg-emerald-800 text-white"
+                          }`}
+                        >
+                          {isLoadingAttachment ? (
+                            <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                          ) : isImage ? (
+                            <ImageIcon className="w-3.5 h-3.5" />
+                          ) : (
+                            <Download className="w-3.5 h-3.5" />
+                          )}
+                          {isLoadingAttachment
+                            ? "Baixando..."
+                            : isOpenImage
+                            ? "Ocultar anexo"
+                            : isImage
+                            ? "Ver anexo"
+                            : m.filename || "Abrir anexo"}
+                        </button>
+                        {isOpenImage && (
+                          <img
+                            src={m.mediaUrl!}
+                            alt={m.filename || "Imagem recebida"}
+                            className="max-h-48 rounded-lg border border-black/10 object-contain mt-1.5"
+                          />
+                        )}
+                      </div>
                     )}
                     {m.content && <p>{m.content}</p>}
                   </div>
