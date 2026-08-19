@@ -97,10 +97,10 @@ export default function Sidebar() {
             setIsHovered(false);
           }
         }}
-        className={`fixed top-0 left-0 bottom-0 z-40 border-r flex flex-col justify-between p-3 transition-all duration-300 ease-in-out shadow-2xl print:hidden ${theme.bgSidebar}`}
+        className={`fixed top-0 left-0 bottom-0 z-40 border-r flex flex-col justify-between p-3 overflow-y-auto overflow-x-hidden transition-all duration-300 ease-in-out shadow-2xl print:hidden ${theme.bgSidebar}`}
         style={{ width: isExpanded ? "16rem" : "4rem" }}
       >
-        <div className="space-y-6">
+        <div className="space-y-6 shrink-0">
           {/* Header & Brand Logo */}
           <div className="flex items-center justify-between px-1 py-1">
             <div className="flex items-center gap-3 overflow-hidden">

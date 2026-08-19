@@ -6,6 +6,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
 import { useSession } from "@/context/SessionContext";
 import CadastroHospedeModal, { HospedeFormData } from "@/components/CadastroHospedeModal";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 interface VehicleResult {
   id: string;
@@ -87,6 +88,7 @@ export default function BuscaVeiculosPage() {
   const [searchInput, setSearchInput] = useState("");
   const [vehicles, setVehicles] = useState<VehicleResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const searchTimer = useRef<NodeJS.Timeout | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -106,6 +108,7 @@ export default function BuscaVeiculosPage() {
         toast.error("Erro ao buscar veículos.");
       } finally {
         setLoading(false);
+        setIsLoadingInitial(false);
       }
     },
     [tenantId, toast]
@@ -164,6 +167,7 @@ export default function BuscaVeiculosPage() {
 
   return (
     <div className="space-y-6">
+      <LoadingOverlay show={isLoadingInitial} message="Buscando veículos..." submessage="Estamos carregando os veículos cadastrados mais recentes." />
       <div className="flex items-center gap-3">
         <div
           style={{ backgroundColor: `${theme.primaryColor}22` }}

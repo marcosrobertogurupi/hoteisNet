@@ -255,7 +255,7 @@ export default function ApartamentosPage() {
           <span className={`text-xs font-mono px-3 py-1 rounded-full font-bold border ${
             isDark ? "bg-teal-500/10 text-teal-400 border-teal-500/20" : "bg-teal-50 text-teal-700 border-teal-200"
           }`}>
-            WinDev Win_Apartamentos
+            Dados Sincronizados
           </span>
         </div>
 

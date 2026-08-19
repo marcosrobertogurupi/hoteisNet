@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Package, ArrowRightLeft, Building2, ShoppingBag, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Filter, ScanBarcode, Trash2, X, Loader2 } from "lucide-react";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 interface ProductBarcode {
   id: string;
@@ -14,6 +15,7 @@ export default function TenantStockPage() {
   const [transferQty, setTransferQty] = useState(10);
   const [targetPos, setTargetPos] = useState("PDV_FRIGOBAR");
   const [notification, setNotification] = useState<string | null>(null);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true);
 
   const [products, setProducts] = useState<any[]>([]);
 
@@ -81,6 +83,8 @@ export default function TenantStockPage() {
       });
     } catch (err) {
       console.warn("[ControleEstoque] Erro na sincronização transparente:", err);
+    } finally {
+      setIsLoadingProducts(false);
     }
   }, []);
 
@@ -184,6 +188,8 @@ export default function TenantStockPage() {
 
   return (
     <div className="space-y-6">
+      <LoadingOverlay show={isLoadingProducts} message="Buscando estoque..." submessage="Estamos carregando os dados mais recentes do estoque." />
+
       {/* Banner */}
       <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4">
         <div>

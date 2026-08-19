@@ -41,10 +41,22 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   const [phoneVisible, setPhoneVisible] = useState(true);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [hasWhatsapp, setHasWhatsapp] = useState<boolean | null>(null);
+  const [profileCheckFailed, setProfileCheckFailed] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [profileImageExpanded, setProfileImageExpanded] = useState(false);
+  // Tamanho do lightbox calculado a partir da resolução real da foto (2x o tamanho natural,
+  // limitado pela tela) — um valor fixo em CSS ampliava demais fotos pequenas (baixa resolução
+  // do preview da uazapi), deixando a imagem borrada.
+  const [expandedImgSize, setExpandedImgSize] = useState<{ w: number; h: number } | null>(null);
 
   const [messages, setMessages] = useState<SentMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  // Indica falhas consecutivas do polling de mensagens (histórico desatualizado) sem
+  // interromper a tela — a instância uazapi pode ficar instável e o usuário precisa saber que
+  // o que está vendo pode não refletir mensagens recentes, em vez de simplesmente parar de
+  // atualizar sem aviso nenhum.
+  const [connectionUnstable, setConnectionUnstable] = useState(false);
+  const consecutiveLoadFailuresRef = useRef(0);
 
   const [messageText, setMessageText] = useState("");
   const [sendingText, setSendingText] = useState(false);
@@ -54,9 +66,15 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   const phone = roomData.phone || "";
 
   useEffect(() => {
-    if (!isOpen || !phone) return;
+    if (!isOpen) {
+      setProfileImageExpanded(false);
+      setExpandedImgSize(null);
+      return;
+    }
+    if (!phone) return;
 
     setLoadingProfile(true);
+    setProfileCheckFailed(false);
     fetch("/api/uazapi/profile-picture", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -66,8 +84,12 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
       .then((data) => {
         setHasWhatsapp(!!data.hasWhatsapp);
         setProfileImage(data.image || null);
+        setProfileCheckFailed(!data.hasWhatsapp && !!data.checkFailed);
       })
-      .catch(() => setHasWhatsapp(false))
+      .catch(() => {
+        setHasWhatsapp(false);
+        setProfileCheckFailed(true);
+      })
       .finally(() => setLoadingProfile(false));
   }, [isOpen, phone, tenantId]);
 
@@ -80,9 +102,21 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
     fetch(`/api/uazapi/messages?stayId=${roomData.stayId}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.success) setMessages(data.messages || []);
+        if (data.success) {
+          setMessages(data.messages || []);
+          consecutiveLoadFailuresRef.current = 0;
+          setConnectionUnstable(false);
+        } else {
+          throw new Error(data.error || "Falha ao carregar mensagens.");
+        }
       })
-      .catch(() => {})
+      .catch(() => {
+        // Só sinaliza instabilidade após falhas consecutivas — uma falha isolada de rede não
+        // deve gerar alarme desnecessário, mas o usuário precisa saber quando o histórico
+        // exibido pode estar desatualizado por causa da instância uazapi.
+        consecutiveLoadFailuresRef.current += 1;
+        if (consecutiveLoadFailuresRef.current >= 2) setConnectionUnstable(true);
+      })
       .finally(() => setLoadingMessages(false));
   };
 
@@ -100,6 +134,8 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   // polling curto para exibir em tempo quase real as respostas que chegarem do hóspede.
   useEffect(() => {
     if (!isOpen) return;
+    consecutiveLoadFailuresRef.current = 0;
+    setConnectionUnstable(false);
     loadMessages(true);
     markMessagesRead();
     const interval = setInterval(() => {
@@ -117,6 +153,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   // justOpenedRef força a ida ao fim uma única vez quando a janela é aberta.
   const isNearBottomRef = useRef(true);
   const justOpenedRef = useRef(false);
+  const forceScrollRef = useRef(false);
 
   useEffect(() => {
     if (isOpen) justOpenedRef.current = true;
@@ -136,8 +173,9 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    const shouldScroll = justOpenedRef.current || isNearBottomRef.current;
+    const shouldScroll = justOpenedRef.current || forceScrollRef.current || isNearBottomRef.current;
     justOpenedRef.current = false;
+    forceScrollRef.current = false;
     if (!shouldScroll) return;
     requestAnimationFrame(() => {
       el.scrollTop = el.scrollHeight;
@@ -208,6 +246,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tenantId, stayId: roomData.stayId, phone, type, content, filename }),
       });
+      forceScrollRef.current = true;
       loadMessages();
     } catch {
       // log local é best-effort — não deve bloquear o fluxo de envio
@@ -431,7 +470,10 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
           {/* Dados da hospedagem */}
           <div className="flex items-center gap-3">
             {/* Foto */}
-            <div className={`w-11 h-11 shrink-0 rounded-full overflow-hidden flex items-center justify-center border-2 ${hasWhatsapp ? "border-emerald-500" : "border-slate-500"} ${theme.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+            <div
+              onClick={() => profileImage && setProfileImageExpanded(true)}
+              className={`w-11 h-11 shrink-0 rounded-full overflow-hidden flex items-center justify-center border-2 ${hasWhatsapp ? "border-emerald-500" : "border-slate-500"} ${theme.isDark ? "bg-slate-800" : "bg-slate-200"} ${profileImage ? "cursor-pointer" : ""}`}
+            >
               {loadingProfile ? (
                 <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
               ) : profileImage ? (
@@ -445,8 +487,13 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold truncate">{roomData.guestName || "-"}</span>
-                <span className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${hasWhatsapp ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}>
-                  {loadingProfile ? "..." : hasWhatsapp ? "Ativo" : "Indisponível"}
+                <span
+                  title={profileCheckFailed ? "Não foi possível confirmar com a instância uazapi — pode estar instável." : undefined}
+                  className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
+                    hasWhatsapp ? "bg-emerald-500/15 text-emerald-500" : profileCheckFailed ? "bg-amber-500/15 text-amber-500" : "bg-slate-500/15 text-slate-500"
+                  }`}
+                >
+                  {loadingProfile ? "..." : hasWhatsapp ? "Ativo" : profileCheckFailed ? "Verificação indisponível" : "Indisponível"}
                 </span>
               </div>
               <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] ${theme.textMuted}`}>
@@ -494,6 +541,12 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
         {statusMsg && (
           <div className={`mx-4 mt-3 px-3 py-2 rounded-lg text-xs font-semibold ${statusMsg.type === "success" ? "bg-emerald-500/15 text-emerald-500" : "bg-red-500/15 text-red-500"}`}>
             {statusMsg.text}
+          </div>
+        )}
+
+        {connectionUnstable && (
+          <div className="mx-4 mt-3 px-3 py-2 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-500">
+            Conexão instável com o servidor — o histórico de mensagens pode estar desatualizado. Tentando reconectar automaticamente...
           </div>
         )}
 
@@ -618,6 +671,35 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* LIGHTBOX: amplia a foto de perfil ao clicar, como no próprio WhatsApp */}
+      {profileImageExpanded && profileImage && (
+        <div
+          onClick={() => setProfileImageExpanded(false)}
+          className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center p-6 cursor-zoom-out"
+        >
+          <button
+            onClick={() => setProfileImageExpanded(false)}
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img
+            src={profileImage}
+            alt={roomData.guestName}
+            onClick={(e) => e.stopPropagation()}
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              const maxW = window.innerWidth * 0.8;
+              const maxH = window.innerHeight * 0.8;
+              const scale = Math.min(2, maxW / img.naturalWidth, maxH / img.naturalHeight);
+              setExpandedImgSize({ w: img.naturalWidth * scale, h: img.naturalHeight * scale });
+            }}
+            style={expandedImgSize ? { width: expandedImgSize.w, height: expandedImgSize.h } : undefined}
+            className={`rounded-xl object-contain shadow-2xl cursor-default ${expandedImgSize ? "" : "opacity-0"}`}
+          />
+        </div>
+      )}
     </div>
   );
 };

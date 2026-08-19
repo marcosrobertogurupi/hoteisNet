@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTenantUazapiCredentials, normalizeUazapiPhone } from "@/lib/uazapiInstance";
+import { getTenantUazapiCredentials, normalizeUazapiPhone, fetchUazapi, UazapiUnreachableError } from "@/lib/uazapiInstance";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const { serverUrl, instanceToken } = await getTenantUazapiCredentials(tenantId || DEFAULT_TENANT_ID);
     const cleanPhone = normalizeUazapiPhone(phone);
 
-    const response = await fetch(`${serverUrl}/chat/details`, {
+    const response = await fetchUazapi(`${serverUrl}/chat/details`, {
       method: "POST",
       headers: { "Content-Type": "application/json", token: instanceToken },
       body: JSON.stringify({ number: cleanPhone, preview: true }),
@@ -33,7 +33,11 @@ export async function POST(request: Request) {
     }
 
     if (!response.ok) {
-      return NextResponse.json({ success: false, hasWhatsapp: false, image: null });
+      // Status >= 500 (ou 401/403) indica problema da própria instância uazapi (fora do ar, token
+      // inválido, etc.), não que o número não tem WhatsApp — checkFailed distingue os dois casos
+      // para a tela não exibir "Indisponível" quando na verdade a checagem é que falhou.
+      const checkFailed = response.status >= 500 || response.status === 401 || response.status === 403;
+      return NextResponse.json({ success: false, hasWhatsapp: false, image: null, checkFailed });
     }
 
     return NextResponse.json({
@@ -44,6 +48,7 @@ export async function POST(request: Request) {
     });
   } catch (error: any) {
     console.error("[POST /api/uazapi/profile-picture] Erro:", error);
-    return NextResponse.json({ success: false, hasWhatsapp: false, image: null });
+    const isUnreachable = error instanceof UazapiUnreachableError;
+    return NextResponse.json({ success: false, hasWhatsapp: false, image: null, checkFailed: isUnreachable });
   }
 }

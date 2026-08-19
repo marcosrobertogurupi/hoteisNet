@@ -32,7 +32,7 @@ export default function BancosPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_Bancos / Qry_Bancos
+            Dados Sincronizados
           </span>
         </div>
 

@@ -6,6 +6,7 @@ import { useToast } from "@/context/ToastContext";
 import { useSession } from "@/context/SessionContext";
 import { useTheme } from "@/context/ThemeContext";
 import CaixaPrintPreview, { CashRegisterDTO } from "@/components/CaixaPrintPreview";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 interface CaixaResumoDTO {
   id: string;
@@ -153,6 +154,7 @@ export default function CaixaGeralPage() {
 
   return (
     <div className="space-y-6">
+      <LoadingOverlay show={loading} message="Buscando caixas..." submessage="Estamos carregando os dados mais recentes de todos os operadores." />
       {printCaixa && <CaixaPrintPreview caixa={printCaixa} hotelName={hotelName} />}
 
       <div className="space-y-6 print:hidden">

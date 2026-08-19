@@ -71,7 +71,7 @@ export default function PratosPage() {
           <span className={`text-xs font-mono px-3 py-1 rounded-full font-bold border ${
             isDark ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-red-50 text-red-700 border-red-200"
           }`}>
-            WinDev Win_Pratos
+            Dados Sincronizados
           </span>
         </div>
 

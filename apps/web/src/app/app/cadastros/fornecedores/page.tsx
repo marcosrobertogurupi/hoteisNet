@@ -141,7 +141,7 @@ export default function FornecedoresPage() {
           <span className={`text-xs font-mono px-3 py-1 rounded-full font-bold border ${
             isDark ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-emerald-50 text-emerald-700 border-emerald-200"
           }`}>
-            WinDev Win_Fornecedores
+            Dados Sincronizados
           </span>
         </div>
 

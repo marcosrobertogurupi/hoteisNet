@@ -7,6 +7,7 @@ import LancarReservaModal from "@/components/LancarReservaModal";
 import ReservasMultiplasModal from "@/components/ReservasMultiplasModal";
 import { useTheme } from "@/context/ThemeContext";
 import { isReservationExpired } from "@/utils/reservationTolerance";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function TenantReservationsPage() {
   const { defaultCheckInTime, reservationToleranceHours } = useTheme();
@@ -15,6 +16,7 @@ export default function TenantReservationsPage() {
   const [showMultiplasModal, setShowMultiplasModal] = useState(false);
   const [uazapiSentSuccess, setUazapiSentSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isLoadingReservations, setIsLoadingReservations] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
   const [reservations, setReservations] = useState<any[]>([]);
@@ -31,6 +33,7 @@ export default function TenantReservationsPage() {
       console.error("Erro ao buscar reservas:", err);
     } finally {
       setLoading(false);
+      setIsLoadingReservations(false);
     }
   }, []);
 
@@ -81,6 +84,8 @@ export default function TenantReservationsPage() {
 
   return (
     <div className="space-y-6">
+      <LoadingOverlay show={isLoadingReservations} message="Buscando reservas..." submessage="Estamos carregando as reservas mais recentes do hotel." />
+
       {/* Banner & Tab Selector */}
       <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4">
         <div>

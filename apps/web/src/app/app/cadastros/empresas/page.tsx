@@ -15,6 +15,7 @@ import {
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import CadastroEmpresaModal, { EmpresaFormData } from "@/components/CadastroEmpresaModal";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function EmpresasPage() {
   const { theme } = useTheme();
@@ -26,6 +27,7 @@ export default function EmpresasPage() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmpresa, setEditingEmpresa] = useState<EmpresaFormData | null>(null);
+  const [isLoadingEmpresas, setIsLoadingEmpresas] = useState(true);
 
   const syncEmpresasFromDatabase = useCallback(async () => {
     try {
@@ -73,6 +75,8 @@ export default function EmpresasPage() {
       });
     } catch (err) {
       console.warn("[CadastroEmpresas] Erro na sincronização transparente:", err);
+    } finally {
+      setIsLoadingEmpresas(false);
     }
   }, []);
 
@@ -127,6 +131,7 @@ export default function EmpresasPage() {
 
   return (
     <div className={`min-h-screen p-4 md:p-8 ${theme.bgApp} ${theme.textMain} transition-colors`}>
+      <LoadingOverlay show={isLoadingEmpresas} message="Buscando empresas..." submessage="Estamos carregando as empresas conveniadas mais recentes." />
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <Link
@@ -141,7 +146,7 @@ export default function EmpresasPage() {
           <span className={`text-xs font-mono px-3 py-1 rounded-full font-bold border ${
             isDark ? "bg-blue-500/10 text-blue-400 border-blue-500/20" : "bg-blue-50 text-blue-700 border-blue-200"
           }`}>
-            WinDev Win_VisAltCadEmpresa / Faturamento
+            Dados Sincronizados
           </span>
         </div>
 

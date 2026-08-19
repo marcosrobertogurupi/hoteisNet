@@ -1,25 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
-// Default registered Master Token for Hub do Desenvolvedor (SaaS central database)
+const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+
+// Master Token da Hub do Desenvolvedor: HoteisNet compra o crédito e revende aos
+// assinantes através da cota mensal configurada por assinante (Tenant.cpfQueryQuotaMonthly).
+// Só é configurável no Painel SuperAdmin / variáveis de ambiente — nunca pelo assinante.
 const DEFAULT_HUB_TOKEN = "183262310hxRtwiDQAo330874544";
 const DEFAULT_HUB_CONTRACT = "c2NqUUo0bFBLYzhuRmhrUWtvMXhUcjg4ZHFiTitCK1hBT3M4TDlRenllVT0=";
-
-// Tenant Consumption Store (SaaS subscriber quota telemetry tracking)
-const TENANT_USAGE_STORE: Record<string, { name: string; plan: string; limit: number; used: number }> = {
-  "TNT-01": { name: "Pousada Sol & Mar", plan: "PRO", limit: 500, used: 142 },
-  "TNT-02": { name: "Hotel Praia Azul", plan: "ENTERPRISE", limit: 2000, used: 680 },
-  "TNT-03": { name: "Resort Montanha Real", plan: "ENTERPRISE", limit: 2000, used: 1420 },
-  "TNT-04": { name: "Pousada Cantinho da Serra", plan: "STARTER", limit: 100, used: 38 },
-  "TNT-05": { name: "Hotel Central Executivo", plan: "PRO", limit: 500, used: 498 },
-};
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const cpfParam = searchParams.get("cpf") || "";
-    const customToken = searchParams.get("token") || "";
-    const customContract = searchParams.get("contract") || "";
-    const tenantId = searchParams.get("tenantId") || "TNT-01"; // Current subscriber ID
     const cleanCpf = cpfParam.replace(/\D/g, "");
 
     if (!cleanCpf || cleanCpf.length !== 11) {
@@ -29,32 +23,45 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Check Subscriber Quota & Usage
-    let tenantInfo = TENANT_USAGE_STORE[tenantId];
-    if (!tenantInfo) {
-      tenantInfo = { name: `Assinante ${tenantId}`, plan: "PRO", limit: 500, used: 0 };
-      TENANT_USAGE_STORE[tenantId] = tenantInfo;
+    const session = await getSessionUser(req);
+    const tenantId = session?.tenantId || DEFAULT_TENANT_ID;
+
+    let tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, cpfQueryQuotaMonthly: true, cpfQueryUsed: true, cpfQueryCycleStart: true },
+    });
+
+    if (!tenant) {
+      return NextResponse.json({ success: false, message: "Assinante não encontrado." }, { status: 404 });
     }
 
-    if (tenantInfo.used >= tenantInfo.limit) {
+    // Reinicia a cota mensal automaticamente quando o ciclo atual é de um mês anterior.
+    const now = new Date();
+    const cycleExpired =
+      tenant.cpfQueryCycleStart.getUTCFullYear() !== now.getUTCFullYear() ||
+      tenant.cpfQueryCycleStart.getUTCMonth() !== now.getUTCMonth();
+
+    if (cycleExpired) {
+      tenant = await prisma.tenant.update({
+        where: { id: tenant.id },
+        data: { cpfQueryUsed: 0, cpfQueryCycleStart: now },
+        select: { id: true, cpfQueryQuotaMonthly: true, cpfQueryUsed: true, cpfQueryCycleStart: true },
+      });
+    }
+
+    if (tenant.cpfQueryUsed >= tenant.cpfQueryQuotaMonthly) {
       return NextResponse.json(
         {
           success: false,
           quotaExceeded: true,
-          tenantUsage: {
-            tenantId,
-            used: tenantInfo.used,
-            limit: tenantInfo.limit,
-          },
-          message: `A cota mensal de consultas CPF da API Hub do seu hotel (${tenantInfo.used} / ${tenantInfo.limit} consultas) foi atingida. Acesse o Painel Admin ou entre em contato com o suporte para upgrade de plano.`,
+          tenantUsage: { used: tenant.cpfQueryUsed, limit: tenant.cpfQueryQuotaMonthly },
+          message: `O limite mensal de consultas de CPF do seu hotel (${tenant.cpfQueryUsed} / ${tenant.cpfQueryQuotaMonthly} consultas) foi atingido. Entre em contato com o suporte para aumentar sua cota.`,
         },
         { status: 429 }
       );
     }
 
-    // Check environment variables for Shared Master Token or Custom Subscriber Token
     const hubToken =
-      customToken ||
       process.env.HUB_DESENVOLVEDOR_TOKEN ||
       process.env.HUB_DEV_TOKEN ||
       process.env.HUB_DEV_CLIENT_ID ||
@@ -62,15 +69,14 @@ export async function GET(req: NextRequest) {
       DEFAULT_HUB_TOKEN;
 
     const hubContract =
-      customContract ||
       process.env.HUB_DESENVOLVEDOR_CONTRACT ||
       process.env.HUB_DEV_CONTRACT ||
       DEFAULT_HUB_CONTRACT;
 
     if (hubToken && hubToken.trim() !== "" && !hubToken.includes("your-")) {
       try {
-        // Primary Endpoint: /v2/cadastropf/ (Full CPF Profile with Address, Phones, Emails)
-        // Secondary Endpoint: /v2/cpf/ (Standard Receita Federal CPF Status)
+        // Endpoint principal: /v2/cadastropf/ (ficha completa com endereço, telefones, e-mails)
+        // Endpoint secundário: /v2/cpf/ (situação cadastral padrão da Receita Federal)
         let data: any = null;
         let fetchSuccess = false;
 
@@ -93,8 +99,11 @@ export async function GET(req: NextRequest) {
         }
 
         if (fetchSuccess && data && (data.status === true || data.status === "true")) {
-          // Increment tenant usage counter on successful consultation
-          tenantInfo.used += 1;
+          const updatedTenant = await prisma.tenant.update({
+            where: { id: tenant.id },
+            data: { cpfQueryUsed: { increment: 1 } },
+            select: { cpfQueryUsed: true, cpfQueryQuotaMonthly: true },
+          });
 
           const result = data.result || {};
           const nome =
@@ -121,7 +130,7 @@ export async function GET(req: NextRequest) {
           const nomeDaMae = result.nomeDaMae || result.nome_da_mae || "";
           const nomeDoPai = result.nomeDoPai || result.nome_do_pai || "";
 
-          // Extract Telefones
+          // Extrai Telefones
           let telefones: string[] = [];
           if (Array.isArray(result.listaTelefones) && result.listaTelefones.length > 0) {
             telefones = result.listaTelefones
@@ -131,7 +140,7 @@ export async function GET(req: NextRequest) {
             telefones = result.telefones;
           }
 
-          // Extract Emails
+          // Extrai E-mails
           let emails: string[] = [];
           if (Array.isArray(result.listaEmails) && result.listaEmails.length > 0) {
             emails = result.listaEmails
@@ -141,7 +150,7 @@ export async function GET(req: NextRequest) {
             emails = result.emails;
           }
 
-          // Extract Primary Endereço
+          // Extrai Endereço Principal
           let logradouro = "";
           let numero = "";
           let complEnder = "";
@@ -176,10 +185,9 @@ export async function GET(req: NextRequest) {
             success: true,
             isRealData: true,
             tenantUsage: {
-              tenantId,
-              used: tenantInfo.used,
-              limit: tenantInfo.limit,
-              remaining: tenantInfo.limit - tenantInfo.used,
+              used: updatedTenant.cpfQueryUsed,
+              limit: updatedTenant.cpfQueryQuotaMonthly,
+              remaining: updatedTenant.cpfQueryQuotaMonthly - updatedTenant.cpfQueryUsed,
             },
             data: {
               nome: nome.toUpperCase(),
@@ -214,7 +222,7 @@ export async function GET(req: NextRequest) {
               message:
                 data?.return ||
                 data?.message ||
-                "A API Hub do Desenvolvedor não localizou registros para este CPF ou o Token de acesso expirou.",
+                "Não foram localizados registros para este CPF, ou a chave de acesso expirou.",
             },
             { status: 400 }
           );
@@ -223,20 +231,20 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            message: `Falha na conexão com a API Hub do Desenvolvedor: ${err.message}`,
+            message: `Falha na consulta do CPF: ${err.message}`,
           },
           { status: 502 }
         );
       }
     }
 
-    // No token configured globally in Admin or .env.local
+    // Nenhum token configurado globalmente pelo SuperAdmin ou em variável de ambiente
     return NextResponse.json(
       {
         success: false,
         requiresToken: true,
         message:
-          "Nenhum Token Master da API Hub do Desenvolvedor está configurado. Cadastre o Token no Painel SuperAdmin (/admin) em Configurações do Sistema ou na variável HUB_DESENVOLVEDOR_TOKEN em .env.local.",
+          "Nenhuma chave de acesso está configurada. Cadastre a chave no Painel SuperAdmin (/admin) em Configurações do Sistema.",
       },
       { status: 401 }
     );

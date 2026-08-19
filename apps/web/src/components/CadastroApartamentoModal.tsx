@@ -162,7 +162,7 @@ export default function CadastroApartamentoModal({
                 {initialData ? "Editar Apartamento / UH" : "Novo Cadastro de Apartamento (UH)"}
               </h2>
               <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                WinDev Form: Win_Apartamentos / Qry_AptoCaract
+                Cadastro de Unidades Habitacionais
               </p>
             </div>
           </div>
@@ -291,7 +291,7 @@ export default function CadastroApartamentoModal({
             isDark ? "bg-slate-950/60 border-slate-800" : "bg-slate-50 border-slate-200"
           }`}>
             <span className="text-xs font-bold text-teal-600 dark:text-teal-400 uppercase tracking-wider block">
-              Características & Equipamentos (WinDev Qry_AptoCaract)
+              Características & Equipamentos
             </span>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">

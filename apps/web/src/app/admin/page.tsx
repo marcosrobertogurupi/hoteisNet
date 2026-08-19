@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { 
   DollarSign, 
   TrendingUp, 
@@ -70,6 +70,71 @@ export default function SuperAdminDashboardPage() {
   const [quotaPro, setQuotaPro] = useState(500);
   const [quotaEnterprise, setQuotaEnterprise] = useState(2000);
   const [excessCost, setExcessCost] = useState("0,15");
+
+  // Cota real de consultas de CPF por assinante (Tenant.cpfQueryQuotaMonthly no banco)
+  interface TenantCpfQuota {
+    id: string;
+    name: string;
+    tradeName: string | null;
+    city: string | null;
+    state: string | null;
+    planName: string | null;
+    cpfQueryQuotaMonthly: number;
+    cpfQueryUsed: number;
+  }
+  const [tenantQuotas, setTenantQuotas] = useState<TenantCpfQuota[]>([]);
+  const [tenantQuotaDrafts, setTenantQuotaDrafts] = useState<Record<string, string>>({});
+  const [isLoadingTenantQuotas, setIsLoadingTenantQuotas] = useState(false);
+  const [savingTenantQuotaId, setSavingTenantQuotaId] = useState<string | null>(null);
+
+  const loadTenantQuotas = () => {
+    setIsLoadingTenantQuotas(true);
+    fetch("/api/admin/tenants")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setTenantQuotas(data.tenants);
+          setTenantQuotaDrafts(
+            Object.fromEntries(data.tenants.map((t: TenantCpfQuota) => [t.id, String(t.cpfQueryQuotaMonthly)]))
+          );
+        }
+      })
+      .catch((err) => console.error("Erro ao buscar cota de CPF dos assinantes", err))
+      .finally(() => setIsLoadingTenantQuotas(false));
+  };
+
+  useEffect(() => {
+    loadTenantQuotas();
+  }, []);
+
+  const handleSaveTenantQuota = async (tenantId: string) => {
+    const draft = Number(tenantQuotaDrafts[tenantId]);
+    if (!Number.isInteger(draft) || draft < 0) {
+      toast.error("Informe uma cota válida (número inteiro maior ou igual a zero).");
+      return;
+    }
+    setSavingTenantQuotaId(tenantId);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cpfQueryQuotaMonthly: draft }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Cota de consultas de CPF atualizada!");
+        setTenantQuotas((prev) =>
+          prev.map((t) => (t.id === tenantId ? { ...t, cpfQueryQuotaMonthly: draft } : t))
+        );
+      } else {
+        toast.error(data.error || "Erro ao atualizar a cota do assinante.");
+      }
+    } catch {
+      toast.error("Erro ao atualizar a cota do assinante.");
+    } finally {
+      setSavingTenantQuotaId(null);
+    }
+  };
 
   // Sample Tenants List with CPF Queries Telemetry
   const tenants = [
@@ -189,7 +254,7 @@ export default function SuperAdminDashboardPage() {
               : "bg-[#0F172A] text-slate-400 hover:text-white border border-slate-800"
           }`}
         >
-          <Settings className="w-4 h-4 text-[#38BDF8]" /> Configuração do Sistema (WinDev)
+          <Settings className="w-4 h-4 text-[#38BDF8]" /> Configuração do Sistema
         </button>
 
         <button
@@ -263,7 +328,7 @@ export default function SuperAdminDashboardPage() {
             <div>
               <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-[#0284C7] mb-1">
                 <Settings className="w-4 h-4 text-[#38BDF8]" />
-                WinDev `Win_ConfiguracaoSistema.wdw` Migration Module
+                Módulo de Configuração do Sistema
               </div>
               <h2 className="text-xl font-bold text-white tracking-tight">
                 Configuração Geral do Sistema SaaS (Painel Admin)
@@ -681,6 +746,87 @@ export default function SuperAdminDashboardPage() {
                         className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono font-bold"
                       />
                     </div>
+                  </div>
+                </div>
+
+                {/* Cota de Consultas de CPF por Assinante (dado real, editável individualmente) */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-white text-xs uppercase tracking-wider text-slate-400">
+                      Cota de Consultas de CPF por Assinante
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={loadTenantQuotas}
+                      className="text-[11px] font-bold text-[#38BDF8] hover:text-[#7dd3fc] flex items-center gap-1"
+                    >
+                      <RotateCw className="w-3 h-3" /> Atualizar
+                    </button>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-800 overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-900 text-slate-400 uppercase text-[10px]">
+                          <th className="text-left px-3 py-2">Assinante</th>
+                          <th className="text-left px-3 py-2">Plano</th>
+                          <th className="text-left px-3 py-2">Uso no Mês</th>
+                          <th className="text-left px-3 py-2">Cota Mensal</th>
+                          <th className="text-left px-3 py-2">Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {isLoadingTenantQuotas ? (
+                          <tr>
+                            <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
+                              Carregando assinantes...
+                            </td>
+                          </tr>
+                        ) : tenantQuotas.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
+                              Nenhum assinante cadastrado.
+                            </td>
+                          </tr>
+                        ) : (
+                          tenantQuotas.map((t) => (
+                            <tr key={t.id} className="border-t border-slate-800 bg-slate-950/40">
+                              <td className="px-3 py-2 text-white font-semibold">
+                                {t.tradeName || t.name}
+                                <span className="block text-[10px] text-slate-500 font-normal">
+                                  {[t.city, t.state].filter(Boolean).join(" / ") || "—"}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-slate-300">{t.planName || "—"}</td>
+                              <td className="px-3 py-2 font-mono text-slate-300">
+                                {t.cpfQueryUsed} / {t.cpfQueryQuotaMonthly}
+                              </td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={tenantQuotaDrafts[t.id] ?? ""}
+                                  onChange={(e) =>
+                                    setTenantQuotaDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))
+                                  }
+                                  className="w-24 bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-white font-mono font-bold"
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <button
+                                  type="button"
+                                  disabled={savingTenantQuotaId === t.id}
+                                  onClick={() => handleSaveTenantQuota(t.id)}
+                                  className="px-3 py-1.5 bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-50 text-white font-bold rounded-lg transition"
+                                >
+                                  {savingTenantQuotaId === t.id ? "Salvando..." : "Salvar"}
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>

@@ -23,6 +23,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import CadastroHospedeModal, { HospedeFormData } from "@/components/CadastroHospedeModal";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 interface GuestFromDB {
   id: string;
@@ -130,6 +131,7 @@ export default function HospedesPage() {
   const [totalPages, setTotalPages] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -160,6 +162,7 @@ export default function HospedesPage() {
       console.error(err);
     } finally {
       setLoading(false);
+      setIsLoadingInitial(false);
     }
   }, []);
 
@@ -247,6 +250,7 @@ export default function HospedesPage() {
 
   return (
     <div className={`min-h-screen p-4 md:p-8 ${theme.bgApp} ${theme.textMain} transition-colors`}>
+      <LoadingOverlay show={isLoadingInitial} message="Buscando hóspedes..." submessage="Estamos carregando os hóspedes mais recentes cadastrados." />
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Breadcrumb */}
         <div className="flex items-center justify-between">
@@ -263,12 +267,7 @@ export default function HospedesPage() {
             <span className={`text-xs font-mono px-3 py-1 rounded-full font-bold border flex items-center gap-1.5 ${
               isDark ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : "bg-emerald-50 text-emerald-700 border-emerald-200"
             }`}>
-              <Database className="w-3 h-3" /> Supabase PostgreSQL
-            </span>
-            <span className={`text-xs font-mono px-3 py-1 rounded-full font-bold border ${
-              isDark ? "bg-sky-500/10 text-sky-400 border-sky-500/20" : "bg-sky-50 text-sky-700 border-sky-200"
-            }`}>
-              WinDev Win_IncHospede / FNRH
+              <Database className="w-3 h-3" /> Dados Sincronizados
             </span>
           </div>
         </div>
@@ -288,7 +287,7 @@ export default function HospedesPage() {
                 Cadastro de Hóspedes
               </h1>
               <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-600"}`}>
-                {loading ? "Carregando..." : `${total.toLocaleString("pt-BR")} hóspedes no banco de dados Supabase`}
+                {loading ? "Carregando..." : `${total.toLocaleString("pt-BR")} hóspedes cadastrados`}
               </p>
             </div>
           </div>
@@ -375,7 +374,7 @@ export default function HospedesPage() {
                     <td colSpan={6} className="px-5 py-16 text-center">
                       <Loader2 className="w-8 h-8 text-sky-500 mx-auto animate-spin" />
                       <p className={`mt-3 text-sm ${isDark ? "text-slate-400" : "text-slate-600"}`}>
-                        Carregando dados do Supabase...
+                        Carregando hóspedes...
                       </p>
                     </td>
                   </tr>

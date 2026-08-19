@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getTenantUazapiCredentials } from "@/lib/uazapiInstance";
+import { getTenantUazapiCredentials, fetchUazapi, UazapiUnreachableError } from "@/lib/uazapiInstance";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
 
     const creds = await getTenantUazapiCredentials(tenantId || DEFAULT_TENANT_ID);
 
-    const response = await fetch(`${creds.serverUrl}/message/download`, {
+    const response = await fetchUazapi(`${creds.serverUrl}/message/download`, {
       method: "POST",
       headers: { "Content-Type": "application/json", token: creds.instanceToken },
       body: JSON.stringify({ id: messageId, return_link: true }),
@@ -43,9 +43,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, fileURL: data.fileURL || null, mimetype: data.mimetype });
   } catch (error: any) {
     console.error("[POST /api/uazapi/messages/download] Erro:", error);
+    const isUnreachable = error instanceof UazapiUnreachableError;
     return NextResponse.json(
-      { success: false, error: error.message || "Erro ao baixar anexo." },
-      { status: 500 }
+      {
+        success: false,
+        error: error.message || "Erro ao baixar anexo.",
+        unreachable: isUnreachable,
+      },
+      { status: isUnreachable ? 503 : 500 }
     );
   }
 }

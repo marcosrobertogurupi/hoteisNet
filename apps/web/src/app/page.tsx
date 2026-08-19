@@ -54,7 +54,7 @@ export default function HomePage() {
         </h1>
 
         <p className="text-slate-400 text-base md:text-lg max-w-2xl mx-auto leading-relaxed">
-          Modernização do sistema WinDev Hoteis.Net para a nuvem. Mapa Gantt interativo de quartos,
+          Modernização do sistema Hoteis.Net para a nuvem. Mapa Gantt interativo de quartos,
           FNRH com assinatura digital Touch, faturamento corporativo para empresas e IA de suporte.
         </p>
 

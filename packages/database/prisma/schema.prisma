@@ -42,6 +42,9 @@ model Tenant {
   updatedAt         DateTime            @updatedAt
   dailyRolloverTime String              @default("14:30")
   allowNegativeStock Boolean            @default(false)
+  cpfQueryQuotaMonthly Int              @default(100)
+  cpfQueryUsed         Int              @default(0)
+  cpfQueryCycleStart   DateTime         @default(now())
   accountPlans      AccountPlan[]
   aiUsageLogs       AIUsageLog[]
   cashRegisters     CashRegister[]      @relation("TenantCashRegisters")
@@ -735,6 +738,7 @@ model AccountPlan {
   description      String
   type             String
   level            String?
+  creditoDebito    String            @default("DEBITO")
   active           Boolean           @default(true)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt

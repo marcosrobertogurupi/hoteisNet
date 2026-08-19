@@ -34,7 +34,7 @@ export default function FormasPagamentoPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-violet-500/10 text-violet-400 border border-violet-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_FormaPagto / Qry_FormaPagto
+            Dados Sincronizados
           </span>
         </div>
 
@@ -69,7 +69,7 @@ export default function FormasPagamentoPage() {
                 <tr key={f.id} className="hover:bg-slate-800/40 transition">
                   <td className="px-5 py-4">
                     <span className="font-bold text-white text-sm block">{f.descricao}</span>
-                    <span className="font-mono text-[10px] text-violet-400">Cód WinDev: {f.codigo}</span>
+                    <span className="font-mono text-[10px] text-violet-400">Cód: {f.codigo}</span>
                   </td>
                   <td className="px-5 py-4">
                     <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px] font-bold">

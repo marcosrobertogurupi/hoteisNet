@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTenantUazapiCredentials, normalizeUazapiPhone } from "@/lib/uazapiInstance";
+import { getTenantUazapiCredentials, normalizeUazapiPhone, fetchUazapi, UazapiUnreachableError } from "@/lib/uazapiInstance";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
 
     const cleanPhone = normalizeUazapiPhone(phone);
 
-    const response = await fetch(`${creds.serverUrl}/send/text`, {
+    const response = await fetchUazapi(`${creds.serverUrl}/send/text`, {
       method: "POST",
       headers: { "Content-Type": "application/json", token: creds.instanceToken },
       body: JSON.stringify({ number: cleanPhone, text: message }),
@@ -54,9 +54,14 @@ export async function POST(request: Request) {
     });
   } catch (error: any) {
     console.error("[Uazapi Send Text Error]", error);
+    const isUnreachable = error instanceof UazapiUnreachableError;
     return NextResponse.json(
-      { success: false, error: error.message || "Erro interno." },
-      { status: 500 }
+      {
+        success: false,
+        error: error.message || "Erro interno.",
+        unreachable: isUnreachable,
+      },
+      { status: isUnreachable ? 503 : 500 }
     );
   }
 }

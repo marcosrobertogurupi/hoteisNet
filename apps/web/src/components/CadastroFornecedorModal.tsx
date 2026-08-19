@@ -115,7 +115,7 @@ export default function CadastroFornecedorModal({
                 {initialData ? "Editar Fornecedor" : "Novo Cadastro de Fornecedor"}
               </h2>
               <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                WinDev Form: Win_Fornecedores / Qry_Fornecedores
+                Cadastro de Fornecedor
               </p>
             </div>
           </div>
@@ -280,7 +280,7 @@ export default function CadastroFornecedorModal({
           </div>
 
           <div className="space-y-1.5">
-            <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Observações (WinDev EDT_IncForObs)</label>
+            <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Observações</label>
             <textarea
               rows={4}
               placeholder="Prazo de entrega, dia de visita do vendedor, chave PIX..."

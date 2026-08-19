@@ -1,6 +1,6 @@
 # Product Requirement Document (PRD) — Hoteis.Net PMS SaaS
 
-**Versão:** 1.3.0
+**Versão:** 1.4.0
 **Data:** 19 de Agosto de 2026
 **Status:** Documento Oficial de Referência do Projeto — **atualizado a cada alteração relevante no sistema** (ver regra em `.agents/AGENTS.md`)
 
@@ -124,6 +124,7 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * **Visualização de Anexos Recebidos ✅:** `WhatsappMessage` ganhou os campos `mediaUrl`/`mimeType`. A URL de mídia que vem no webhook (`data.content.URL`) é a URL criptografada original do WhatsApp (E2E) — não é utilizável diretamente num `<img>`/link. Por isso o webhook só grava o `mimeType` (metadado não criptografado, de `data.content.mimetype`); a URL pública já descriptografada é obtida sob demanda pela nova rota `api/uazapi/messages/download`, que chama `POST {serverUrl}/message/download` da uazapi passando o `messageid` e salva o resultado em `mediaUrl`/`mimeType` (retido por 2 dias no storage da uazapi, depois disso o próximo pedido rebaixa da CDN da Meta automaticamente). Na tela, cada mensagem de anexo mostra um botão "Ver anexo" — o download/descriptografia só é feito quando o operador clica (não automaticamente ao abrir a conversa), evitando chamadas desnecessárias à uazapi para anexos que ninguém vai abrir; para imagem o clique expande/recolhe um preview inline, para os demais tipos (documento, áudio, vídeo) abre o arquivo em nova aba. O auto-scroll para o fim da conversa só dispara ao abrir a janela e enquanto o operador estiver com a rolagem perto do fim (acompanhando mensagens novas) — se ele subir a tela para ler o histórico antigo, o polling de 4s não força a volta pro fim.
 * **Mensagens Automáticas Configuráveis ✅:** `WhatsappMessageSetting` (via `api/tenant/whatsapp-messages`) permite habilitar/customizar por tenant os textos de confirmação de reserva, boas-vindas no check-in, aviso de previsão de check-out e mensagem de check-out, com placeholders (`{HOTEL}`, `{HOSPEDE}`, `{QUARTO}`).
 * **Envio de Extrato por WhatsApp ✅:** `api/uazapi/send-extrato` envia o extrato de consumo/hospedagem em PDF via Uazapi.
+* **Resiliência a Instância Fora do Ar ✅:** `fetchUazapi` (em `lib/uazapiInstance.ts`) envolve as chamadas à instância uazapi com timeout de 15s e converte falhas de rede em `UazapiUnreachableError`; as rotas `api/uazapi/{messages/download,profile-picture,send-extrato}` distinguem esse caso (`unreachable`/`checkFailed: true`, status 503) de uma resposta legítima "sem WhatsApp"/"anexo indisponível", evitando que a UI informe erroneamente que o hóspede não tem WhatsApp quando na verdade a instância está instável.
 * **Dívida de segurança remanescente ⚠️:** `api/uazapi/send-reserva` e `api/uazapi/send-extrato` ainda usam fallback de servidor/token padrão embutido no código quando o tenant não tem instância própria configurada — deve ser removido (ver seção 4).
 * **QR Code Expresso:** ⏳ não implementado.
 
@@ -132,10 +133,11 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * Os modelos Prisma `SupportTicket`, `TicketMessage` e `SupportKnowledgeBase` existem no schema mas **não são referenciados em nenhum lugar do código de aplicação**.
 * Não há embeddings, banco vetorial ou chamadas a LLM implementadas para esta funcionalidade.
 
-### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡
+### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡 (parcialmente — ver ressalva)
 * `admin/tenants`, `admin/ai-telemetry` e `admin/support` são **mocks de UI**: dados de tenants, consumo de IA/token e fila de suporte são arrays fixos em React state; nenhuma chamada de API é feita, e nenhum dos modelos `SaaSPlan`, `SaASSubscription` ou `AIUsageLog` é usado no código.
 * O botão "Resolve & Vectorize RAG" em `admin/support` simula (via toast) uma vetorização no Supabase pgvector que não ocorre de fato.
-* **Pendente:** conectar essas três telas aos modelos Prisma correspondentes para virarem um painel real de gestão SaaS.
+* **Cota de Consultas de CPF por Assinante ✅:** dentro de `admin/page.tsx` ("Configuração do Sistema"), a tabela de cota de CPF por hotel já é real — `api/admin/tenants` (GET) lista todos os tenants com `cpfQueryQuotaMonthly`/`cpfQueryUsed` vindos do banco, e `api/admin/tenants/[id]` (PATCH) grava a nova cota mensal editada pelo Super Admin, refletindo imediatamente no limite aplicado em `api/stay/hub-consult-cpf`.
+* **Pendente:** conectar as demais telas (`admin/tenants`, `admin/ai-telemetry`, `admin/support`) aos modelos Prisma correspondentes para virarem um painel real de gestão SaaS.
 
 ### 3.11. Módulo Fiscal (NFe/NFSe) 🟡
 * `app/app/fiscal/page.tsx` exibe uma lista fixa de notas "emitidas" em estado local; o botão "Emitir NFSe de Teste" apenas adiciona um objeto fictício com protocolo SEFAZ inventado — sem integração real com prefeitura/SEFAZ.
@@ -145,6 +147,7 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 ### 3.12. Cadastros / Dados Mestres (Master Data)
 Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * ✅ **Conectados ao backend (CRUD real):** Apartamentos, Empresas, Fornecedores, Hóspedes, Usuários, Plano de Contas.
+* **Validação de Placa de Veículo Única ✅:** No cadastro de hóspede, ao adicionar um veículo a placa é consultada em `api/veiculos/search` antes de ser aceita — se já pertencer a outro hóspede (checagem exclui o próprio hóspede em edição), o cadastro é bloqueado e a mensagem "Veículo já cadastrado para \<nome completo do hóspede\>" é exibida, evitando duas fichas com a mesma placa.
 * **Usuários — visão multi-hotel para Super Admin ✅:** `SUPER_ADMIN` enxerga e gerencia usuários de todos os hotéis (com filtro/seleção do tenant de destino ao criar); `TENANT_ADMIN` continua restrito aos usuários do próprio hotel e não pode criar, promover ou alterar um `SUPER_ADMIN` (proteção contra elevação de privilégio em `api/users`).
 * 🟡 **Somente UI, sem persistência (pendentes de conexão):** Bancos, Colaboradores, Comandas, Formas de Pagamento, Grupos, Localidades, PDV, Pratos, Serviços.
 * **Tarifas ⚠️:** existem **dois caminhos de leitura paralelos e inconsistentes** — `/api/tariffs` lê a tabela `Tariff` via Prisma; `/api/reservations/tariffs` lê uma tabela `tariffs` via cliente Supabase direto (não Prisma). A tela `app/app/tariffs/page.tsx`, por sua vez, não chama nenhuma das duas — usa `CadastroTarifasModal` com uma constante `INITIAL_TARIFFS` fixa. **Pendente:** unificar em uma única fonte de dados (Prisma) e conectar a tela real à API.
@@ -156,7 +159,8 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 
 ### 3.14. Consulta de CPF (Hub do Desenvolvedor) ✅
 * `api/stay/hub-consult-cpf` integra com a API paga do "Hub do Desenvolvedor" (`ws.hubdodesenvolvedor.com.br`) para resolver CPF em dados da Receita Federal (nome, nascimento, filiação, endereço, telefones, e-mails), agilizando o cadastro do hóspede.
-* **Pendências de segurança/robustez:** há um token/contrato padrão **embutido no código-fonte** (`DEFAULT_HUB_TOKEN`/`DEFAULT_HUB_CONTRACT`) usado quando a variável de ambiente não está configurada — deve ser removido do código. O controle de cota por tenant é mantido em **memória do processo** (`TENANT_USAGE_STORE`), sendo perdido a cada reinício/deploy — precisa ser persistido no banco.
+* **Cota Mensal por Assinante ✅ (persistida no banco):** o controle de cota deixou de viver em memória de processo — `Tenant.cpfQueryQuotaMonthly`/`cpfQueryUsed`/`cpfQueryCycleStart` guardam limite, uso do mês corrente e início do ciclo; a rota reseta `cpfQueryUsed` automaticamente quando o ciclo vigente é de um mês anterior, e incrementa o uso a cada consulta bem-sucedida. A cota é editável por assinante no Painel SuperAdmin (ver 3.10).
+* **Pendências de segurança/robustez:** há um token/contrato padrão **embutido no código-fonte** (`DEFAULT_HUB_TOKEN`/`DEFAULT_HUB_CONTRACT`) usado quando a variável de ambiente não está configurada — deve ser removido do código.
 
 ### 3.15. Dashboard Operacional ✅
 * `api/dashboard/metrics` calcula, com fuso de Brasília: ocupação atual (quartos ocupados/vagos, taxa de ocupação), chegadas e saídas do dia, série histórica de ocupação x vacância dos últimos 15 dias (a partir dos snapshots horários de `RoomOccupancySnapshot`) e ranking dos quartos mais/menos ocupados nos últimos 30 dias. Métricas operacionais, não financeiras.
@@ -177,7 +181,6 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 4. **Segurança & Privacidade:** Criptografia HTTPS/TLS, autenticação segura, isolamento estrito de dados entre hotéis e conformidade com a LGPD.
 5. **Dívida técnica de segurança identificada (a corrigir):**
    * Credenciais padrão (token Uazapi e token/contrato do Hub do Desenvolvedor) embutidas como fallback no código-fonte — devem ser removidas e exigidas via variável de ambiente/configuração por tenant.
-   * Controle de cota de consulta de CPF em memória de processo, não durável — deve migrar para persistência em banco.
    * Duas fontes de dados paralelas para tarifas (Prisma vs. Supabase direto) — risco de inconsistência, deve ser unificado.
 
 ---
@@ -197,3 +200,4 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * [~] **Fase 11 (nova):** Reformulação da Integração WhatsApp (Uazapi) — gestão completa de instância por tenant (`api/uazapi/instance/*`, incluindo vincular instância já existente), conversa bidirecional via webhook com histórico (`WhatsappMessage`), badge de não lidas + som configurável no Mapa de Quartos e mensagens automáticas configuráveis (`WhatsappMessageSetting`) já implementados; pendente remover o fallback de credencial padrão embutida no código em `send-reserva`/`send-extrato`/`send-text` para tenants sem instância própria configurada.
 * [ ] **Fase 12 (nova):** Implementar fluxo de UI para cancelamento de hospedagem (`StayCheckin.isCanceled`/`canceledAt`/`canceledByUser*`), campos já existentes no schema mas ainda não gravados por nenhuma tela.
 * [x] **Fase 13 (nova):** Caixa obrigatório para operar o sistema (`CashRegisterGate`), Caixa Geral consolidado para Admin (`app/cash-register-geral` + `api/caixa/geral`), sangria vinculada a plano de contas e gestão de usuários multi-hotel para `SUPER_ADMIN` — implementados e conectados ao banco.
+* [x] **Fase 14 (nova):** Validação de placa de veículo única no cadastro de hóspede, cota mensal de consulta de CPF persistida no banco e editável por assinante no Painel SuperAdmin (`api/admin/tenants`), e resiliência da integração uazapi a instância fora do ar (`fetchUazapi`/`UazapiUnreachableError`) — implementados e conectados ao banco.

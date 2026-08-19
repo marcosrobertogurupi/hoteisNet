@@ -32,7 +32,7 @@ export default function LocalidadesPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_Cidades / Win_UF / Win_paises
+            Dados Sincronizados
           </span>
         </div>
 

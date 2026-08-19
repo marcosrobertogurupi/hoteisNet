@@ -32,7 +32,7 @@ export default function ComandasPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-pink-500/10 text-pink-400 border border-pink-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_Comandas / Qry_Comandas
+            Dados Sincronizados
           </span>
         </div>
 

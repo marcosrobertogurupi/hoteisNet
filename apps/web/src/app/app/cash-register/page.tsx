@@ -1,15 +1,49 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { DollarSign, Lock, Unlock, ArrowDownRight, Loader2, Printer } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { DollarSign, Lock, Unlock, ArrowDownRight, Loader2, Printer, Search, X } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
 import { useOperator } from "@/context/OperatorContext";
 import { useTheme } from "@/context/ThemeContext";
 import CaixaPrintPreview, { CashRegisterDTO } from "@/components/CaixaPrintPreview";
 import { CAIXA_CHANGED_EVENT } from "@/lib/caixaEvents";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 const fmtBRL = (v: number) => `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtHora = (iso: string) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+// Profundidade da conta na árvore do plano de contas, com base nos segmentos "zerados" à
+// direita do código (ex: 01.00.00.00 -> 1 | 01.01.00.00 -> 2 | 01.01.01.01 -> 4). Usada para
+// indentar a árvore no seletor de destino da sangria.
+function codeDepth(codigo: string): number {
+  const segments = codigo.split(".");
+  let depth = 1;
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i] !== "00" && segments[i] !== "0") depth = i + 1;
+  }
+  return depth;
+}
+
+// Uma conta é considerada Sintética (grupo) se existir alguma outra conta cujo código a
+// "estenda" (mesmo prefixo até a profundidade dela, porém mais profunda) — ela é totalizada
+// pelas contas filha. Calculado estruturalmente a partir dos códigos, e não apenas pelo campo
+// "level" salvo no banco, pois cadastros antigos podem estar com esse campo incorreto.
+function hasChildAccounts(codigo: string, allCodes: string[]): boolean {
+  const depth = codeDepth(codigo);
+  const prefix = codigo.split(".").slice(0, depth).join(".");
+  return allCodes.some((other) => {
+    if (other === codigo) return false;
+    const otherDepth = codeDepth(other);
+    if (otherDepth <= depth) return false;
+    return other.split(".").slice(0, depth).join(".") === prefix;
+  });
+}
+
+// Formata uma string de dígitos (centavos) como moeda BRL para exibição no campo de valor.
+function formatCentsToBRL(digits: string): string {
+  const n = Number(digits || "0");
+  return (n / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
 
 export default function TenantCashRegisterPage() {
   const toast = useToast();
@@ -21,7 +55,12 @@ export default function TenantCashRegisterPage() {
   const [bleedAmount, setBleedAmount] = useState("");
   const [bleedMotivo, setBleedMotivo] = useState("");
   const [bleedAccountPlanId, setBleedAccountPlanId] = useState("");
-  const [accountPlans, setAccountPlans] = useState<{ id: string; code: string; description: string }[]>([]);
+  const [accountPlans, setAccountPlans] = useState<
+    { id: string; code: string; description: string; isSintetica: boolean; depth: number }[]
+  >([]);
+  const [accountSearch, setAccountSearch] = useState("");
+  const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
+  const accountSearchRef = useRef<HTMLDivElement>(null);
   const [showBleedModal, setShowBleedModal] = useState(false);
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [openingFund, setOpeningFund] = useState("");
@@ -44,18 +83,39 @@ export default function TenantCashRegisterPage() {
     loadSessao();
   }, [loadSessao]);
 
+  // Fecha o dropdown de busca do plano de contas ao clicar fora dele.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (accountSearchRef.current && !accountSearchRef.current.contains(e.target as Node)) {
+        setAccountDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   // Plano de contas para o campo "Destino do Recurso" da retirada de caixa — permite ao gerente
   // identificar, no relatório de fechamento, para onde foi cada retirada (pagamento de despesa,
-  // depósito no cofre etc.), em vez de um texto livre sem categoria.
+  // depósito no cofre etc.), em vez de um texto livre sem categoria. Traz também as contas
+  // Sintéticas (não selecionáveis) para exibir a árvore completa como contexto — assim o usuário
+  // enxerga em qual grupo cada conta Analítica está, o que torna a busca mais intuitiva.
   useEffect(() => {
     fetch("/api/cadastros/plano-contas")
       .then((res) => res.json())
       .then((data) => {
         if (data.success && Array.isArray(data.accounts)) {
+          const despesas = data.accounts.filter((a: any) => a.type === "DESPESA" && a.active !== false);
+          const allCodes = despesas.map((a: any) => a.code);
           setAccountPlans(
-            data.accounts
-              .filter((a: any) => a.type === "DESPESA" && a.active !== false && a.level !== "Sintética")
-              .map((a: any) => ({ id: a.id, code: a.code, description: a.description }))
+            despesas
+              .map((a: any) => ({
+                id: a.id,
+                code: a.code,
+                description: a.description,
+                isSintetica: a.level === "Sintética" || hasChildAccounts(a.code, allCodes),
+                depth: codeDepth(a.code),
+              }))
+              .sort((a: any, b: any) => a.code.localeCompare(b.code))
           );
         }
       })
@@ -100,15 +160,17 @@ export default function TenantCashRegisterPage() {
     }
   };
 
+  const bleedValorReais = Number(bleedAmount || "0") / 100;
+
   const handleExecuteBleed = async () => {
-    if (!bleedAmount || Number(bleedAmount) <= 0) return;
+    if (!bleedAmount || bleedValorReais <= 0) return;
     setSubmitting(true);
     try {
       const res = await fetch("/api/caixa/sangria", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          valor: Number(bleedAmount),
+          valor: bleedValorReais,
           motivo: bleedMotivo || undefined,
           accountPlanId: bleedAccountPlanId || undefined,
         }),
@@ -123,6 +185,7 @@ export default function TenantCashRegisterPage() {
       setBleedAmount("");
       setBleedMotivo("");
       setBleedAccountPlanId("");
+      setAccountSearch("");
       await loadSessao();
     } catch {
       toast.error("Falha ao executar sangria.");
@@ -167,6 +230,8 @@ export default function TenantCashRegisterPage() {
 
   return (
     <div className="space-y-6">
+      <LoadingOverlay show={loading} message="Buscando dados do caixa..." submessage="Estamos carregando as informações mais recentes do caixa." />
+
       {/* Print Preview — relatório de impressão do caixa, no padrão do sistema WinDev original. */}
       {showPrintPreview && caixa && <CaixaPrintPreview caixa={caixa} hotelName={hotelName} />}
 
@@ -371,7 +436,16 @@ export default function TenantCashRegisterPage() {
                 <ArrowDownRight className="w-4 h-4 text-red-400" />
                 Retirada de Caixa (Sangria)
               </h3>
-              <button onClick={() => setShowBleedModal(false)} className={`hover:${theme.textMain} text-sm ${theme.textMuted}`}>✕</button>
+              <button
+                onClick={() => {
+                  setShowBleedModal(false);
+                  setAccountSearch("");
+                  setAccountDropdownOpen(false);
+                }}
+                className={`hover:${theme.textMain} text-sm ${theme.textMuted}`}
+              >
+                ✕
+              </button>
             </div>
 
             <div className="space-y-3 text-xs">
@@ -381,25 +455,93 @@ export default function TenantCashRegisterPage() {
               <div className="space-y-1">
                 <label className={`font-medium ${theme.textMuted}`}>Valor a Retirar</label>
                 <input
-                  type="number"
-                  value={bleedAmount}
-                  onChange={(e) => setBleedAmount(e.target.value)}
-                  placeholder="Ex: 200.00"
+                  type="text"
+                  inputMode="numeric"
+                  value={formatCentsToBRL(bleedAmount)}
+                  onChange={(e) => setBleedAmount(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                  placeholder="R$ 0,00"
                   className={`w-full rounded-lg px-3 py-2 font-mono text-sm border focus:outline-none focus:border-red-400 ${theme.isDark ? "bg-[#1E293B] border-slate-700 text-white" : "bg-white border-slate-200 text-slate-900"}`}
                 />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1 relative" ref={accountSearchRef}>
                 <label className={`font-medium ${theme.textMuted}`}>Plano de Contas (Destino do Recurso)</label>
-                <select
-                  value={bleedAccountPlanId}
-                  onChange={(e) => setBleedAccountPlanId(e.target.value)}
-                  className={`w-full rounded-lg px-3 py-2 text-sm border focus:outline-none focus:border-red-400 ${theme.isDark ? "bg-[#1E293B] border-slate-700 text-white" : "bg-white border-slate-200 text-slate-900"}`}
-                >
-                  <option value="">Não informado</option>
-                  {accountPlans.map((p) => (
-                    <option key={p.id} value={p.id}>{p.code} - {p.description}</option>
-                  ))}
-                </select>
+                {bleedAccountPlanId ? (
+                  <div
+                    className={`w-full rounded-lg px-3 py-2 text-sm border flex items-center justify-between gap-2 ${theme.isDark ? "bg-[#1E293B] border-slate-700 text-white" : "bg-white border-slate-200 text-slate-900"}`}
+                  >
+                    <span className="font-mono truncate">
+                      {accountPlans.find((p) => p.id === bleedAccountPlanId)?.code} - {accountPlans.find((p) => p.id === bleedAccountPlanId)?.description}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBleedAccountPlanId("");
+                        setAccountSearch("");
+                      }}
+                      className={`shrink-0 hover:text-red-400 ${theme.textMuted}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <Search className={`w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 ${theme.textMuted}`} />
+                    <input
+                      type="text"
+                      value={accountSearch}
+                      onChange={(e) => setAccountSearch(e.target.value)}
+                      onFocus={() => setAccountDropdownOpen(true)}
+                      placeholder="Buscar por código ou nome da conta..."
+                      className={`w-full rounded-lg pl-8 pr-3 py-2 text-sm border focus:outline-none focus:border-red-400 ${theme.isDark ? "bg-[#1E293B] border-slate-700 text-white placeholder-slate-500" : "bg-white border-slate-200 text-slate-900 placeholder-slate-400"}`}
+                    />
+                  </div>
+                )}
+
+                {accountDropdownOpen && !bleedAccountPlanId && (() => {
+                  const q = accountSearch.trim().toLowerCase();
+                  // Sem busca: mostra a árvore completa (sintéticas como cabeçalho + filhas), para
+                  // dar contexto de onde cada conta está. Com busca: mostra só as folhas que batem.
+                  const visible = !q
+                    ? accountPlans
+                    : accountPlans.filter((p) => !p.isSintetica && (p.code.toLowerCase().includes(q) || p.description.toLowerCase().includes(q)));
+                  const hasSelectable = visible.some((p) => !p.isSintetica);
+
+                  return (
+                    <div
+                      className={`absolute z-10 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border shadow-xl ${theme.isDark ? "bg-[#1E293B] border-slate-700" : "bg-white border-slate-200"}`}
+                    >
+                      {visible.map((p) =>
+                        p.isSintetica ? (
+                          <div
+                            key={p.id}
+                            style={{ paddingLeft: `${0.75 + (p.depth - 1) * 1}rem` }}
+                            className={`px-3 pt-2.5 pb-1 text-[10px] font-bold uppercase tracking-wide select-none ${theme.isDark ? "text-slate-500" : "text-slate-400"}`}
+                          >
+                            {p.code} — {p.description}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            key={p.id}
+                            onClick={() => {
+                              setBleedAccountPlanId(p.id);
+                              setAccountSearch("");
+                              setAccountDropdownOpen(false);
+                            }}
+                            style={{ paddingLeft: `${0.75 + p.depth * 1}rem` }}
+                            className={`w-full text-left pr-3 py-1.5 text-xs transition-colors ${theme.isDark ? "hover:bg-slate-700 text-slate-200" : "hover:bg-slate-100 text-slate-700"}`}
+                          >
+                            <span className="font-mono text-red-400 font-semibold">{p.code}</span>{" "}
+                            <span>{p.description}</span>
+                          </button>
+                        )
+                      )}
+                      {!hasSelectable && (
+                        <p className={`px-3 py-3 text-xs text-center ${theme.textMuted}`}>Nenhuma conta analítica encontrada.</p>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               <div className="space-y-1">
                 <label className={`font-medium ${theme.textMuted}`}>Motivo (opcional)</label>
@@ -415,7 +557,11 @@ export default function TenantCashRegisterPage() {
 
             <div className={`flex justify-end gap-3 pt-3 border-t ${theme.borderColor}`}>
               <button
-                onClick={() => setShowBleedModal(false)}
+                onClick={() => {
+                  setShowBleedModal(false);
+                  setAccountSearch("");
+                  setAccountDropdownOpen(false);
+                }}
                 className={`px-4 py-2 text-sm rounded-lg ${theme.isDark ? "bg-slate-800 text-slate-300 hover:bg-slate-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
               >
                 Cancelar

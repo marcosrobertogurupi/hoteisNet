@@ -281,6 +281,7 @@ export default function CadastroHospedeModal({
 
   const [tempPlaca, setTempPlaca] = useState("");
   const [tempCaract, setTempCaract] = useState("");
+  const [checkingPlaca, setCheckingPlaca] = useState(false);
 
   const [isSearchingCep, setIsSearchingCep] = useState(false);
   const [docChoice, setDocChoice] = useState<"CPF" | "PASSAPORTE">("CPF");
@@ -360,9 +361,6 @@ export default function CadastroHospedeModal({
     };
   }, [isOpen, initialData?.id]);
 
-  const [customHubToken, setCustomHubToken] = useState<string>("");
-  const [showTokenInput, setShowTokenInput] = useState<boolean>(false);
-
   const handleHubCpfSearch = async () => {
     const cleanCpf = formData.cpf.replace(/\D/g, "");
     if (cleanCpf.length !== 11) {
@@ -377,11 +375,24 @@ export default function CadastroHospedeModal({
     setHubFeedback(null);
 
     try {
-      const url = customHubToken.trim()
-        ? `/api/stay/hub-consult-cpf?cpf=${cleanCpf}&token=${encodeURIComponent(customHubToken.trim())}`
-        : `/api/stay/hub-consult-cpf?cpf=${cleanCpf}`;
+      // Verifica primeiro se já existe cadastro deste hóspede no hotel,
+      // evitando gastar créditos em uma consulta externa desnecessária.
+      const localRes = await fetch(`/api/cadastros/hospedes?q=${cleanCpf}`);
+      const localData = await localRes.json();
+      const existing = (localData.guests || []).find(
+        (g: any) => g.cpf?.replace(/\D/g, "") === cleanCpf && g.id !== initialData?.id
+      );
 
-      const res = await fetch(url);
+      if (existing) {
+        setHubFeedback({
+          type: "error",
+          message: `Já existe um hóspede cadastrado com este CPF: "${existing.fullName}". Utilize a busca de hóspedes para localizar e editar o cadastro existente.`,
+        });
+        setIsSearchingHub(false);
+        return;
+      }
+
+      const res = await fetch(`/api/stay/hub-consult-cpf?cpf=${cleanCpf}`);
       const result = await res.json();
 
       if (result.success && result.data) {
@@ -422,32 +433,30 @@ export default function CadastroHospedeModal({
           return updated;
         });
 
-        const usageInfo = result.tenantUsage ? ` (Cota do Hotel: ${result.tenantUsage.used}/${result.tenantUsage.limit} consultas no mês)` : "";
         setHubFeedback({
           type: "success",
-          message: `✓ Dados reais de "${d.nome}" localizados via Hub do Desenvolvedor!${usageInfo}`,
+          message: `✓ Dados de "${d.nome}" localizados com sucesso!`,
         });
       } else if (result.quotaExceeded) {
         setHubFeedback({
           type: "error",
-          message: result.message || "A cota de consultas de CPF do seu hotel foi atingida para este mês.",
+          message: result.message || "O limite de consultas de CPF do seu hotel foi atingido para este mês.",
         });
       } else if (result.requiresToken) {
-        setShowTokenInput(true);
         setHubFeedback({
           type: "error",
-          message: result.message,
+          message: "A consulta automática de dados não está disponível no momento. Entre em contato com o administrador do sistema.",
         });
       } else {
         setHubFeedback({
           type: "error",
-          message: result.message || "CPF não localizado na API Hub do Desenvolvedor.",
+          message: result.message || "CPF não localizado.",
         });
       }
     } catch {
       setHubFeedback({
         type: "error",
-        message: "Erro ao consultar CPF na API Hub do Desenvolvedor.",
+        message: "Erro ao consultar CPF.",
       });
     } finally {
       setIsSearchingHub(false);
@@ -543,10 +552,38 @@ export default function CadastroHospedeModal({
     }));
   };
 
-  const handleAddVehicle = () => {
-    if (!tempPlaca.trim()) return;
+  const handleAddVehicle = async () => {
+    const placa = tempPlaca.trim().toUpperCase();
+    if (!placa) return;
+
+    if (formData.veiculos.some((v) => v.placaVeiculo.toUpperCase() === placa)) {
+      toast.warning("Este veículo já foi adicionado a este hóspede.");
+      return;
+    }
+
+    setCheckingPlaca(true);
+    try {
+      const params = new URLSearchParams({ q: placa, by: "placa" });
+      const res = await fetch(`/api/veiculos/search?${params.toString()}`);
+      const data = await res.json();
+      const found = (data.vehicles || []).find(
+        (v: { placa: string; guestId: string; guestName: string }) =>
+          v.placa.toUpperCase() === placa && v.guestId !== formData.id
+      );
+      if (found) {
+        toast.error(`Veículo já cadastrado para ${found.guestName}`);
+        return;
+      }
+    } catch (error) {
+      console.error("Erro ao verificar placa:", error);
+      toast.error("Erro ao verificar a placa. Tente novamente.");
+      return;
+    } finally {
+      setCheckingPlaca(false);
+    }
+
     const newItem: VeiculoItem = {
-      placaVeiculo: tempPlaca.trim().toUpperCase(),
+      placaVeiculo: placa,
       caractVeic: tempCaract.trim(),
     };
     setFormData((prev) => ({
@@ -601,7 +638,7 @@ export default function CadastroHospedeModal({
                 {readOnly ? "Visualizar Ficha de Hóspede" : initialData ? "Editar Ficha de Hóspede" : "Novo Cadastro de Hóspede"}
               </h2>
               <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                WinDev Form: Win_IncHospede / Win_VisCadasHospede (FNRH)
+                Ficha Nacional de Registro de Hóspedes (FNRH)
               </p>
             </div>
           </div>
@@ -750,7 +787,7 @@ export default function CadastroHospedeModal({
                   <span className={`text-[11px] px-3 py-1 rounded-full font-mono font-medium flex items-center gap-1.5 ${
                     isDark ? "bg-sky-950/80 text-sky-300 border border-sky-800" : "bg-sky-100 text-sky-800 border border-sky-200"
                   }`}>
-                    <Globe className="w-3.5 h-3.5" /> API Hub do Desenvolvedor
+                    <Globe className="w-3.5 h-3.5" /> Consulta Automática de Dados
                   </span>
                 </div>
 
@@ -790,12 +827,12 @@ export default function CadastroHospedeModal({
                         {isSearchingHub ? (
                           <>
                             <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>Consultando Hub...</span>
+                            <span>Consultando...</span>
                           </>
                         ) : (
                           <>
                             <Search className="w-4 h-4" />
-                            <span>Buscar Dados na API Hub</span>
+                            <span>Buscar Dados do Hóspede</span>
                           </>
                         )}
                       </button>
@@ -830,34 +867,6 @@ export default function CadastroHospedeModal({
                   </div>
                 )}
 
-                {/* Campo Opcional para Informar Token da API Hub do Desenvolvedor */}
-                {showTokenInput && (
-                  <div className={`p-3 rounded-xl border space-y-1.5 animate-fadeIn ${
-                    isDark ? "bg-slate-900 border-sky-500/40" : "bg-white border-sky-300"
-                  }`}>
-                    <label className={`text-xs font-bold flex items-center justify-between ${isDark ? "text-sky-300" : "text-sky-800"}`}>
-                      <span>Chave / Token da API Hub do Desenvolvedor:</span>
-                      <span className="text-[10px] font-normal text-slate-400">Pode ser salvo em .env.local como HUB_DESENVOLVEDOR_TOKEN</span>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="password"
-                        placeholder="Cole o seu Token do Hub do Desenvolvedor aqui..."
-                        value={customHubToken}
-                        onChange={(e) => setCustomHubToken(e.target.value)}
-                        className={`${inputClass} font-mono text-xs`}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleHubCpfSearch}
-                        className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs rounded-xl transition shrink-0"
-                      >
-                        Reconsultar
-                      </button>
-                    </div>
-                  </div>
-                )}
-
                 {/* Banner de Feedback da Consulta */}
                 {hubFeedback && (
                   <div className={`p-3 rounded-xl text-xs font-medium flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border animate-fadeIn ${
@@ -875,15 +884,6 @@ export default function CadastroHospedeModal({
                     </div>
 
                     <div className="flex items-center gap-2 self-end sm:self-auto">
-                      {!showTokenInput && (
-                        <button
-                          type="button"
-                          onClick={() => setShowTokenInput(true)}
-                          className="text-xs font-bold underline hover:text-sky-400 text-sky-500 shrink-0"
-                        >
-                          Inserir Token da API
-                        </button>
-                      )}
                       <button
                         type="button"
                         onClick={() => setHubFeedback(null)}
@@ -1383,9 +1383,10 @@ export default function CadastroHospedeModal({
                     <button
                       type="button"
                       onClick={handleAddVehicle}
-                      className="w-full py-2 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition shadow-sm"
+                      disabled={checkingPlaca}
+                      className="w-full py-2 px-3 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition shadow-sm"
                     >
-                      <Plus className="w-4 h-4" /> Adicionar
+                      <Plus className="w-4 h-4" /> {checkingPlaca ? "Verificando..." : "Adicionar"}
                     </button>
                   </div>
                 </div>

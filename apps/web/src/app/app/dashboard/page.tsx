@@ -26,6 +26,7 @@ import {
 } from "recharts";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 interface SeriePonto {
   date: string;
@@ -98,6 +99,7 @@ export default function DashboardPage() {
 
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -109,6 +111,7 @@ export default function DashboardPage() {
       console.error("Erro ao buscar métricas do dashboard:", err);
     } finally {
       setLoading(false);
+      setIsLoadingInitial(false);
     }
   }, [tenantId]);
 
@@ -170,6 +173,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      <LoadingOverlay show={isLoadingInitial} message="Buscando métricas..." submessage="Estamos carregando os indicadores mais recentes do hotel." />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div

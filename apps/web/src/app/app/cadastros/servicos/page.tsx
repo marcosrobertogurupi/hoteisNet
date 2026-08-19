@@ -38,7 +38,7 @@ export default function ServicosPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_Servicos
+            Dados Sincronizados
           </span>
         </div>
 

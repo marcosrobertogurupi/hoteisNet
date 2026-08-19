@@ -31,7 +31,7 @@ export default function GruposPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-slate-500/10 text-slate-400 border border-slate-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_Grupos / Qry_GrupoProdutos
+            Dados Sincronizados
           </span>
         </div>
 

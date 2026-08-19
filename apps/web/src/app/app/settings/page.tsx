@@ -4,7 +4,8 @@ import { useState, useEffect, ChangeEvent } from "react";
 import { useTheme, THEMES, ThemeId } from "@/context/ThemeContext";
 import { getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
 import { playWhatsappNotificationSound } from "@/utils/notificationSound";
-import { 
+import LoadingOverlay from "@/components/LoadingOverlay";
+import {
   Palette, 
   Image as ImageIcon, 
   Check, 
@@ -111,6 +112,7 @@ export default function SubscriberSettingsPage() {
   const [emailTestStatus, setEmailTestStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isLoadingSettings, setIsLoadingSettings] = useState(true);
 
   // Horário de virada de diária — persistido no Tenant (usado pelo worker de virada automática)
   const [dailyRolloverTimeInput, setDailyRolloverTimeInput] = useState("14:30");
@@ -164,7 +166,7 @@ export default function SubscriberSettingsPage() {
   const [uazLinking, setUazLinking] = useState(false);
 
   const loadUazapiInstance = () => {
-    fetch("/api/uazapi/instance")
+    return fetch("/api/uazapi/instance")
       .then((res) => res.json())
       .then((data) => {
         if (!data.success || !data.settings) return;
@@ -180,10 +182,6 @@ export default function SubscriberSettingsPage() {
       })
       .catch(() => {});
   };
-
-  useEffect(() => {
-    loadUazapiInstance();
-  }, []);
 
   // Enquanto está "connecting" (aguardando leitura do QR code), consulta o status a cada 3s para
   // detectar automaticamente quando o operador escaneia o código no celular.
@@ -346,7 +344,7 @@ export default function SubscriberSettingsPage() {
   };
 
   useEffect(() => {
-    fetch("/api/tenant/settings")
+    const loadTenantSettings = fetch("/api/tenant/settings")
       .then((res) => res.json())
       .then((data) => {
         if (data.success && data.settings?.dailyRolloverTime) {
@@ -358,7 +356,7 @@ export default function SubscriberSettingsPage() {
       })
       .catch(() => {});
 
-    fetch("/api/tenant/whatsapp-messages")
+    const loadWhatsappMessages = fetch("/api/tenant/whatsapp-messages")
       .then((res) => res.json())
       .then((data) => {
         if (!data.success || !data.settings) return;
@@ -374,6 +372,11 @@ export default function SubscriberSettingsPage() {
         setWaCheckoutMessage(s.checkoutMessage || "");
       })
       .catch(() => {});
+
+    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages]).finally(() =>
+      setIsLoadingSettings(false)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Calcula o exemplo de expiração com base na tolerância atual
@@ -531,6 +534,8 @@ export default function SubscriberSettingsPage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 pb-12">
+      <LoadingOverlay show={isLoadingSettings} message="Buscando configurações..." submessage="Estamos carregando as configurações mais recentes do assinante." />
+
       {/* Top Banner */}
       <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl border shadow-xl ${theme.bgCard}`}>
         <div>

@@ -33,7 +33,7 @@ export default function ColaboradoresPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_Colaboradores / Qry_Colaborador
+            Dados Sincronizados
           </span>
         </div>
 

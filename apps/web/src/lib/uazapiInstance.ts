@@ -11,6 +11,34 @@ export interface UazapiCredentials {
   instanceToken: string;
 }
 
+const UAZAPI_TIMEOUT_MS = 15000;
+
+// Erro dedicado para timeout/falha de rede ao chamar a instância uazapi, para que as rotas
+// consigam diferenciar "a instância está instável/fora do ar" (deve avisar o usuário para tentar
+// de novo) de um erro de aplicação (ex: número inválido).
+export class UazapiUnreachableError extends Error {
+  constructor(message = "Não foi possível conectar à instância do WhatsApp (uazapi). A instância pode estar instável ou fora do ar.") {
+    super(message);
+    this.name = "UazapiUnreachableError";
+  }
+}
+
+// Wrapper de fetch com timeout para chamadas à instância uazapi. Como a instância é uma dependência
+// externa sujeita a instabilidade, sem um timeout explícito uma instância travada deixaria a
+// requisição pendurada até o limite da função serverless, com o usuário vendo só um spinner infinito
+// sem nenhuma mensagem de erro.
+export async function fetchUazapi(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), UAZAPI_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error: any) {
+    throw new UazapiUnreachableError();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // Resolve o servidor uazapi + token da instância do tenant, salvos em UazapiSetting pela tela de
 // conexão da instância. Cai para as credenciais legadas quando o tenant ainda não configurou nada.
 export async function getTenantUazapiCredentials(tenantId: string | null | undefined): Promise<UazapiCredentials> {

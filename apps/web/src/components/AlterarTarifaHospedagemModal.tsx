@@ -235,7 +235,7 @@ export default function AlterarTarifaHospedagemModal({
               ⚡
             </div>
             <h2 className="font-bold text-slate-800 text-sm">
-              Alterar tarifa aplicada para hospedagem Qry_HospedagemTarifa
+              Alterar tarifa aplicada para hospedagem
             </h2>
           </div>
           <button

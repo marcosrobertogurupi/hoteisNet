@@ -220,7 +220,7 @@ export default function CadastroEmpresaModal({
                 {initialData ? "Editar Empresa Conveniada" : "Nova Empresa Conveniada"}
               </h2>
               <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                WinDev Form: Win_VisAltCadEmpresa / Win_IncEmpresa
+                Cadastro de Empresa Conveniada
               </p>
             </div>
           </div>
@@ -451,7 +451,7 @@ export default function CadastroEmpresaModal({
                         : "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
                     }`}
                   >
-                    <Copy className="w-3.5 h-3.5" /> Replicar Endereço Comercial (WinDev Btn_RepEnd)
+                    <Copy className="w-3.5 h-3.5" /> Replicar Endereço Comercial
                   </button>
                 </div>
 

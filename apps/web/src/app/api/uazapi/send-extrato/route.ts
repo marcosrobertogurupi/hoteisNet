@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTenantUazapiCredentials, normalizeUazapiPhone } from "@/lib/uazapiInstance";
+import { getTenantUazapiCredentials, normalizeUazapiPhone, fetchUazapi, UazapiUnreachableError } from "@/lib/uazapiInstance";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
 
     const formattedPdfBase64 = pdfBase64.startsWith("data:") ? pdfBase64 : `data:application/pdf;base64,${pdfBase64}`;
 
-    const response = await fetch(`${creds.serverUrl}/send/media`, {
+    const response = await fetchUazapi(`${creds.serverUrl}/send/media`, {
       method: "POST",
       headers: { "Content-Type": "application/json", token: creds.instanceToken },
       body: JSON.stringify({
@@ -66,9 +66,14 @@ export async function POST(request: Request) {
     });
   } catch (error: any) {
     console.error("[Uazapi Route Handler Error]", error);
+    const isUnreachable = error instanceof UazapiUnreachableError;
     return NextResponse.json(
-      { success: false, error: error.message || "Erro interno no servidor." },
-      { status: 500 }
+      {
+        success: false,
+        error: error.message || "Erro interno no servidor.",
+        unreachable: isUnreachable,
+      },
+      { status: isUnreachable ? 503 : 500 }
     );
   }
 }

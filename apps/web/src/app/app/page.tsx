@@ -51,6 +51,7 @@ import LancarPagamentoHospedagemModal from "@/components/LancarPagamentoHospedag
 import LancarReservaModal from "@/components/LancarReservaModal";
 import TransferenciaDebitoModal from "@/components/TransferenciaDebitoModal";
 import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/SelecaoReservaQuartoModal";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 // Converte "DD/MM/YYYY HH:MM:SS" (formato usado pelo modal de check-in) para ISO "YYYY-MM-DDTHH:MM:SS",
 // formato exigido pela coluna timestamp do Postgres na API /api/reservations.
@@ -201,6 +202,10 @@ export default function TenantDashboardPage() {
 
   // Room List State
   const [rooms, setRooms] = useState<RoomItem[]>([]);
+  // Indica que a primeira busca dos quartos no banco ainda está em andamento — usado para
+  // exibir um aviso tipo "toast" informando o usuário do que está acontecendo em segundo plano,
+  // já que essa busca inicial tem um pequeno delay natural.
+  const [isLoadingRooms, setIsLoadingRooms] = useState(true);
 
   // Sincronização automática e transparente a partir do banco de dados (sem piscamento de tela)
   const syncRoomsFromDatabase = useCallback(async () => {
@@ -303,6 +308,8 @@ export default function TenantDashboardPage() {
       });
     } catch (err) {
       console.warn("[MapaQuartos] Erro na sincronização transparente:", err);
+    } finally {
+      setIsLoadingRooms(false);
     }
   }, [whatsappSoundEnabled]);
 
@@ -729,6 +736,9 @@ export default function TenantDashboardPage() {
 
   return (
     <div className="space-y-6 pb-12 relative">
+      {/* Aviso informando que os quartos estão sendo buscados no banco de dados (primeira carga) */}
+      <LoadingOverlay show={isLoadingRooms} message="Buscando quartos..." submessage="Estamos carregando as informações mais recentes do hotel." />
+
       {/* Main SaaS Page View Container (Hidden when printing reports) */}
       <div className="space-y-6 print:hidden">
         {/* Top Header & Search Bar */}
@@ -745,7 +755,7 @@ export default function TenantDashboardPage() {
                 Mapa Operacional de Acomodações
               </h1>
               <p className={`text-xs ${theme.textMuted}`}>
-                {hotelName} • Clique com o botão direito em um quarto para acessar o menu completo de funções WinDev.
+                {hotelName} • Clique com o botão direito em um quarto para acessar o menu completo de funções.
               </p>
             </div>
           </div>

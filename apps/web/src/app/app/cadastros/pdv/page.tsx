@@ -32,7 +32,7 @@ export default function PDVPage() {
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 px-3 py-1 rounded-full font-bold">
-            WinDev Win_PDV / Qry_PontosVenda
+            Dados Sincronizados
           </span>
         </div>
 

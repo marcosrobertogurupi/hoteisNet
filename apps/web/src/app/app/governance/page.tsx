@@ -2,10 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { BedDouble, Sparkles, CheckCircle2, Power, ShieldAlert, Eye, EyeOff } from "lucide-react";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function TenantGovernancePage() {
   const [rooms, setRooms] = useState<any[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
+  const [isLoadingRooms, setIsLoadingRooms] = useState(true);
 
   // Sync rooms from database API (o campo "active" já vem persistido no banco)
   useEffect(() => {
@@ -25,7 +27,8 @@ export default function TenantGovernancePage() {
           setRooms(loaded);
         }
       })
-      .catch((e) => console.error("Erro ao carregar quartos na Governança:", e));
+      .catch((e) => console.error("Erro ao carregar quartos na Governança:", e))
+      .finally(() => setIsLoadingRooms(false));
   }, []);
 
   const handleUpdateStatus = (roomId: string, newStatus: string, statusLabel: string) => {
@@ -58,6 +61,8 @@ export default function TenantGovernancePage() {
 
   return (
     <div className="space-y-6">
+      <LoadingOverlay show={isLoadingRooms} message="Buscando quartos..." submessage="Estamos carregando os dados mais recentes de governança." />
+
       {/* Banner */}
       <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4 shadow-lg">
         <div>
