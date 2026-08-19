@@ -69,6 +69,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   }, [isOpen, phone, tenantId]);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
 
   const loadMessages = (showLoading = false) => {
     if (!roomData.stayId) return;
@@ -107,9 +108,15 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   }, [isOpen, roomData.stayId]);
 
   // Mantém a última mensagem sempre visível — rola a conversa para o fim toda vez que a lista muda
-  // (nova mensagem enviada, recebida via polling, ou histórico inicial carregado).
+  // (nova mensagem enviada, recebida via polling, ou histórico inicial carregado). Seta scrollTop
+  // diretamente no container (em vez de scrollIntoView) porque é mais confiável dentro de um modal
+  // com várias camadas de flexbox; o requestAnimationFrame garante que roda só depois do navegador
+  // já ter recalculado a altura do conteúdo recém-renderizado.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: "end" });
+    requestAnimationFrame(() => {
+      const el = messagesContainerRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
   }, [messages]);
 
   const logSentMessage = async (type: string, content: string | null, filename: string | null) => {
@@ -420,7 +427,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
         )}
 
         {/* CONVERSA (mensagens enviadas pelo hotel + respostas recebidas do hóspede via webhook) */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5">
           <div className="flex items-center justify-between mb-1">
             <span className={`text-[11px] font-semibold uppercase tracking-wider ${theme.textMuted}`}>
               Conversa
