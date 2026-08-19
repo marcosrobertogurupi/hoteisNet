@@ -3,25 +3,29 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-// POST /api/caixa/abrir — abre um novo caixa para o operador ativo, lançando o fundo de troco
-// como movimento de abertura (SUPRIMENTO), equivalente à Cai_Abertura do sistema WinDev original.
+// POST /api/caixa/abrir — abre um novo caixa para o operador autenticado, lançando o fundo de
+// troco como movimento de abertura (SUPRIMENTO), equivalente à Cai_Abertura do sistema WinDev
+// original. operatorId/operatorName/tenantId vêm sempre da sessão do servidor, nunca do corpo da
+// requisição, para impedir que um operador abra caixa em nome de outro ou em outro tenant.
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { tenantId, operatorId, operatorName, fundoTroco } = body;
-
-    if (!operatorId || !operatorName) {
-      return NextResponse.json({ success: false, error: "operatorId e operatorName são obrigatórios." }, { status: 400 });
+    const session = await getSessionUser(req);
+    if (!session) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    if (!session.tenantId) {
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
-    const opName = String(operatorName).toUpperCase();
+    const body = await req.json();
+    const { fundoTroco } = body;
+
+    const operatorId = session.userId;
+    const opName = String(session.name).toUpperCase();
     const fundoVal = Number(fundoTroco) || 0;
-    const tenantIdsToSearch = [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[];
 
     const existing = await prisma.cashRegister.findFirst({
-      where: { operatorId, isOpen: true, tenantId: { in: tenantIdsToSearch } },
+      where: { operatorId, isOpen: true, tenantId: session.tenantId },
     });
     if (existing) {
       return NextResponse.json(
@@ -33,7 +37,7 @@ export async function POST(req: NextRequest) {
     const caixa = await prisma.$transaction(async (tx) => {
       const created = await tx.cashRegister.create({
         data: {
-          tenantId: tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
+          tenantId: session.tenantId!,
           operatorId,
           operatorName: opName,
           openingBalance: fundoVal,
@@ -54,13 +58,12 @@ export async function POST(req: NextRequest) {
       return created;
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId: session?.tenantId || tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
-      userId: session?.userId || operatorId,
-      userName: session?.name || opName,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "CASH_OPEN",
-      description: `${session?.name || opName} abriu o caixa com fundo de troco de R$ ${fundoVal.toFixed(2)}.`,
+      description: `${session.name} abriu o caixa com fundo de troco de R$ ${fundoVal.toFixed(2)}.`,
       entityType: "CASH_REGISTER",
       entityId: caixa.id,
       terminal: getTerminalName(req),

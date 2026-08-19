@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -27,7 +27,6 @@ import {
   LayoutDashboard
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
-import { useOperator } from "@/context/OperatorContext";
 import { useSession } from "@/context/SessionContext";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -43,17 +42,11 @@ export default function Sidebar() {
   const [isHovered, setIsHovered] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const { theme, hotelLogo, hotelName, showLogoInHeader } = useTheme();
-  const { setOperator } = useOperator();
   const { user, logout } = useSession();
-
-  // O operador ativo (usado nos lançamentos de caixa) passa a ser sempre o usuário
-  // realmente logado — não é mais um nome livre digitado sem verificação.
-  useEffect(() => {
-    if (user) setOperator(user.id, user.name);
-  }, [user, setOperator]);
 
   const displayName = user?.name || "Carregando...";
   const roleLabel = user ? (ROLE_LABELS[user.role] || user.role) : "";
+  const isAdmin = user ? ["SUPER_ADMIN", "TENANT_ADMIN"].includes(user.role) : false;
 
   const operatorInitials = displayName
     .split(" ")
@@ -73,6 +66,7 @@ export default function Sidebar() {
     { href: "/app/cadastros/empresas", label: "Cadastro de Empresas", icon: Building2, iconColor: isSidebarLight ? "text-indigo-600" : "text-[#8B5CF6]" },
     { href: "/app/veiculos", label: "Busca de Veículos", icon: Car, iconColor: isSidebarLight ? "text-sky-600" : "text-[#0EA5E9]" },
     { href: "/app/cash-register", label: "Caixa & Movimentação", icon: DollarSign, iconColor: isSidebarLight ? "text-amber-600" : "text-[#F59E0B]" },
+    ...(isAdmin ? [{ href: "/app/cash-register-geral", label: "Caixa Geral (Admin)", icon: DollarSign, iconColor: isSidebarLight ? "text-emerald-600" : "text-[#10B981]" }] : []),
     { href: "/app/limpeza-quartos", label: "Status de Limpeza", icon: Sparkles, iconColor: isSidebarLight ? "text-yellow-600" : "text-[#EAB308]" },
     { href: "/app/relatorios", label: "Relatórios", icon: FileBarChart, iconColor: isSidebarLight ? "text-violet-600" : "text-[#A78BFA]" },
     { href: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard, iconColor: isSidebarLight ? "text-indigo-600" : "text-[#8B5CF6]" },

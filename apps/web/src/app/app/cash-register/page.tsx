@@ -1,57 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DollarSign, Lock, Unlock, ArrowDownRight, Loader2, Printer } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
-import { useSession } from "@/context/SessionContext";
 import { useOperator } from "@/context/OperatorContext";
 import { useTheme } from "@/context/ThemeContext";
-
-interface CashTransactionDTO {
-  id: string;
-  type: string;
-  amount: number;
-  description: string;
-  paymentMethod: string;
-  guestName: string | null;
-  roomNumber: string | null;
-  createdAt: string;
-}
-
-interface CashRegisterDTO {
-  id: string;
-  caixaNumero: number;
-  operatorId: string;
-  operatorName: string;
-  openingBalance: number;
-  openedAt: string;
-  closedAt: string | null;
-  totalDinheiro: number;
-  totalPix: number;
-  totalCartao: number;
-  totalSangrias: number;
-  saldoTotal: number;
-  transactions: CashTransactionDTO[];
-}
+import CaixaPrintPreview, { CashRegisterDTO } from "@/components/CaixaPrintPreview";
+import { CAIXA_CHANGED_EVENT } from "@/lib/caixaEvents";
 
 const fmtBRL = (v: number) => `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtHora = (iso: string) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-const fmtDataHora = (iso: string) => {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-};
 
 export default function TenantCashRegisterPage() {
   const toast = useToast();
-  const { user } = useSession();
-  const { operatorId, operatorName } = useOperator();
+  const { operatorName } = useOperator();
   const { hotelName, theme } = useTheme();
 
   const [loading, setLoading] = useState(true);
   const [caixa, setCaixa] = useState<CashRegisterDTO | null>(null);
   const [bleedAmount, setBleedAmount] = useState("");
   const [bleedMotivo, setBleedMotivo] = useState("");
+  const [bleedAccountPlanId, setBleedAccountPlanId] = useState("");
+  const [accountPlans, setAccountPlans] = useState<{ id: string; code: string; description: string }[]>([]);
   const [showBleedModal, setShowBleedModal] = useState(false);
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [openingFund, setOpeningFund] = useState("");
@@ -59,11 +29,8 @@ export default function TenantCashRegisterPage() {
   const [showPrintPreview, setShowPrintPreview] = useState(false);
 
   const loadSessao = useCallback(async () => {
-    if (!operatorId) return;
     try {
-      const params = new URLSearchParams({ operatorId });
-      if (user?.tenantId) params.set("tenantId", user.tenantId);
-      const res = await fetch(`/api/caixa/sessao?${params.toString()}`);
+      const res = await fetch("/api/caixa/sessao");
       const data = await res.json();
       setCaixa(data.success && data.isOpen ? data.caixa : null);
     } catch {
@@ -71,10 +38,41 @@ export default function TenantCashRegisterPage() {
     } finally {
       setLoading(false);
     }
-  }, [operatorId, user?.tenantId, toast]);
+  }, [toast]);
 
   useEffect(() => {
     loadSessao();
+  }, [loadSessao]);
+
+  // Plano de contas para o campo "Destino do Recurso" da retirada de caixa — permite ao gerente
+  // identificar, no relatório de fechamento, para onde foi cada retirada (pagamento de despesa,
+  // depósito no cofre etc.), em vez de um texto livre sem categoria.
+  useEffect(() => {
+    fetch("/api/cadastros/plano-contas")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.accounts)) {
+          setAccountPlans(
+            data.accounts
+              .filter((a: any) => a.type === "DESPESA" && a.active !== false && a.level !== "Sintética")
+              .map((a: any) => ({ id: a.id, code: a.code, description: a.description }))
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Após o usuário imprimir (ou fechar) o diálogo de impressão, recarrega a sessão do caixa e
+  // avisa o gate de abertura obrigatória — relevante principalmente após o fechamento, quando o
+  // caixa deixa de estar aberto e o sistema volta a exigir abertura antes de continuar.
+  useEffect(() => {
+    const handleAfterPrint = () => {
+      setShowPrintPreview(false);
+      loadSessao();
+      window.dispatchEvent(new Event(CAIXA_CHANGED_EVENT));
+    };
+    window.addEventListener("afterprint", handleAfterPrint);
+    return () => window.removeEventListener("afterprint", handleAfterPrint);
   }, [loadSessao]);
 
   const handleAbrirCaixa = async () => {
@@ -83,12 +81,7 @@ export default function TenantCashRegisterPage() {
       const res = await fetch("/api/caixa/abrir", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tenantId: user?.tenantId,
-          operatorId,
-          operatorName,
-          fundoTroco: Number(openingFund) || 0,
-        }),
+        body: JSON.stringify({ fundoTroco: Number(openingFund) || 0 }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -99,6 +92,7 @@ export default function TenantCashRegisterPage() {
       setShowOpenModal(false);
       setOpeningFund("");
       await loadSessao();
+      window.dispatchEvent(new Event(CAIXA_CHANGED_EVENT));
     } catch {
       toast.error("Falha ao abrir caixa.");
     } finally {
@@ -114,22 +108,21 @@ export default function TenantCashRegisterPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tenantId: user?.tenantId,
-          operatorId,
-          operatorName,
           valor: Number(bleedAmount),
           motivo: bleedMotivo || undefined,
+          accountPlanId: bleedAccountPlanId || undefined,
         }),
       });
       const data = await res.json();
       if (!data.success) {
-        toast.error(data.error || "Erro ao executar sangria.");
+        toast.error(data.error || "Erro ao executar retirada.");
         return;
       }
-      toast.success(data.message || "Sangria executada com sucesso!");
+      toast.success(data.message || "Retirada de caixa executada com sucesso!");
       setShowBleedModal(false);
       setBleedAmount("");
       setBleedMotivo("");
+      setBleedAccountPlanId("");
       await loadSessao();
     } catch {
       toast.error("Falha ao executar sangria.");
@@ -145,11 +138,7 @@ export default function TenantCashRegisterPage() {
       const res = await fetch("/api/caixa/fechar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tenantId: user?.tenantId,
-          operatorId,
-          saldoInformado: caixa.saldoTotal,
-        }),
+        body: JSON.stringify({ saldoInformado: caixa.saldoTotal }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -157,7 +146,11 @@ export default function TenantCashRegisterPage() {
         return;
       }
       toast.success(data.message || "Caixa fechado com sucesso!");
-      await loadSessao();
+      // Preenche a data/hora do fechamento e abre o diálogo de impressão do caixa, no padrão
+      // do sistema WinDev original, permitindo ao usuário imprimir ou não o relatório.
+      setCaixa((prev) => (prev ? { ...prev, closedAt: new Date().toISOString() } : prev));
+      setShowPrintPreview(true);
+      setTimeout(() => window.print(), 300);
     } catch {
       toast.error("Falha ao fechar caixa.");
     } finally {
@@ -165,45 +158,7 @@ export default function TenantCashRegisterPage() {
     }
   };
 
-  const isOpen = !!caixa;
-
-  // Linhas do relatório impresso do caixa, no padrão do sistema WinDev original (impressão do
-  // caixa.pdf): abertura sempre como primeira linha, cada movimento como Crédito ou Débito.
-  const printRows = useMemo(() => {
-    if (!caixa) return [];
-    const rows: { dataHora: string; descricao: string; credito: number; debito: number }[] = [];
-    const abertura = caixa.transactions.find((t) => t.type === "SUPRIMENTO");
-    rows.push({
-      dataHora: abertura ? abertura.createdAt : caixa.openedAt,
-      descricao: "Abertura do caixa",
-      credito: abertura ? abertura.amount : caixa.openingBalance,
-      debito: 0,
-    });
-    for (const t of caixa.transactions) {
-      if (t.type === "SUPRIMENTO") continue;
-      rows.push({
-        dataHora: t.createdAt,
-        descricao: t.description,
-        credito: t.type === "ENTRADA" ? t.amount : 0,
-        debito: t.type === "SANGRIA" ? t.amount : 0,
-      });
-    }
-    return rows;
-  }, [caixa]);
-
-  // Totais por forma de pagamento (apenas entradas reais, sem contar fundo de troco), somados
-  // ao final do relatório — equivalente ao rodapé "CARTAO / PIX / TOTAL CAIXA" do WinDev.
-  const printTotalsByMethod = useMemo(() => {
-    if (!caixa) return [];
-    const totals = new Map<string, number>();
-    for (const t of caixa.transactions) {
-      if (t.type !== "ENTRADA") continue;
-      totals.set(t.paymentMethod, (totals.get(t.paymentMethod) || 0) + t.amount);
-    }
-    return Array.from(totals.entries());
-  }, [caixa]);
-
-  const printTotalCaixa = printTotalsByMethod.reduce((s, [, v]) => s + v, 0);
+  const isOpen = !!caixa && !caixa.closedAt;
 
   const handlePrint = () => {
     setShowPrintPreview(true);
@@ -212,65 +167,8 @@ export default function TenantCashRegisterPage() {
 
   return (
     <div className="space-y-6">
-      {/* Print Preview — relatório de impressão do caixa, no padrão do sistema WinDev original.
-          Impresso em paisagem para caber todas as colunas (Data/Hora, Descrição, Crédito, Débito,
-          Plano de contas) horizontalmente, ao contrário do restante do sistema (retrato). */}
-      {showPrintPreview && caixa && (
-        <div className="fixed inset-0 bg-white text-black z-[100] p-6 overflow-y-auto print-container print:block hidden font-mono text-xs">
-          <style>{`@media print { @page { size: landscape; } }`}</style>
-          <div className="pb-1">
-            <h1 className="text-base font-bold uppercase tracking-tight">{hotelName || "HOTEL IDEAL"} - 40.904.811/0001-31</h1>
-            <p className="text-[11px] text-slate-700">RUA MARECHAL RONDON, SN - ALTO PARANA - REDENCAO - PA CEP: 68550303 - (063) 3415-4614</p>
-            <div className="h-1.5 bg-black w-full mt-2 mb-3"></div>
-          </div>
-
-          <div className="flex items-center justify-between text-xs mb-1">
-            <span><strong>No.Caixa:</strong> {caixa.caixaNumero}</span>
-            <span><strong>Página:</strong> 1</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-6 text-xs mb-3">
-            <span><strong>Operador:</strong> {caixa.operatorName}</span>
-            <span><strong>Data Abertura:</strong> {fmtDataHora(caixa.openedAt)}</span>
-            <span><strong>Data fechamento:</strong> {caixa.closedAt ? fmtDataHora(caixa.closedAt) : "__/__/____ HH:mm:SS"}</span>
-          </div>
-
-          <table className="w-full text-left border-collapse text-[11px]">
-            <thead>
-              <tr className="border-y border-black font-bold">
-                <th className="py-1 pr-2">Data/Hora</th>
-                <th className="py-1 pr-2">Descrição</th>
-                <th className="py-1 pr-2 text-right">Crédito(R$)</th>
-                <th className="py-1 pr-2 text-right">Débito(R$)</th>
-                <th className="py-1">Plano de contas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {printRows.map((row, idx) => (
-                <tr key={idx} className="border-b border-slate-300">
-                  <td className="py-1 pr-2 whitespace-nowrap">{fmtDataHora(row.dataHora)}</td>
-                  <td className="py-1 pr-2">{row.descricao}</td>
-                  <td className="py-1 pr-2 text-right">{fmtBRL(row.credito)}</td>
-                  <td className="py-1 pr-2 text-right">{fmtBRL(row.debito)}</td>
-                  <td className="py-1">Plano de contas não encontrado</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div className="mt-4 space-y-1 text-xs max-w-xs">
-            {printTotalsByMethod.map(([method, total]) => (
-              <div key={method} className="flex justify-between font-semibold">
-                <span>{method}</span>
-                <span>{fmtBRL(total)}</span>
-              </div>
-            ))}
-            <div className="flex justify-between font-bold pt-1 border-t border-black">
-              <span>TOTAL CAIXA:</span>
-              <span>{fmtBRL(printTotalCaixa)}</span>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Print Preview — relatório de impressão do caixa, no padrão do sistema WinDev original. */}
+      {showPrintPreview && caixa && <CaixaPrintPreview caixa={caixa} hotelName={hotelName} />}
 
       {/* Conteúdo normal da tela — oculto durante a impressão, que usa somente o print-container acima */}
       <div className="space-y-6 print:hidden">
@@ -363,7 +261,7 @@ export default function TenantCashRegisterPage() {
                   onClick={() => setShowBleedModal(true)}
                   className="px-3 py-1.5 bg-red-500/15 hover:bg-red-500/30 text-red-400 border border-red-500/30 rounded text-xs font-semibold transition-colors flex items-center gap-1"
                 >
-                  <ArrowDownRight className="w-4 h-4" /> Realizar Sangria
+                  <ArrowDownRight className="w-4 h-4" /> Retirada de Caixa
                 </button>
 
                 <button
@@ -471,14 +369,17 @@ export default function TenantCashRegisterPage() {
             <div className={`flex items-center justify-between border-b pb-3 ${theme.borderColor}`}>
               <h3 className={`text-base font-semibold flex items-center gap-2 ${theme.textMain}`}>
                 <ArrowDownRight className="w-4 h-4 text-red-400" />
-                Sangria de Caixa (Retirada de Dinheiro)
+                Retirada de Caixa (Sangria)
               </h3>
               <button onClick={() => setShowBleedModal(false)} className={`hover:${theme.textMain} text-sm ${theme.textMuted}`}>✕</button>
             </div>
 
             <div className="space-y-3 text-xs">
+              <p className={theme.textMuted}>
+                Use para qualquer saída de dinheiro do caixa — depósito no cofre, troco entregue, pagamento de despesa mínima em espécie, etc.
+              </p>
               <div className="space-y-1">
-                <label className={`font-medium ${theme.textMuted}`}>Valor a Retirar para Cofre</label>
+                <label className={`font-medium ${theme.textMuted}`}>Valor a Retirar</label>
                 <input
                   type="number"
                   value={bleedAmount}
@@ -488,12 +389,25 @@ export default function TenantCashRegisterPage() {
                 />
               </div>
               <div className="space-y-1">
+                <label className={`font-medium ${theme.textMuted}`}>Plano de Contas (Destino do Recurso)</label>
+                <select
+                  value={bleedAccountPlanId}
+                  onChange={(e) => setBleedAccountPlanId(e.target.value)}
+                  className={`w-full rounded-lg px-3 py-2 text-sm border focus:outline-none focus:border-red-400 ${theme.isDark ? "bg-[#1E293B] border-slate-700 text-white" : "bg-white border-slate-200 text-slate-900"}`}
+                >
+                  <option value="">Não informado</option>
+                  {accountPlans.map((p) => (
+                    <option key={p.id} value={p.id}>{p.code} - {p.description}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
                 <label className={`font-medium ${theme.textMuted}`}>Motivo (opcional)</label>
                 <input
                   type="text"
                   value={bleedMotivo}
                   onChange={(e) => setBleedMotivo(e.target.value)}
-                  placeholder="Ex: Sangria para cofre central"
+                  placeholder="Ex: Pagamento de entregador, depósito no cofre..."
                   className={`w-full rounded-lg px-3 py-2 text-sm border focus:outline-none focus:border-red-400 ${theme.isDark ? "bg-[#1E293B] border-slate-700 text-white" : "bg-white border-slate-200 text-slate-900"}`}
                 />
               </div>
@@ -511,7 +425,7 @@ export default function TenantCashRegisterPage() {
                 disabled={submitting}
                 className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm rounded-lg font-bold disabled:opacity-50"
               >
-                Confirmar Sangria
+                Confirmar Retirada
               </button>
             </div>
           </div>

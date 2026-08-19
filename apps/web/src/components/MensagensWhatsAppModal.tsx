@@ -345,72 +345,64 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
         </div>
 
         {/* TOP INFO PANEL */}
-        <div className={`p-4 grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4 border-b ${theme.isDark ? "border-slate-800" : "border-slate-200"}`}>
-          {/* Foto + telefone */}
-          <div className="flex flex-col items-center gap-2 sm:w-40">
-            <div className={`w-20 h-20 rounded-full overflow-hidden flex items-center justify-center border-2 ${hasWhatsapp ? "border-emerald-500" : "border-slate-500"} ${theme.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
-              {loadingProfile ? (
-                <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-              ) : profileImage ? (
-                <img src={profileImage} alt={roomData.guestName} className="w-full h-full object-cover" />
-              ) : (
-                <UserRound className={`w-9 h-9 ${theme.isDark ? "text-slate-500" : "text-slate-400"}`} />
-              )}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-mono font-semibold">{phoneVisible ? phone || "-" : maskedPhone || "-"}</span>
-              <button onClick={() => setPhoneVisible((v) => !v)} className={theme.isDark ? "text-slate-400 hover:text-white" : "text-slate-500 hover:text-slate-900"}>
-                {phoneVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${hasWhatsapp ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}>
-              {loadingProfile ? "Verificando..." : hasWhatsapp ? "WhatsApp ativo" : "WhatsApp indisponível"}
-            </span>
+        <div className={`px-4 py-2.5 flex items-center gap-3 border-b ${theme.isDark ? "border-slate-800" : "border-slate-200"}`}>
+          {/* Foto */}
+          <div className={`w-11 h-11 shrink-0 rounded-full overflow-hidden flex items-center justify-center border-2 ${hasWhatsapp ? "border-emerald-500" : "border-slate-500"} ${theme.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+            {loadingProfile ? (
+              <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            ) : profileImage ? (
+              <img src={profileImage} alt={roomData.guestName} className="w-full h-full object-cover" />
+            ) : (
+              <UserRound className={`w-6 h-6 ${theme.isDark ? "text-slate-500" : "text-slate-400"}`} />
+            )}
           </div>
 
-          {/* Dados da hospedagem + ações */}
-          <div className="space-y-3">
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              <div>
-                <span className={`block font-semibold ${theme.textMuted}`}>Quarto</span>
-                <span className="font-bold">{roomData.number || "-"}</span>
-              </div>
-              <div>
-                <span className={`block font-semibold ${theme.textMuted}`}>Dt.Chegada</span>
-                <span>{roomData.checkInDate || "-"}</span>
-              </div>
-              <div>
-                <span className={`block font-semibold ${theme.textMuted}`}>Dt.Saída</span>
-                <span>{roomData.actualCheckOutDate || roomData.prevCheckOutDate || "-"}</span>
-              </div>
+          {/* Dados resumidos */}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold truncate">{roomData.guestName || "-"}</span>
+              <span className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${hasWhatsapp ? "bg-emerald-500/15 text-emerald-500" : "bg-slate-500/15 text-slate-500"}`}>
+                {loadingProfile ? "..." : hasWhatsapp ? "Ativo" : "Indisponível"}
+              </span>
             </div>
-            <div className={`text-sm font-bold px-3 py-1.5 rounded-lg ${theme.isDark ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-900"}`}>
-              {roomData.guestName || "-"}
+            <div className={`flex items-center gap-3 text-[11px] ${theme.textMuted}`}>
+              <span>Qto <b className={theme.isDark ? "text-white" : "text-slate-900"}>{roomData.number || "-"}</b></span>
+              <span className="hidden sm:inline">{roomData.checkInDate || "-"} → {roomData.actualCheckOutDate || roomData.prevCheckOutDate || "-"}</span>
+              <span className="flex items-center gap-1 font-mono">
+                {phoneVisible ? phone || "-" : maskedPhone || "-"}
+                <button onClick={() => setPhoneVisible((v) => !v)} className={theme.isDark ? "text-slate-400 hover:text-white" : "text-slate-500 hover:text-slate-900"}>
+                  {phoneVisible ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                </button>
+              </span>
             </div>
+          </div>
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={handleSendResumo}
-                disabled={!canSend || sendingDocType !== null}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold transition-colors"
-              >
-                <FileText className="w-3.5 h-3.5" /> {sendingDocType === "resumo" ? "Enviando..." : "Enviar resumo hospedagem"}
-              </button>
-              <button
-                onClick={handleSendConsumo}
-                disabled={!canSend || sendingDocType !== null}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition-colors"
-              >
-                <ShoppingBag className="w-3.5 h-3.5" /> {sendingDocType === "consumo" ? "Enviando..." : "Enviar apenas consumo"}
-              </button>
-              <button
-                onClick={handleSendExtrato}
-                disabled={!canSend || sendingDocType !== null}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-bold transition-colors"
-              >
-                <Receipt className="w-3.5 h-3.5" /> {sendingDocType === "extrato" ? "Enviando..." : "Enviar extrato hospedagem"}
-              </button>
-            </div>
+          {/* Ações — uma única linha */}
+          <div className="flex flex-nowrap gap-1.5 shrink-0">
+            <button
+              onClick={handleSendResumo}
+              disabled={!canSend || sendingDocType !== null}
+              title="Enviar resumo hospedagem"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold transition-colors whitespace-nowrap"
+            >
+              <FileText className="w-3.5 h-3.5" /> {sendingDocType === "resumo" ? "Enviando..." : "Resumo hospedagem"}
+            </button>
+            <button
+              onClick={handleSendConsumo}
+              disabled={!canSend || sendingDocType !== null}
+              title="Enviar consumo do quarto"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition-colors whitespace-nowrap"
+            >
+              <ShoppingBag className="w-3.5 h-3.5" /> {sendingDocType === "consumo" ? "Enviando..." : "Consumo do quarto"}
+            </button>
+            <button
+              onClick={handleSendExtrato}
+              disabled={!canSend || sendingDocType !== null}
+              title="Enviar extrato da hospedagem"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-bold transition-colors whitespace-nowrap"
+            >
+              <Receipt className="w-3.5 h-3.5" /> {sendingDocType === "extrato" ? "Enviando..." : "Extrato da hospedagem"}
+            </button>
           </div>
         </div>
 

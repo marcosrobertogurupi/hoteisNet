@@ -1,11 +1,14 @@
 "use client";
 
+import { useEffect } from "react";
 import Sidebar from "@/components/Sidebar";
+import CashRegisterGate from "@/components/CashRegisterGate";
 import { Settings, Bell } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
+import { useOperator } from "@/context/OperatorContext";
 
 const ROLE_LABELS: Record<string, string> = {
   SUPER_ADMIN: "Super Admin",
@@ -23,11 +26,20 @@ export default function TenantAppLayout({
   const { theme } = useTheme();
   const pathname = usePathname();
   const { user } = useSession();
+  const { setOperator } = useOperator();
   const isSettingsPage = pathname?.startsWith("/app/settings");
   const displayName = user?.name || "";
   const roleLabel = user ? (ROLE_LABELS[user.role] || user.role) : "";
 
+  // O operador ativo (usado nos lançamentos de caixa) é sempre o usuário realmente logado.
+  // Sincronizado aqui no layout raiz (e não só na Sidebar) para já estar correto quando o
+  // CashRegisterGate faz sua checagem, mesmo antes da Sidebar montar.
+  useEffect(() => {
+    if (user) setOperator(user.id, user.name);
+  }, [user, setOperator]);
+
   return (
+    <CashRegisterGate>
     <div className={`flex h-screen overflow-hidden ${theme.bgApp} ${theme.textMain}`}>
       {/* Retractable Sidebar */}
       <Sidebar />
@@ -87,5 +99,6 @@ export default function TenantAppLayout({
         </main>
       </div>
     </div>
+    </CashRegisterGate>
   );
 }

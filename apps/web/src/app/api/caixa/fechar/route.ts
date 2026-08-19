@@ -3,23 +3,24 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-// POST /api/caixa/fechar — fecha (cegamente) o caixa aberto do operador ativo, calculando o
-// saldo esperado a partir das movimentações gravadas.
+// POST /api/caixa/fechar — fecha (cegamente) o caixa aberto do operador autenticado, calculando o
+// saldo esperado a partir das movimentações gravadas. operatorId/tenantId vêm sempre da sessão do
+// servidor, nunca do corpo da requisição, para impedir que um operador feche o caixa de outro.
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { tenantId, operatorId, saldoInformado } = body;
-
-    if (!operatorId) {
-      return NextResponse.json({ success: false, error: "operatorId é obrigatório." }, { status: 400 });
+    const session = await getSessionUser(req);
+    if (!session) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    if (!session.tenantId) {
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
-    const tenantIdsToSearch = [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[];
+    const body = await req.json();
+    const { saldoInformado } = body;
 
     const caixa = await prisma.cashRegister.findFirst({
-      where: { operatorId, isOpen: true, tenantId: { in: tenantIdsToSearch } },
+      where: { operatorId: session.userId, isOpen: true, tenantId: session.tenantId },
       include: { transactions: true },
     });
     if (!caixa) {
@@ -40,13 +41,12 @@ export async function POST(req: NextRequest) {
       data: { isOpen: false, closedAt: new Date(), closingBalance: saldoCalculado },
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId: session?.tenantId || tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
-      userId: session?.userId || operatorId,
-      userName: session?.name || caixa.operatorName,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "CASH_CLOSE",
-      description: `${session?.name || caixa.operatorName} fechou o caixa. Saldo calculado: R$ ${saldoCalculado.toFixed(2)}.`,
+      description: `${session.name} fechou o caixa. Saldo calculado: R$ ${saldoCalculado.toFixed(2)}.`,
       entityType: "CASH_REGISTER",
       entityId: caixa.id,
       terminal: getTerminalName(req),

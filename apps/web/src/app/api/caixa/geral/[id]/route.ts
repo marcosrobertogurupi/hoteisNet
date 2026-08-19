@@ -1,33 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-// GET /api/caixa/sessao — retorna o caixa aberto do operador autenticado (via cookie de sessão),
-// com todas as movimentações. tenantId e operatorId vêm sempre da sessão do servidor, nunca de
-// parâmetros enviados pelo cliente, para que um operador nunca possa ver o caixa de outro nem de
-// outro tenant.
-export async function GET(req: NextRequest) {
+// GET /api/caixa/geral/[id] — detalhe completo (com movimentações) de um caixa específico do
+// tenant do administrador autenticado, no mesmo formato de /api/caixa/sessao, para permitir a
+// impressão de qualquer caixa (aberto ou fechado) a partir da tela "Caixa Geral". Restrito a
+// SUPER_ADMIN/TENANT_ADMIN.
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getSessionUser(req);
-    if (!session) {
-      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    const forbidden = requireAdmin(session);
+    if (forbidden) {
+      return NextResponse.json(forbidden.body, { status: forbidden.status });
     }
-    if (!session.tenantId) {
+    if (!session!.tenantId) {
       return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
+    const { id } = await params;
+
     const caixa = await prisma.cashRegister.findFirst({
-      where: { operatorId: session.userId, isOpen: true, tenantId: session.tenantId },
-      orderBy: { openedAt: "desc" },
+      where: { id, tenantId: session!.tenantId },
       include: { transactions: { orderBy: { createdAt: "asc" }, include: { accountPlan: true } } },
     });
-
     if (!caixa) {
-      return NextResponse.json({ success: true, isOpen: false, caixa: null });
+      return NextResponse.json({ success: false, error: "Caixa não encontrado." }, { status: 404 });
     }
 
-    // Numeração sequencial do caixa (No.Caixa) para o relatório de impressão, seguindo a ordem
-    // cronológica de aberturas do tenant — equivalente ao Cai_Numero do sistema WinDev original.
     const caixaNumero = await prisma.cashRegister.count({
       where: { tenantId: caixa.tenantId, openedAt: { lte: caixa.openedAt } },
     });
@@ -52,7 +51,6 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      isOpen: true,
       caixa: {
         id: caixa.id,
         caixaNumero,
@@ -81,7 +79,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (error: any) {
-    console.error("[GET /api/caixa/sessao] Erro:", error);
-    return NextResponse.json({ success: false, error: error.message || "Erro ao buscar sessão de caixa." }, { status: 500 });
+    console.error("[GET /api/caixa/geral/[id]] Erro:", error);
+    return NextResponse.json({ success: false, error: error.message || "Erro ao buscar caixa." }, { status: 500 });
   }
 }

@@ -615,9 +615,11 @@ model CashTransaction {
   stayCheckinId  String?
   roomNumber     String?
   guestName      String?
+  accountPlanId  String?
   createdAt      DateTime     @default(now())
   cashRegister   CashRegister @relation(fields: [cashRegisterId], references: [id], onDelete: Cascade)
   stay           StayCheckin? @relation(fields: [stayCheckinId], references: [id])
+  accountPlan    AccountPlan? @relation(fields: [accountPlanId], references: [id])
 
   @@map("cash_transactions")
 }
@@ -725,16 +727,17 @@ model Tariff {
 }
 
 model AccountPlan {
-  id          String   @id @default(uuid())
-  tenantId    String
-  code        String
-  description String
-  type        String
-  level       String?
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id               String            @id @default(uuid())
+  tenantId         String
+  code             String
+  description      String
+  type             String
+  level            String?
+  active           Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  cashTransactions CashTransaction[]
 
   @@unique([tenantId, code])
   @@map("account_plans")
