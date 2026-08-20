@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     }
 
     const totalEntradas = caixa.transactions
-      .filter((t) => t.type === "ENTRADA" || t.type === "SUPRIMENTO")
+      .filter((t) => (t.type === "ENTRADA" || t.type === "SUPRIMENTO") && t.countsInCashTotal)
       .reduce((s, t) => s + Number(t.amount), 0);
     const totalSangrias = caixa.transactions
       .filter((t) => t.type === "SANGRIA")

@@ -24,19 +24,24 @@ export async function GET(req: NextRequest) {
     });
 
     const rows = caixas.map((caixa) => {
-      const totalDinheiro = caixa.transactions
+      // Mesmo critério de apps/web/src/app/api/caixa/sessao/route.ts: lançamentos que não são
+      // dinheiro físico (countsInCashTotal=false) ficam fora de todos os totais, inclusive dos
+      // detalhamentos por meio de pagamento.
+      const cashTransactions = caixa.transactions.filter((t) => t.type === "SANGRIA" || t.countsInCashTotal);
+
+      const totalDinheiro = cashTransactions
         .filter((t) => t.type !== "SANGRIA" && t.paymentMethod === "DINHEIRO")
         .reduce((s, t) => s + Number(t.amount), 0);
-      const totalPix = caixa.transactions
+      const totalPix = cashTransactions
         .filter((t) => t.type === "ENTRADA" && t.paymentMethod === "PIX")
         .reduce((s, t) => s + Number(t.amount), 0);
-      const totalCartao = caixa.transactions
+      const totalCartao = cashTransactions
         .filter((t) => t.type === "ENTRADA" && ["CARTAO", "CARTAO_CREDITO", "CARTAO_DEBITO"].includes(t.paymentMethod))
         .reduce((s, t) => s + Number(t.amount), 0);
-      const totalSangrias = caixa.transactions
+      const totalSangrias = cashTransactions
         .filter((t) => t.type === "SANGRIA")
         .reduce((s, t) => s + Number(t.amount), 0);
-      const totalEntradas = caixa.transactions
+      const totalEntradas = cashTransactions
         .filter((t) => t.type === "ENTRADA" || t.type === "SUPRIMENTO")
         .reduce((s, t) => s + Number(t.amount), 0);
       const saldoTotal = totalEntradas - totalSangrias;

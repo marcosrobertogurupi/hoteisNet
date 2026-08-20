@@ -88,7 +88,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {children}
 
       {/* Floating Toast Display Container */}
-      <div className="fixed top-5 right-5 z-[9999] flex flex-col gap-3 max-w-md w-full pointer-events-none">
+      <div className="fixed top-5 right-5 z-[9999] flex flex-col gap-3 max-w-md w-full pointer-events-none print:hidden">
         {toasts.map((toast) => {
           let bgClass = "bg-slate-900/95 border-slate-700 text-white shadow-slate-950/40";
           let icon = <Info className="w-5 h-5 text-sky-400 shrink-0" />;

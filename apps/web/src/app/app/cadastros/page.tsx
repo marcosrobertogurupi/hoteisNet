@@ -26,7 +26,9 @@ import {
   ChevronRight,
   ArrowRight,
   Layers,
-  Tags as TagsIcon
+  Tags as TagsIcon,
+  Receipt as ReceivableIcon,
+  Wallet
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
@@ -260,6 +262,36 @@ export default function CadastrosHubPage() {
           count: "Condições de Pagto",
           badge: "Dados Sincronizados",
           color: isDark ? "bg-violet-500/10 text-violet-400 border-violet-500/20" : "bg-violet-50 text-violet-600 border-violet-200",
+        },
+        {
+          id: "contas-receber",
+          title: "Contas a Receber",
+          description: "Títulos gerados por formas de pagamento parceladas, com baixa e vencimento",
+          icon: ReceivableIcon,
+          href: "/app/cadastros/contas-receber",
+          count: "Parcelamento",
+          badge: "Dados Sincronizados",
+          color: isDark ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-amber-50 text-amber-600 border-amber-200",
+        },
+        {
+          id: "contas-pagar",
+          title: "Contas a Pagar",
+          description: "Títulos de despesas e fornecedores, com plano de contas, vencimento e baixa",
+          icon: Wallet,
+          href: "/app/cadastros/contas-pagar",
+          count: "Financeiro",
+          badge: "Dados Sincronizados",
+          color: isDark ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : "bg-rose-50 text-rose-600 border-rose-200",
+        },
+        {
+          id: "saldo-hospede",
+          title: "Saldo do Hóspede",
+          description: "Extrato de créditos e débitos do saldo credor do hóspede",
+          icon: Wallet,
+          href: "/app/cadastros/saldo-hospede",
+          count: "Extrato de Saldo",
+          badge: "Dados Sincronizados",
+          color: isDark ? "bg-sky-500/10 text-sky-400 border-sky-500/20" : "bg-sky-50 text-sky-600 border-sky-200",
         },
         {
           id: "plano-contas",

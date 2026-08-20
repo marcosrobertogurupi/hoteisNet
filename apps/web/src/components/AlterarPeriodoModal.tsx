@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import CustomDatePicker from "@/components/CustomDatePicker";
 import { useToast } from "@/context/ToastContext";
+import { useTheme } from "@/context/ThemeContext";
 
 export interface TariffOption {
   id: string;
@@ -69,6 +70,10 @@ interface AlterarPeriodoModalProps {
     totalConsumption?: number;
     payments?: PaymentItem[];
     existingReservations?: ExistingReservation[];
+    // Data (ISO) da última diária já lançada na conta — define o limite mínimo de Dt.Saída:
+    // nunca inferior à data de hoje, e nunca inferior ao dia seguinte a essa diária (ela já
+    // foi cobrada e é irreversível, inclusive quando o horário de virada do dia já passou).
+    lastChargeReferenceDateISO?: string;
   };
   onSave: (updatedData: {
     checkOutDate: string;
@@ -91,6 +96,7 @@ export default function AlterarPeriodoModal({
   onSave,
 }: AlterarPeriodoModalProps) {
   const toast = useToast();
+  const { theme } = useTheme();
 
   // Parsing date utilities
   const parseDateTime = (dtStr: string): Date => {
@@ -124,6 +130,22 @@ export default function AlterarPeriodoModal({
   // Form State
   const initialCheckin = useMemo(() => parseDateTime(stayData.checkInDate), [stayData.checkInDate]);
   const initialCheckout = useMemo(() => parseDateTime(stayData.checkOutDate), [stayData.checkOutDate]);
+
+  // Data mínima permitida para Dt.Saída: nunca antes de hoje e, quando a última diária já lançada
+  // (que já reflete a virada de diária do dia, feita no servidor) cobre o dia de hoje, nunca antes
+  // do dia seguinte a ela — essa diária já foi cobrada e não pode ser "desfeita" reduzindo o período.
+  const minCheckOutDate = useMemo(() => {
+    const today = new Date();
+    const today0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+    if (!stayData.lastChargeReferenceDateISO) return today0;
+
+    const lastCharge = new Date(stayData.lastChargeReferenceDateISO);
+    const lastCharge0 = new Date(lastCharge.getFullYear(), lastCharge.getMonth(), lastCharge.getDate());
+    const lastChargeEnd = new Date(lastCharge0.getFullYear(), lastCharge0.getMonth(), lastCharge0.getDate() + 1);
+
+    return lastChargeEnd > today0 ? lastChargeEnd : today0;
+  }, [stayData.lastChargeReferenceDateISO]);
 
   const [checkOutDate, setCheckOutDate] = useState<Date>(initialCheckout);
   const [checkOutTimeString, setCheckOutTimeString] = useState<string>(
@@ -165,11 +187,14 @@ export default function AlterarPeriodoModal({
     if (isOpen) {
       const cin = parseDateTime(stayData.checkInDate);
       const cout = parseDateTime(stayData.checkOutDate);
-      setCheckOutDate(cout);
+      // Estadias com check-out previsto vencido (hóspede ainda em casa, já com diárias extras
+      // lançadas) começam a edição já na menor data permitida, em vez de num valor inválido.
+      const coutClamped = cout < minCheckOutDate ? minCheckOutDate : cout;
+      setCheckOutDate(coutClamped);
       setCheckOutTimeString(`${String(cout.getHours()).padStart(2, "0")}:${String(cout.getMinutes()).padStart(2, "0")}:00`);
       setCalendarViewDate(cin);
     }
-  }, [isOpen, stayData]);
+  }, [isOpen, stayData, minCheckOutDate]);
 
   // Calculation of Nights
   const calculatedNights = useMemo(() => {
@@ -334,29 +359,60 @@ export default function AlterarPeriodoModal({
       return;
     }
 
-    if (newDate < new Date(initialCheckin.getFullYear(), initialCheckin.getMonth(), initialCheckin.getDate())) {
-      toast.warning("A data de check-out não pode ser anterior à data de chegada!");
+    if (newDate < minCheckOutDate) {
+      toast.warning(`A data de saída não pode ser anterior a ${formatDateToInputValue(minCheckOutDate).split("-").reverse().join("/")} (diária já lançada nesta hospedagem).`);
       return;
     }
     setCheckOutDate(newDate);
   };
 
+  // Paleta derivada do tema ativo em Configurações — o layout continua no formato do sistema
+  // legado (grade compacta, campos em destaque), mas as cores agora seguem claro/escuro do app.
+  const cardBg = theme.isDark ? "bg-[#0F172A] text-slate-100 border-slate-700" : "bg-[#EBECE8] text-slate-900 border-slate-400";
+  const headerBarBg = theme.isDark ? "bg-slate-800 border-slate-700" : "bg-slate-200 border-slate-300";
+  const headerText = theme.isDark ? "text-slate-100" : "text-slate-800";
+  const headerIcon = theme.isDark ? "text-slate-300" : "text-slate-700";
+  const subtitleBorder = theme.isDark ? "border-slate-700" : "border-slate-300";
+  const labelText = theme.isDark ? "text-slate-300" : "text-slate-700";
+  const highlightField = theme.isDark
+    ? "bg-slate-800 border-slate-600 text-yellow-300"
+    : "bg-[#FFFDE7] border-slate-400 text-slate-800";
+  const lockedField = theme.isDark
+    ? "bg-slate-800 border-slate-600 text-slate-400"
+    : "bg-slate-200 border-slate-400 text-slate-600";
+  const plainInput = theme.isDark
+    ? "bg-slate-800 border-slate-600 text-slate-100"
+    : "bg-white border-slate-400 text-slate-800";
+  const tableWrap = theme.isDark ? "border-slate-600 bg-slate-900" : "border-slate-400 bg-white";
+  const tableRowHover = theme.isDark ? "hover:bg-slate-800" : "hover:bg-slate-100";
+  const tableRowText = theme.isDark ? "text-slate-200" : "text-slate-800";
+  const tableMuted = theme.isDark ? "text-slate-500" : "text-slate-400";
+  const calendarCardBg = theme.isDark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-300";
+  const calendarHeaderText = theme.isDark ? "text-slate-100" : "text-slate-800";
+  const calendarNavHover = theme.isDark ? "hover:bg-slate-700 text-slate-300" : "hover:bg-slate-200 text-slate-600";
+  const calendarLegendBorder = theme.isDark ? "border-slate-700" : "border-slate-200";
+  const calendarLegendText = theme.isDark ? "text-slate-400" : "text-slate-500";
+  const summaryLabel = theme.isDark ? "text-slate-300" : "text-slate-600";
+  const cancelBtn = theme.isDark
+    ? "border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-100"
+    : "border-slate-400 bg-slate-200 hover:bg-slate-300 text-slate-800";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
-      {/* Main Container styled exactly like WinDev Screenshot */}
-      <div className="relative w-full max-w-5xl bg-[#EBECE8] text-slate-900 rounded-lg shadow-2xl overflow-hidden border-2 border-slate-400 font-sans">
-        
-        {/* WINDEV WINDOW HEADER BAR */}
-        <div className="bg-slate-200 border-b border-slate-300 px-4 py-2 flex items-center justify-between">
+      {/* Main Container — segue o tema ativo do app (Configurações > Aparência) */}
+      <div className={`relative w-full max-w-5xl rounded-lg shadow-2xl overflow-hidden border-2 font-sans ${cardBg}`}>
+
+        {/* WINDOW HEADER BAR */}
+        <div className={`border-b px-4 py-2 flex items-center justify-between ${headerBarBg}`}>
           <div className="flex items-center gap-2">
-            <Clock className="w-5 h-5 text-slate-700" />
-            <h2 className="text-base font-bold text-slate-800">
+            <Clock className={`w-5 h-5 ${headerIcon}`} />
+            <h2 className={`text-base font-bold ${headerText}`}>
               Alterar Periodo Hospedagem: {stayData.idHospedagem || "2627"}
             </h2>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-600 hover:text-red-600 hover:bg-slate-300 rounded p-1 transition-colors"
+            className={`hover:text-red-600 rounded p-1 transition-colors ${theme.isDark ? "text-slate-300 hover:bg-slate-700" : "text-slate-600 hover:bg-slate-300"}`}
           >
             <X className="w-5 h-5" />
           </button>
@@ -364,8 +420,8 @@ export default function AlterarPeriodoModal({
 
         <div className="p-4 space-y-4 text-xs">
           {/* Subtitle */}
-          <div className="border-b border-slate-300 pb-1">
-            <h3 className="text-sm font-bold text-slate-800">Alterar Periodo Hospedagem</h3>
+          <div className={`border-b pb-1 ${subtitleBorder}`}>
+            <h3 className={`text-sm font-bold ${headerText}`}>Alterar Periodo Hospedagem</h3>
           </div>
 
           {/* MAIN GRID: LEFT FORM & RIGHT CALENDAR */}
@@ -377,11 +433,11 @@ export default function AlterarPeriodoModal({
               {/* ROW 1: TARIFAS & VALOR DIÁRIA */}
               <div className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-8">
-                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">Tarifas</label>
+                  <label className={`block text-[11px] font-bold mb-0.5 ${labelText}`}>Tarifas</label>
                   <select
                     value={selectedTariffId}
                     onChange={(e) => setSelectedTariffId(e.target.value)}
-                    className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-2 py-1.5 font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-500 shadow-inner"
+                    className={`w-full border rounded px-2 py-1.5 font-semibold focus:outline-none focus:ring-1 focus:ring-sky-500 shadow-inner ${highlightField}`}
                   >
                     {TARIFF_OPTIONS.map(t => (
                       <option key={t.id} value={t.id}>
@@ -391,8 +447,8 @@ export default function AlterarPeriodoModal({
                   </select>
                 </div>
                 <div className="col-span-4 text-right">
-                  <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Valor diaria (R$)</label>
-                  <div className="bg-[#FFFDE7] border border-slate-300 rounded px-3 py-1.5 text-right font-bold text-slate-800 text-sm shadow-inner">
+                  <label className={`block text-[11px] font-bold mb-0.5 ${labelText}`}>Valor diaria (R$)</label>
+                  <div className={`border rounded px-3 py-1.5 text-right font-bold text-sm shadow-inner ${highlightField}`}>
                     R$ {currentTariff.ratePerNight.toFixed(2).replace(".", ",")}
                   </div>
                 </div>
@@ -401,34 +457,34 @@ export default function AlterarPeriodoModal({
               {/* ROW 2: QUARTO, DESCRIÇÃO QUARTO, DT. CHEGADA & DT. SAÍDA */}
               <div className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-2">
-                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">Quartos</label>
+                  <label className={`block text-[11px] font-bold mb-0.5 ${labelText}`}>Quartos</label>
                   <input
                     type="text"
                     readOnly
                     value={stayData.roomNumber}
-                    className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-2 py-1 font-bold text-slate-800 text-center shadow-inner"
+                    className={`w-full border rounded px-2 py-1 font-bold text-center shadow-inner ${highlightField}`}
                   />
                 </div>
                 <div className="col-span-4">
-                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">Descrição quarto</label>
+                  <label className={`block text-[11px] font-bold mb-0.5 ${labelText}`}>Descrição quarto</label>
                   <input
                     type="text"
                     readOnly
                     value={currentTariff.description || stayData.roomDescription || "1 CAMA DE CASAL + 1 SOLTEIRO"}
-                    className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-2 py-1 text-slate-700 font-medium truncate shadow-inner"
+                    className={`w-full border rounded px-2 py-1 font-medium truncate shadow-inner ${highlightField}`}
                   />
                 </div>
 
                 {/* DT. CHEGADA - STRICTLY READONLY / LOCKED RULE */}
                 <div className="col-span-3 relative">
                   <div className="flex items-center justify-between">
-                    <label className="block text-[11px] font-bold text-slate-700 mb-0.5 flex items-center gap-1">
+                    <label className={`block text-[11px] font-bold mb-0.5 flex items-center gap-1 ${labelText}`}>
                       Dt.Chegada <span title="Início de check-in bloqueado para alteração"><Lock className="w-3 h-3 text-red-600" /></span>
                     </label>
                   </div>
                   <div
                     onClick={() => setShowCheckinLockAlert(true)}
-                    className="cursor-not-allowed bg-slate-200 border border-slate-400 rounded px-1.5 py-1 font-mono font-semibold text-slate-600 text-[11px] flex items-center justify-between"
+                    className={`cursor-not-allowed border rounded px-1.5 py-1 font-mono font-semibold text-[11px] flex items-center justify-between ${lockedField}`}
                   >
                     <span>{formatDateTimeDisplay(initialCheckin)}</span>
                   </div>
@@ -445,7 +501,7 @@ export default function AlterarPeriodoModal({
 
                 {/* DT. SAÍDA - EDITABLE RULE */}
                 <div className="col-span-3">
-                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">Dt.Saida</label>
+                  <label className={`block text-[11px] font-bold mb-0.5 ${labelText}`}>Dt.Saida</label>
                   <div className="flex items-center gap-1">
                     <div className="flex-1">
                       <CustomDatePicker
@@ -454,15 +510,15 @@ export default function AlterarPeriodoModal({
                           if (!v) return;
                           const [y, m, d] = v.split("-").map(Number);
                           const newDate = new Date(y, m - 1, d);
-                          if (newDate < new Date(initialCheckin.getFullYear(), initialCheckin.getMonth(), initialCheckin.getDate())) {
-                            toast.warning("A data de saída não pode ser menor que a data de chegada!");
+                          if (newDate < minCheckOutDate) {
+                            toast.warning(`A data de saída não pode ser anterior a ${formatDateToInputValue(minCheckOutDate).split("-").reverse().join("/")} (diária já lançada nesta hospedagem).`);
                             return;
                           }
                           setCheckOutDate(newDate);
                         }}
                         occupiedDates={occupiedDates}
-                        minDate={formatDateToInputValue(initialCheckin)}
-                        isDark={false}
+                        minDate={formatDateToInputValue(minCheckOutDate)}
+                        isDark={theme.isDark}
                         type="date"
                       />
                     </div>
@@ -493,25 +549,25 @@ export default function AlterarPeriodoModal({
               {/* ROW 3: CPF & NOME HÓSPEDE PRINCIPAL & STEPPERS */}
               <div className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-3">
-                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">C.P.F.</label>
+                  <label className={`block text-[11px] font-bold mb-0.5 ${labelText}`}>C.P.F.</label>
                   <input
                     type="text"
                     readOnly
                     value={stayData.cpf || "64320430182"}
-                    className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-2 py-1 font-mono text-slate-800 shadow-inner"
+                    className={`w-full border rounded px-2 py-1 font-mono shadow-inner ${highlightField}`}
                   />
                 </div>
                 <div className="col-span-5">
-                  <label className="block text-[11px] font-bold text-slate-700 mb-0.5">Nome do Hospede Principal</label>
+                  <label className={`block text-[11px] font-bold mb-0.5 ${labelText}`}>Nome do Hospede Principal</label>
                   <div className="flex items-center gap-1">
-                    <div className="p-1 bg-slate-300 rounded border border-slate-400 text-slate-700">
+                    <div className={`p-1 rounded border ${theme.isDark ? "bg-slate-700 border-slate-600 text-slate-300" : "bg-slate-300 border-slate-400 text-slate-700"}`}>
                       <User className="w-3.5 h-3.5" />
                     </div>
                     <input
                       type="text"
                       readOnly
                       value={stayData.guestName}
-                      className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-2 py-1 font-bold text-slate-800 uppercase truncate shadow-inner"
+                      className={`w-full border rounded px-2 py-1 font-bold uppercase truncate shadow-inner ${highlightField}`}
                     />
                   </div>
                 </div>
@@ -519,34 +575,34 @@ export default function AlterarPeriodoModal({
                 {/* ADULTO, CRIANÇA, DIÁRIAS */}
                 <div className="col-span-4 flex items-center justify-end gap-2">
                   <div className="text-center">
-                    <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Adulto</label>
+                    <label className={`block text-[10px] font-bold mb-0.5 ${labelText}`}>Adulto</label>
                     <input
                       type="number"
                       min={1}
                       max={6}
                       value={adults}
                       onChange={(e) => setAdults(parseInt(e.target.value) || 1)}
-                      className="w-12 bg-[#FFFDE7] border border-slate-400 rounded py-0.5 text-center font-bold text-slate-900 shadow-inner"
+                      className={`w-12 border rounded py-0.5 text-center font-bold shadow-inner ${highlightField}`}
                     />
                   </div>
                   <div className="text-center">
-                    <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Criança</label>
+                    <label className={`block text-[10px] font-bold mb-0.5 ${labelText}`}>Criança</label>
                     <input
                       type="number"
                       min={0}
                       max={4}
                       value={children}
                       onChange={(e) => setChildren(parseInt(e.target.value) || 0)}
-                      className="w-12 bg-[#FFFDE7] border border-slate-400 rounded py-0.5 text-center font-bold text-slate-900 shadow-inner"
+                      className={`w-12 border rounded py-0.5 text-center font-bold shadow-inner ${highlightField}`}
                     />
                   </div>
                   <div className="text-center">
-                    <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Diárias</label>
+                    <label className={`block text-[10px] font-bold mb-0.5 ${labelText}`}>Diárias</label>
                     <input
                       type="text"
                       readOnly
                       value={calculatedNights}
-                      className="w-12 bg-[#FFFDE7] border border-slate-400 rounded py-0.5 text-center font-extrabold text-cyan-800 shadow-inner"
+                      className={`w-12 border rounded py-0.5 text-center font-extrabold shadow-inner ${theme.isDark ? "bg-slate-800 border-slate-600 text-cyan-300" : "bg-[#FFFDE7] border-slate-400 text-cyan-800"}`}
                     />
                   </div>
                 </div>
@@ -555,26 +611,26 @@ export default function AlterarPeriodoModal({
               {/* ROW 4: DEMAIS HÓSPEDES TABLE */}
               <div className="space-y-1 pt-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-700">Demais Hospede</span>
+                  <span className={`text-[11px] font-bold ${labelText}`}>Demais Hospede</span>
                   <div className="flex-1 flex items-center gap-1">
                     <input
                       type="text"
                       placeholder="Nome do acompanhante..."
                       value={newGuestInput}
                       onChange={(e) => setNewGuestInput(e.target.value)}
-                      className="flex-1 bg-white border border-slate-400 rounded px-2 py-0.5 text-slate-800 focus:outline-none"
+                      className={`flex-1 border rounded px-2 py-0.5 focus:outline-none ${plainInput}`}
                     />
                     <button
                       type="button"
                       onClick={handleAddGuest}
-                      className="p-1 bg-slate-300 hover:bg-slate-400 border border-slate-500 rounded text-slate-800 font-bold transition-colors"
+                      className={`p-1 border rounded font-bold transition-colors ${theme.isDark ? "bg-slate-700 hover:bg-slate-600 border-slate-500 text-slate-100" : "bg-slate-300 hover:bg-slate-400 border-slate-500 text-slate-800"}`}
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
-                <div className="border border-slate-400 rounded bg-white overflow-hidden shadow-inner min-h-[70px] max-h-[90px] overflow-y-auto">
+                <div className={`border rounded overflow-hidden shadow-inner min-h-[70px] max-h-[90px] overflow-y-auto ${tableWrap}`}>
                   <table className="w-full text-left text-[11px] border-collapse">
                     <thead className="bg-cyan-600 text-white font-bold sticky top-0">
                       <tr>
@@ -584,15 +640,15 @@ export default function AlterarPeriodoModal({
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-200">
+                    <tbody className="divide-y divide-slate-700/20">
                       {guestList.length === 0 ? (
                         <tr>
-                          <td className="py-2 px-2 text-slate-400 italic text-[10px]">Nenhum acompanhante adicionado</td>
+                          <td className={`py-2 px-2 italic text-[10px] ${tableMuted}`}>Nenhum acompanhante adicionado</td>
                         </tr>
                       ) : (
                         guestList.map((g, idx) => (
-                          <tr key={idx} className="hover:bg-slate-100">
-                            <td className="py-1 px-2 font-medium text-slate-800 flex items-center justify-between">
+                          <tr key={idx} className={tableRowHover}>
+                            <td className={`py-1 px-2 font-medium flex items-center justify-between ${tableRowText}`}>
                               <span>{g}</span>
                               <button
                                 onClick={() => setGuestList(guestList.filter((_, i) => i !== idx))}
@@ -610,34 +666,34 @@ export default function AlterarPeriodoModal({
               </div>
 
               {/* ROW 5: ÁREA DE PAGAMENTOS */}
-              <div className="space-y-1.5 pt-2 border-t border-slate-300">
+              <div className={`space-y-1.5 pt-2 border-t ${subtitleBorder}`}>
                 <div className="grid grid-cols-12 gap-2 items-center">
                   <div className="col-span-3">
-                    <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Dt. Pagto</label>
+                    <label className={`block text-[10px] font-bold mb-0.5 ${labelText}`}>Dt. Pagto</label>
                     <input
                       type="date"
                       value={paymentDateInput}
                       onChange={(e) => setPaymentDateInput(e.target.value)}
-                      className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-1.5 py-0.5 text-slate-800 text-[11px]"
+                      className={`w-full border rounded px-1.5 py-0.5 text-[11px] ${highlightField}`}
                     />
                   </div>
                   <div className="col-span-3">
-                    <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Vlr. Pagto.</label>
+                    <label className={`block text-[10px] font-bold mb-0.5 ${labelText}`}>Vlr. Pagto.</label>
                     <input
                       type="number"
                       step="0.01"
                       placeholder="0,00"
                       value={paymentAmountInput}
                       onChange={(e) => setPaymentAmountInput(e.target.value)}
-                      className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-2 py-0.5 text-right font-bold text-slate-800 text-[11px]"
+                      className={`w-full border rounded px-2 py-0.5 text-right font-bold text-[11px] ${highlightField}`}
                     />
                   </div>
                   <div className="col-span-5">
-                    <label className="block text-[10px] font-bold text-slate-700 mb-0.5">Forma de Pagamento</label>
+                    <label className={`block text-[10px] font-bold mb-0.5 ${labelText}`}>Forma de Pagamento</label>
                     <select
                       value={paymentMethodInput}
                       onChange={(e) => setPaymentMethodInput(e.target.value)}
-                      className="w-full bg-[#FFFDE7] border border-slate-400 rounded px-2 py-0.5 text-slate-800 text-[11px]"
+                      className={`w-full border rounded px-2 py-0.5 text-[11px] ${highlightField}`}
                     >
                       <option value="Dinheiro">Dinheiro Espécie</option>
                       <option value="PIX">PIX Transferência</option>
@@ -650,7 +706,7 @@ export default function AlterarPeriodoModal({
                     <button
                       type="button"
                       onClick={handleAddPayment}
-                      className="p-1 bg-slate-300 hover:bg-slate-400 border border-slate-500 rounded text-slate-800 font-bold transition-colors"
+                      className={`p-1 border rounded font-bold transition-colors ${theme.isDark ? "bg-slate-700 hover:bg-slate-600 border-slate-500 text-slate-100" : "bg-slate-300 hover:bg-slate-400 border-slate-500 text-slate-800"}`}
                       title="Adicionar Pagamento"
                     >
                       <Plus className="w-3.5 h-3.5" />
@@ -659,7 +715,7 @@ export default function AlterarPeriodoModal({
                 </div>
 
                 {/* PAYMENTS TABLE */}
-                <div className="border border-slate-400 rounded bg-white overflow-hidden shadow-inner min-h-[90px] max-h-[120px] overflow-y-auto">
+                <div className={`border rounded overflow-hidden shadow-inner min-h-[90px] max-h-[120px] overflow-y-auto ${tableWrap}`}>
                   <table className="w-full text-left text-[11px] border-collapse">
                     <thead className="bg-cyan-600 text-white font-bold sticky top-0">
                       <tr>
@@ -669,21 +725,21 @@ export default function AlterarPeriodoModal({
                         <th className="py-1 px-1 border-b border-cyan-700 w-8"></th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-200">
+                    <tbody className="divide-y divide-slate-700/20">
                       {payments.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="py-3 px-2 text-center text-slate-400 italic text-[10px]">
+                          <td colSpan={4} className={`py-3 px-2 text-center italic text-[10px] ${tableMuted}`}>
                             Nenhum pagamento registrado nesta hospedagem
                           </td>
                         </tr>
                       ) : (
                         payments.map((p) => (
-                          <tr key={p.id} className="hover:bg-slate-50">
-                            <td className="py-1 px-2 font-mono text-slate-700">{p.date}</td>
-                            <td className="py-1 px-2 text-right font-bold text-emerald-700">
+                          <tr key={p.id} className={tableRowHover}>
+                            <td className={`py-1 px-2 font-mono ${tableRowText}`}>{p.date}</td>
+                            <td className="py-1 px-2 text-right font-bold text-emerald-500">
                               R$ {p.amount.toFixed(2).replace(".", ",")}
                             </td>
-                            <td className="py-1 px-2 text-slate-800">{p.paymentMethod}</td>
+                            <td className={`py-1 px-2 ${tableRowText}`}>{p.paymentMethod}</td>
                             <td className="py-1 px-1 text-center">
                               <button
                                 onClick={() => handleRemovePayment(p.id)}
@@ -704,17 +760,17 @@ export default function AlterarPeriodoModal({
 
             {/* RIGHT SIDE: CALENDAR WIDGET & FINANCIAL SUMMARY (Cols 9-12) */}
             <div className="lg:col-span-4 space-y-3 flex flex-col justify-between">
-              
+
               {/* CALENDAR WIDGET */}
-              <div className="bg-white border-2 border-slate-300 rounded p-2.5 shadow">
+              <div className={`border-2 rounded p-2.5 shadow ${calendarCardBg}`}>
                 {/* Month Navigator Header */}
-                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-200 text-slate-800 font-bold">
+                <div className={`flex items-center justify-between pb-2 mb-2 border-b font-bold ${calendarLegendBorder} ${calendarHeaderText}`}>
                   <button
                     onClick={() => {
                       const prev = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1);
                       setCalendarViewDate(prev);
                     }}
-                    className="p-0.5 hover:bg-slate-200 rounded text-slate-600"
+                    className={`p-0.5 rounded ${calendarNavHover}`}
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
@@ -726,7 +782,7 @@ export default function AlterarPeriodoModal({
                       const next = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1);
                       setCalendarViewDate(next);
                     }}
-                    className="p-0.5 hover:bg-slate-200 rounded text-slate-600"
+                    className={`p-0.5 rounded ${calendarNavHover}`}
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
@@ -760,14 +816,22 @@ export default function AlterarPeriodoModal({
                     const isInRange = currentYMD > cinYMD && currentYMD < coutYMD;
 
                     const isOccupied = occupiedDates.includes(currentYMD);
+                    const isBeforeMin = thisCellDate < minCheckOutDate && !isCheckinDay;
+                    const isBlocked = isOccupied || isBeforeMin;
 
-                    let bgStyle = "hover:bg-slate-200 text-slate-700 cursor-pointer rounded";
+                    let bgStyle = theme.isDark
+                      ? "hover:bg-slate-700 text-slate-200 cursor-pointer rounded"
+                      : "hover:bg-slate-200 text-slate-700 cursor-pointer rounded";
                     if (isOccupied) {
                       bgStyle = "bg-red-600 text-white font-black rounded shadow cursor-not-allowed border border-red-700 opacity-95";
                     } else if (isCheckinDay) {
                       bgStyle = "bg-slate-700 text-white font-bold rounded ring-2 ring-slate-800";
                     } else if (isCheckoutDay) {
                       bgStyle = "bg-emerald-500 text-white font-bold rounded shadow ring-2 ring-emerald-700";
+                    } else if (isBeforeMin) {
+                      bgStyle = theme.isDark
+                        ? "text-slate-600 cursor-not-allowed opacity-50 line-through"
+                        : "text-slate-300 cursor-not-allowed opacity-70 line-through";
                     } else if (isInRange) {
                       bgStyle = "bg-emerald-100 text-emerald-900 font-bold";
                     }
@@ -776,9 +840,9 @@ export default function AlterarPeriodoModal({
                       <button
                         key={idx}
                         type="button"
-                        disabled={isOccupied}
+                        disabled={isBlocked}
                         onClick={() => handleSelectCalendarDay(cell.day)}
-                        title={isOccupied ? "Data Ocupada (Reserva Ativa no Quarto)" : currentYMD}
+                        title={isOccupied ? "Data Ocupada (Reserva Ativa no Quarto)" : isBeforeMin ? "Diária já lançada — não pode ser desmarcada" : currentYMD}
                         className={`py-1 transition-all ${bgStyle}`}
                       >
                         {cell.day}
@@ -787,7 +851,7 @@ export default function AlterarPeriodoModal({
                   })}
                 </div>
 
-                <div className="flex items-center justify-between text-[10px] text-slate-500 pt-2 border-t border-slate-200 mt-2">
+                <div className={`flex items-center justify-between text-[10px] pt-2 border-t mt-2 ${calendarLegendBorder} ${calendarLegendText}`}>
                   <span className="flex items-center gap-1">
                     <span className="w-2.5 h-2.5 bg-red-600 rounded-full inline-block"></span> Ocupado
                   </span>
@@ -804,14 +868,14 @@ export default function AlterarPeriodoModal({
               <div className="space-y-2 pt-2">
                 <div className="grid grid-cols-2 gap-2 text-[11px]">
                   <div>
-                    <label className="block font-semibold text-slate-600">Valor total bruto (R$)</label>
-                    <div className="bg-[#FFFDE7] border border-slate-300 rounded px-2 py-1 text-right font-bold text-slate-800 shadow-inner">
+                    <label className={`block font-semibold ${summaryLabel}`}>Valor total bruto (R$)</label>
+                    <div className={`border rounded px-2 py-1 text-right font-bold shadow-inner ${highlightField}`}>
                       R$ {valorTotalBruto.toFixed(2).replace(".", ",")}
                     </div>
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-600">Total Adiant. (R$)</label>
-                    <div className="bg-[#FFFDE7] border border-slate-300 rounded px-2 py-1 text-right font-bold text-slate-800 shadow-inner">
+                    <label className={`block font-semibold ${summaryLabel}`}>Total Adiant. (R$)</label>
+                    <div className={`border rounded px-2 py-1 text-right font-bold shadow-inner ${highlightField}`}>
                       R$ {totalAdiantamento.toFixed(2).replace(".", ",")}
                     </div>
                   </div>
@@ -819,18 +883,18 @@ export default function AlterarPeriodoModal({
 
                 <div className="grid grid-cols-2 gap-2 text-[11px]">
                   <div>
-                    <label className="block font-semibold text-slate-600">Desconto (R$)</label>
+                    <label className={`block font-semibold ${summaryLabel}`}>Desconto (R$)</label>
                     <input
                       type="number"
                       step="0.01"
                       value={discountAmount || 0}
                       onChange={(e) => setDiscountAmount(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-[#FFFDE7] border border-slate-300 rounded px-2 py-1 text-right font-bold text-slate-800 shadow-inner"
+                      className={`w-full border rounded px-2 py-1 text-right font-bold shadow-inner ${highlightField}`}
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold text-slate-600">Total Consumo(R$)</label>
-                    <div className="bg-[#FFFDE7] border border-slate-300 rounded px-2 py-1 text-right font-bold text-amber-800 shadow-inner">
+                    <label className={`block font-semibold ${summaryLabel}`}>Total Consumo(R$)</label>
+                    <div className={`border rounded px-2 py-1 text-right font-bold shadow-inner ${theme.isDark ? "bg-slate-800 border-slate-600 text-amber-300" : "bg-[#FFFDE7] border-slate-300 text-amber-800"}`}>
                       R$ {totalConsumption.toFixed(2).replace(".", ",")}
                     </div>
                   </div>
@@ -839,11 +903,11 @@ export default function AlterarPeriodoModal({
                 {/* SALDO A PAGAR PROMINENT DISPLAY */}
                 <div className="pt-1">
                   <div className="text-right">
-                    <span className="text-base font-extrabold text-blue-800 block tracking-tight">
+                    <span className={`text-base font-extrabold block tracking-tight ${theme.isDark ? "text-sky-300" : "text-blue-800"}`}>
                       Saldo a pagar (R$)
                     </span>
-                    <div className="bg-[#FFFDE7] border-2 border-slate-400 rounded-md p-2 text-right shadow-md">
-                      <span className="text-2xl font-black text-red-600 tracking-tight">
+                    <div className={`border-2 rounded-md p-2 text-right shadow-md ${theme.isDark ? "bg-slate-800 border-slate-600" : "bg-[#FFFDE7] border-slate-400"}`}>
+                      <span className="text-2xl font-black text-red-500 tracking-tight">
                         R$ {saldoAPagar.toFixed(2).replace(".", ",")}
                       </span>
                     </div>
@@ -855,7 +919,7 @@ export default function AlterarPeriodoModal({
                   <button
                     type="button"
                     onClick={onClose}
-                    className="flex-1 py-2.5 px-4 rounded border-2 border-slate-400 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold flex items-center justify-center gap-2 shadow transition-all text-sm active:scale-[0.98]"
+                    className={`flex-1 py-2.5 px-4 rounded border-2 font-bold flex items-center justify-center gap-2 shadow transition-all text-sm active:scale-[0.98] ${cancelBtn}`}
                   >
                     <X className="w-5 h-5" />
                     Cancelar

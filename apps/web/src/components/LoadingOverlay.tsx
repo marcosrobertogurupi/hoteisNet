@@ -1,6 +1,5 @@
 "use client";
 
-import { RefreshCw } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 // Aviso central exibido enquanto uma tela busca seus dados iniciais no servidor — mesmo padrão
@@ -27,7 +26,12 @@ export default function LoadingOverlay({
           theme.isDark ? "bg-slate-900 border-slate-700 text-slate-100" : "bg-white border-slate-200 text-slate-800"
         }`}
       >
-        <RefreshCw className="w-7 h-7 animate-spin shrink-0" style={{ color: theme.primaryColor }} />
+        <img
+          src="/brand/icon.png"
+          alt="Hoteis.Net"
+          className="w-10 h-10 rounded-lg object-contain shrink-0 animate-spin"
+          style={{ animationDuration: "1.4s" }}
+        />
         <div className="text-sm text-center">
           <p className="font-semibold">{message}</p>
           <p className={theme.textMuted}>{submessage}</p>

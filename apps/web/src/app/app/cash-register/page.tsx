@@ -11,6 +11,8 @@ import LoadingOverlay from "@/components/LoadingOverlay";
 
 const fmtBRL = (v: number) => `R$ ${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtHora = (iso: string) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const fmtDataHora = (iso: string) =>
+  new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 // Profundidade da conta na árvore do plano de contas, com base nos segmentos "zerados" à
 // direita do código (ex: 01.00.00.00 -> 1 | 01.01.00.00 -> 2 | 01.01.01.01 -> 4). Usada para
@@ -255,9 +257,14 @@ export default function TenantCashRegisterPage() {
               <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
             </span>
           ) : isOpen ? (
-            <span className="px-3 py-1.5 rounded-lg bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-semibold text-xs flex items-center gap-1.5">
-              <Unlock className="w-4 h-4" /> Caixa aberto: {caixa!.operatorName}
-            </span>
+            <div className="flex flex-col items-end gap-1">
+              <span className="px-3 py-1.5 rounded-lg bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-semibold text-xs flex items-center gap-1.5">
+                <Unlock className="w-4 h-4" /> Caixa aberto: {caixa!.operatorName}
+              </span>
+              <span className={`text-[11px] ${theme.textMuted}`}>
+                Aberto em {fmtDataHora(caixa!.openedAt)}
+              </span>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <span className="px-3 py-1.5 rounded-lg bg-red-500/15 text-red-400 border border-red-500/30 font-semibold text-xs flex items-center gap-1.5">

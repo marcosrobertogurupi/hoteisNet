@@ -100,6 +100,12 @@ export async function POST(req: NextRequest) {
 
       // Origem: lançamento de pagamento que quita o valor transferido, com a forma pré-cadastrada
       // "TRANSF.DEBITO" — guarda data/hora (createdAt) e o operador (via cashRegister) de quem fez a transferência.
+      // countsInCashTotal: false porque nenhum dinheiro novo entrou no caixa aqui — é só a baixa
+      // interna do débito do quarto de origem. hiddenFromCashLog: true porque, diferente de
+      // Conta Corrente/Parcelamento/Saldo do Hóspede (que ficam visíveis na lista, só não somam),
+      // esta transferência não deve aparecer na lista de movimentações do turno de jeito nenhum —
+      // nenhum dinheiro mudou de mão ainda; o real lançamento de caixa só acontece quando o
+      // quarto de DESTINO pagar de fato (o valor fica em otherDebits, incrementado abaixo).
       await tx.cashTransaction.create({
         data: {
           cashRegisterId: caixa.id,
@@ -107,6 +113,8 @@ export async function POST(req: NextRequest) {
           amount: valorTransferir,
           description: `Transferência de débito para o quarto ${toStay.room.number} (Hóspede: ${toStay.primaryGuest.fullName})`,
           paymentMethod: TRANSFER_PAYMENT_METHOD,
+          countsInCashTotal: false,
+          hiddenFromCashLog: true,
           stayCheckinId: fromStay.id,
           roomNumber: fromStay.room.number,
           guestName: fromStay.primaryGuest.fullName,

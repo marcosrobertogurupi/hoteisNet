@@ -94,14 +94,14 @@ export interface LancarPagamentoHospedagemModalProps {
   checkoutIntent?: boolean;
 }
 
-const PRE_REGISTERED_PAYMENT_METHODS = [
-  "DINHEIRO",
-  "CARTAO",
-  "PIX",
-  "FATURA",
-  "SALDO DE CLIENTE",
-  "TRANSF.DEBITO",
-];
+interface PaymentMethodOption {
+  id: string;
+  description: string;
+  installment: boolean;
+  debitGuestBalance: boolean;
+  transferDebit: boolean;
+  sumsToCashRegister: boolean;
+}
 
 export default function LancarPagamentoHospedagemModal({
   isOpen,
@@ -177,6 +177,38 @@ export default function LancarPagamentoHospedagemModal({
   );
   const [vlrPagto, setVlrPagto] = useState<string>("0,00");
   const [formaPagamento, setFormaPagamento] = useState<string>("DINHEIRO");
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
+
+  // Busca as formas de pagamento cadastradas (Cadastros > Formas de Pagamento) para popular o
+  // seletor abaixo. Formas marcadas como "Transf.Débito" ficam de fora: esse fluxo é acionado
+  // exclusivamente pelo botão dedicado de Transferência de Débito entre Quartos, não por aqui.
+  useEffect(() => {
+    if (!isOpen) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/cadastros/formas-pagamento");
+        const data = await res.json();
+        if (!data?.success || !Array.isArray(data.paymentMethods)) return;
+        const options: PaymentMethodOption[] = data.paymentMethods
+          .filter((f: any) => f.active !== false && !f.transferDebit)
+          .map((f: any) => ({
+            id: f.id,
+            description: f.description,
+            installment: !!f.installment,
+            debitGuestBalance: !!f.debitGuestBalance,
+            transferDebit: !!f.transferDebit,
+            sumsToCashRegister: !!f.sumsToCashRegister,
+          }));
+        setPaymentMethods(options);
+        if (options.length > 0 && !options.some((o) => o.description === formaPagamento)) {
+          setFormaPagamento(options[0].description);
+        }
+      } catch (err) {
+        console.warn("[LancarPagamentoHospedagemModal] Erro ao buscar formas de pagamento:", err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Filter for Guests Table
   const [guestFilter, setGuestFilter] = useState<string>("");
@@ -775,8 +807,8 @@ export default function LancarPagamentoHospedagemModal({
           <div className={`p-3 rounded-lg border flex flex-wrap items-center justify-between gap-3 shadow-sm ${
             theme.isDark ? "bg-slate-900/90 border-slate-800" : "bg-white border-slate-200"
           }`}>
-            <div className="flex items-center gap-3">
-              <div>
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <div className="shrink-0">
                 <label className="block text-[10px] font-bold text-slate-500 uppercase">Quartos</label>
                 <div className="flex items-center gap-1">
                   <span className="font-mono font-extrabold text-sm px-2.5 py-1 rounded bg-[#0284C7] text-white shadow-sm">
@@ -1020,23 +1052,14 @@ export default function LancarPagamentoHospedagemModal({
                 {/* Total Adiant. */}
                 <div>
                   <label className="block text-[10px] font-bold text-sky-600 dark:text-sky-400 uppercase">Total Adiant. (R$)</label>
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="text"
-                      readOnly
-                      value={fmtCurrency(totalPagamentos)}
-                      className={`w-full font-mono font-bold text-right p-1 rounded border ${
-                        theme.isDark ? "bg-slate-800 border-slate-700 text-sky-300" : "bg-sky-50 border-sky-200 text-slate-900"
-                      }`}
-                    />
-                    <button
-                      onClick={() => toast.info(`Total de adiantamentos lançados: ${fmtCurrency(totalPagamentos)}`)}
-                      className="p-1 rounded bg-cyan-600 text-white shrink-0 hover:bg-cyan-500"
-                      title="Ver Adiantamentos"
-                    >
-                      <Eye className="w-3 h-3" />
-                    </button>
-                  </div>
+                  <input
+                    type="text"
+                    readOnly
+                    value={fmtCurrency(totalPagamentos)}
+                    className={`w-full font-mono font-bold text-right p-1 rounded border ${
+                      theme.isDark ? "bg-slate-800 border-slate-700 text-sky-300" : "bg-sky-50 border-sky-200 text-slate-900"
+                    }`}
+                  />
                 </div>
               </div>
 
@@ -1095,9 +1118,9 @@ export default function LancarPagamentoHospedagemModal({
                       theme.isDark ? "bg-slate-800 border-slate-700 text-yellow-300" : "bg-yellow-100 border-yellow-300 text-slate-900"
                     }`}
                   >
-                    {PRE_REGISTERED_PAYMENT_METHODS.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
+                    {paymentMethods.map((m) => (
+                      <option key={m.id} value={m.description}>
+                        {m.description}
                       </option>
                     ))}
                   </select>

@@ -32,19 +32,29 @@ export async function GET(req: NextRequest) {
       where: { tenantId: caixa.tenantId, openedAt: { lte: caixa.openedAt } },
     });
 
-    const totalDinheiro = caixa.transactions
+    // Lançamentos com hiddenFromCashLog=true (só a baixa de origem da transferência de débito
+    // entre quartos) não aparecem nem na lista de movimentações do turno — nenhum dinheiro mudou
+    // de mão ainda. Continuam visíveis no extrato da própria hospedagem (GET /api/caixa/conta-quarto).
+    const visibleTransactions = caixa.transactions.filter((t) => !t.hiddenFromCashLog);
+
+    // Lançamentos com countsInCashTotal=false (Conta Corrente, parcelamento, débito de saldo do
+    // hóspede) aparecem normalmente na lista acima, mas ficam fora dos totais somados — não
+    // representam dinheiro físico entrando no caixa neste momento.
+    const cashTransactions = visibleTransactions.filter((t) => t.type === "SANGRIA" || t.countsInCashTotal);
+
+    const totalDinheiro = cashTransactions
       .filter((t) => t.type !== "SANGRIA" && t.paymentMethod === "DINHEIRO")
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalPix = caixa.transactions
+    const totalPix = cashTransactions
       .filter((t) => t.type === "ENTRADA" && t.paymentMethod === "PIX")
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalCartao = caixa.transactions
+    const totalCartao = cashTransactions
       .filter((t) => t.type === "ENTRADA" && ["CARTAO", "CARTAO_CREDITO", "CARTAO_DEBITO"].includes(t.paymentMethod))
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalSangrias = caixa.transactions
+    const totalSangrias = cashTransactions
       .filter((t) => t.type === "SANGRIA")
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalEntradas = caixa.transactions
+    const totalEntradas = cashTransactions
       .filter((t) => t.type === "ENTRADA" || t.type === "SUPRIMENTO")
       .reduce((s, t) => s + Number(t.amount), 0);
 
@@ -66,12 +76,13 @@ export async function GET(req: NextRequest) {
         totalCartao,
         totalSangrias,
         saldoTotal,
-        transactions: caixa.transactions.map((t) => ({
+        transactions: visibleTransactions.map((t) => ({
           id: t.id,
           type: t.type,
           amount: Number(t.amount),
           description: t.description,
           paymentMethod: t.paymentMethod,
+          countsInCashTotal: t.countsInCashTotal,
           guestName: t.guestName,
           roomNumber: t.roomNumber,
           createdAt: t.createdAt,

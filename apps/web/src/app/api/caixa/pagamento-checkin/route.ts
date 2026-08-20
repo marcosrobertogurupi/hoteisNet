@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
+import { processPaymentLine } from "@/lib/paymentProcessing";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
 
     const opId = operatorId || "USR-001";
     const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
-    const fpg = (formaPagamento || "DINHEIRO").toUpperCase();
+    const fpg = formaPagamento || "DINHEIRO";
     const roomTarget = String(roomId || "");
 
     const tenantIdsToSearch = [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[];
@@ -70,20 +71,28 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (!stay) {
+      return NextResponse.json({ success: false, error: "Hospedagem não encontrada para lançar o pagamento." }, { status: 404 });
+    }
+
     const desc = descricao || `Pagamento de diárias — Quarto ${roomTarget}`;
 
-    const movimento = await prisma.cashTransaction.create({
-      data: {
+    const { cashTransactionId } = await prisma.$transaction((tx) =>
+      processPaymentLine(tx, {
+        tenantId: stay!.tenantId,
         cashRegisterId: caixa.id,
-        type: "ENTRADA",
-        amount: valorNum,
-        description: `${desc} (Hóspede: ${guestName || "—"})`,
-        paymentMethod: fpg,
-        stayCheckinId: stay?.id,
+        stayCheckinId: stay!.id,
+        guestId: stay!.primaryGuestId,
         roomNumber: roomTarget,
         guestName: guestName || "",
-      },
-    });
+        amount: valorNum,
+        paymentMethodDescription: fpg,
+        description: `${desc} (Hóspede: ${guestName || "—"})`,
+        operatorId: opId,
+        operatorName: opName,
+      })
+    );
+    const movimento = { id: cashTransactionId! };
 
     // Saldo devedor atualizado da hospedagem, se localizada no banco
     let saldoContaQuarto: number | null = null;

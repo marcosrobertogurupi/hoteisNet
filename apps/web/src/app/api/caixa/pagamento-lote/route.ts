@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
+import { processPaymentLine } from "@/lib/paymentProcessing";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -46,6 +47,10 @@ export async function POST(req: NextRequest) {
     const movimentos = await prisma.$transaction(async (tx) => {
       const created: { clientId: string; movimentoCaixaId: string }[] = [];
 
+      if (hasPayments && !stay) {
+        throw new Error("Hospedagem não encontrada para lançar o pagamento.");
+      }
+
       if (hasPayments) {
         let caixa = await tx.cashRegister.findFirst({
           where: { operatorId: opId, isOpen: true, tenantId: { in: tenantIdsToSearch } },
@@ -68,22 +73,25 @@ export async function POST(req: NextRequest) {
           if (!valorNum || valorNum <= 0) {
             throw new Error(`Valor de pagamento inválido: ${p.valor}`);
           }
-          const fpg = (p.formaPagamento || "DINHEIRO").toUpperCase();
+          const fpg = p.formaPagamento || "DINHEIRO";
           const desc = p.descricao || `Pagamento de diárias — Quarto ${roomTarget}`;
 
-          const movimento = await tx.cashTransaction.create({
-            data: {
-              cashRegisterId: caixa.id,
-              type: "ENTRADA",
-              amount: valorNum,
-              description: `${desc} (Hóspede: ${guestName || "—"})`,
-              paymentMethod: fpg,
-              stayCheckinId: stay?.id,
-              roomNumber: roomTarget,
-              guestName: guestName || "",
-            },
+          const { cashTransactionId } = await processPaymentLine(tx, {
+            tenantId: stay?.tenantId || tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
+            cashRegisterId: caixa.id,
+            stayCheckinId: stay?.id || "",
+            guestId: stay?.primaryGuestId || null,
+            roomNumber: roomTarget,
+            guestName: guestName || "",
+            amount: valorNum,
+            paymentMethodDescription: fpg,
+            description: `${desc} (Hóspede: ${guestName || "—"})`,
+            operatorId: opId,
+            operatorName: opName,
           });
-          created.push({ clientId: p.clientId, movimentoCaixaId: movimento.id });
+          if (cashTransactionId) {
+            created.push({ clientId: p.clientId, movimentoCaixaId: cashTransactionId });
+          }
         }
       }
 

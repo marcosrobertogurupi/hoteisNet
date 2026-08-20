@@ -52,6 +52,10 @@ model Tenant {
   emailSettings     EmailSetting?
   floors            Floor[]
   guests            Guest[]
+  paymentMethods    PaymentMethod[]
+  accountsReceivable AccountsReceivable[]
+  accountsPayable   AccountsPayable[]
+  guestBalanceEntries GuestBalanceEntry[]
   posLocations      POSLocation[]
   products          Product[]
   reservations      Reservation[]       @relation("TenantReservations")
@@ -202,6 +206,135 @@ model RoomCategory {
   @@map("room_categories")
 }
 
+model PaymentMethod {
+  id          String  @id @default(uuid())
+  tenantId    String
+  description String
+  // Parcelamento = ao lançar um pagamento com esta forma, o valor vai para o contas a receber
+  // (AccountsReceivable) em vez de ser quitado em caixa — ver apps/web/src/lib/paymentProcessing.ts.
+  installment       Boolean @default(false)
+  // Debitar Saldo Hóspede = ao usar esta forma, o sistema consulta e debita o saldo disponível
+  // do hóspede (Guest.balance / GuestBalanceEntry) — ver apps/web/src/lib/paymentProcessing.ts.
+  debitGuestBalance Boolean @default(false)
+  // Transf.Débito = o valor lançado nesta forma é transferido para outro quarto ocupado. Fluxo
+  // dedicado em /api/stay/transfer-debit; formas com esta flag são ocultadas do seletor normal
+  // de pagamento (ver LancarPagamentoHospedagemModal.tsx).
+  transferDebit     Boolean @default(false)
+  // true = Soma Caixa (lança e soma nos totais do caixa); false = Conta Corrente
+  // (apenas informa o lançamento, sem somar nos totais). Mutuamente exclusivos por natureza.
+  sumsToCashRegister Boolean @default(true)
+  active      Boolean @default(true)
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("payment_methods")
+}
+
+model AccountsReceivable {
+  id             String    @id @default(uuid())
+  tenantId       String
+  stayCheckinId  String
+  companyId      String?
+  guestId        String?
+  billedToName   String
+  documentNumber String
+  issueDate      DateTime  @default(now())
+  dueDate        DateTime
+  amount         Decimal   @db.Decimal(10, 2)
+  amountPaid     Decimal   @default(0) @db.Decimal(10, 2)
+  isPaid         Boolean   @default(false)
+  paidAt         DateTime?
+  paymentMethodDescription String
+  notes          String?
+  createdAt      DateTime  @default(now())
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stayCheckin    StayCheckin  @relation(fields: [stayCheckinId], references: [id])
+  company        Company?     @relation(fields: [companyId], references: [id])
+  guest          Guest?       @relation(fields: [guestId], references: [id])
+  settlements    ReceivableSettlement[]
+
+  @@map("accounts_receivable")
+}
+
+model ReceivableSettlement {
+  id                       String   @id @default(uuid())
+  accountsReceivableId     String
+  amount                   Decimal  @db.Decimal(10, 2)
+  interest                 Decimal  @default(0) @db.Decimal(10, 2)
+  discount                 Decimal  @default(0) @db.Decimal(10, 2)
+  paymentMethodDescription String
+  paidAt                   DateTime @default(now())
+  operatorId               String?
+  operatorName             String?
+  accountsReceivable       AccountsReceivable @relation(fields: [accountsReceivableId], references: [id], onDelete: Cascade)
+
+  @@map("receivable_settlements")
+}
+
+// Contas a Pagar — equivalente ao fichier Pagar do sistema legado WinDev (telas Win_ContasPagar e
+// Win_GerarContasPagar). Mesma estrutura de Contas a Receber, mas ligado a Fornecedores em vez de
+// Hóspedes/Empresas, com o Plano de Contas de despesa (Pag_PlContas/Pag_IDPLC no legado) informando
+// em qual conta contábil o débito deve ser lançado.
+model AccountsPayable {
+  id                String    @id @default(uuid())
+  tenantId          String
+  supplierId        String?
+  supplierName      String
+  documentNumber    String
+  originDocument    String?
+  accountPlanId     String?
+  accountPlanCode   String?
+  issueDate         DateTime  @default(now())
+  dueDate           DateTime
+  amount            Decimal   @db.Decimal(10, 2)
+  amountPaid        Decimal   @default(0) @db.Decimal(10, 2)
+  isPaid            Boolean   @default(false)
+  paidAt            DateTime?
+  notes             String?
+  createdAt         DateTime  @default(now())
+  tenant            Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier          Supplier?    @relation(fields: [supplierId], references: [id])
+  accountPlan       AccountPlan? @relation(fields: [accountPlanId], references: [id])
+  settlements       PayableSettlement[]
+
+  @@map("accounts_payable")
+}
+
+model PayableSettlement {
+  id                       String   @id @default(uuid())
+  accountsPayableId        String
+  amount                   Decimal  @db.Decimal(10, 2)
+  interest                 Decimal  @default(0) @db.Decimal(10, 2)
+  discount                 Decimal  @default(0) @db.Decimal(10, 2)
+  paymentMethodDescription String
+  paidAt                   DateTime @default(now())
+  operatorId               String?
+  operatorName             String?
+  accountsPayable          AccountsPayable @relation(fields: [accountsPayableId], references: [id], onDelete: Cascade)
+
+  @@map("payable_settlements")
+}
+
+// Ledger de crédito/débito do saldo do hóspede — equivalente a HospedeNetMov do sistema legado.
+// Guest.balance é o saldo consolidado; estas entradas são o histórico auditável que o compõe.
+model GuestBalanceEntry {
+  id                       String   @id @default(uuid())
+  tenantId                 String
+  guestId                  String
+  stayCheckinId            String?
+  type                     String   // "CREDITO" | "DEBITO"
+  amount                   Decimal  @db.Decimal(10, 2)
+  paymentMethodDescription String?
+  operatorId               String?
+  operatorName             String?
+  description              String?
+  createdAt                DateTime @default(now())
+  tenant                   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  guest                    Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+  stayCheckin              StayCheckin? @relation(fields: [stayCheckinId], references: [id])
+
+  @@map("guest_balance_entries")
+}
+
 // Pré-cadastro de Andares: cada assinante (tenant) define os andares do seu próprio
 // hotel antes de poder selecioná-los no cadastro de Apartamentos (UH).
 model Floor {
@@ -270,6 +403,7 @@ model Company {
   tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   invoices     CorporateInvoice[]
   guests       Guest[]            @relation("GuestCompanyLink")
+  receivables  AccountsReceivable[]
 
   @@map("companies")
 }
@@ -296,11 +430,17 @@ model Guest {
   city           String?
   state          String?
   country        String        @default("Brasil")
+  // Saldo credor consolidado do hóspede — ver GuestBalanceEntry para o ledger de auditoria
+  // (créditos/débitos) que compõe este valor. Equivalente ao conceito de HospedeNetMov do
+  // sistema legado.
+  balance        Decimal       @default(0) @db.Decimal(10, 2)
   fnrhRecords    FNRHRecord[]
   company        Company?      @relation("GuestCompanyLink", fields: [companyId], references: [id])
   tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   checkins       StayCheckin[]
   vehicles       Vehicle[]
+  balanceEntries GuestBalanceEntry[]
+  receivables    AccountsReceivable[]
 
   @@map("guests")
 }
@@ -433,6 +573,8 @@ model StayCheckin {
   debitTransfersOut StayDebitTransfer[] @relation("DebitTransferFrom")
   debitTransfersIn  StayDebitTransfer[] @relation("DebitTransferTo")
   whatsappMessages  WhatsappMessage[]
+  accountsReceivable   AccountsReceivable[]
+  guestBalanceEntries  GuestBalanceEntry[]
 
   @@map("stay_checkins")
 }
@@ -615,6 +757,16 @@ model CashTransaction {
   amount         Decimal      @db.Decimal(10, 2)
   description    String
   paymentMethod  String
+  // Denormalizado no momento da criação a partir de PaymentMethod.sumsToCashRegister — evita
+  // precisar de join para somar os totais físicos do caixa (sessão/geral/fechamento). Default
+  // true preserva o comportamento de todos os lançamentos existentes (abertura, sangria etc).
+  countsInCashTotal Boolean   @default(true)
+  // Só usado pela transferência de débito entre quartos: o lançamento de baixa no quarto de
+  // origem não representa nenhum dinheiro ainda (o dinheiro real só aparece quando o quarto de
+  // destino pagar), então fica fora da lista de movimentações do turno inteiramente — não é
+  // suficiente apenas excluí-lo dos totais, como ocorre com Conta Corrente/Parcelamento/Saldo do
+  // Hóspede, que continuam visíveis na lista (só não somam).
+  hiddenFromCashLog Boolean  @default(false)
   stayCheckinId  String?
   roomNumber     String?
   guestName      String?
@@ -744,6 +896,7 @@ model AccountPlan {
   updatedAt        DateTime          @updatedAt
   tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   cashTransactions CashTransaction[]
+  accountsPayable  AccountsPayable[]
 
   @@unique([tenantId, code])
   @@map("account_plans")
@@ -765,6 +918,7 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accountsPayable AccountsPayable[]
 
   @@map("suppliers")
 }

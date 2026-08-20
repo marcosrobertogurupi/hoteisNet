@@ -42,6 +42,8 @@ import AlterarPeriodoModal from "@/components/AlterarPeriodoModal";
 import AlterarTarifaHospedagemModal from "@/components/AlterarTarifaHospedagemModal";
 import CadastroTarifasModal, { INITIAL_TARIFFS, TariffItem } from "@/components/CadastroTarifasModal";
 import CheckinHospedagemModal from "@/components/CheckinHospedagemModal";
+import CheckinCelebrationOverlay from "@/components/CheckinCelebrationOverlay";
+import CheckoutFarewellOverlay from "@/components/CheckoutFarewellOverlay";
 import { ImprimirExtratoHospedagemModal, TariffPeriodItem } from "@/components/ImprimirExtratoHospedagemModal";
 import { ImprimirResumoHospedagemModal } from "@/components/ImprimirResumoHospedagemModal";
 import { MensagensWhatsAppModal } from "@/components/MensagensWhatsAppModal";
@@ -206,6 +208,14 @@ export default function TenantDashboardPage() {
   // exibir um aviso tipo "toast" informando o usuário do que está acontecendo em segundo plano,
   // já que essa busca inicial tem um pequeno delay natural.
   const [isLoadingRooms, setIsLoadingRooms] = useState(true);
+
+  // Animação de boas-vindas exibida no card do quarto logo após um check-in ser confirmado
+  // (id do quarto atualmente em celebração + nome do hóspede para a mensagem final)
+  const [checkinCelebrationRoomId, setCheckinCelebrationRoomId] = useState<string | null>(null);
+  const [checkinCelebrationGuest, setCheckinCelebrationGuest] = useState("");
+
+  // Animação de despedida exibida no card do quarto logo após um check-out ser confirmado
+  const [checkoutFarewellRoomId, setCheckoutFarewellRoomId] = useState<string | null>(null);
 
   // Sincronização automática e transparente a partir do banco de dados (sem piscamento de tela)
   const syncRoomsFromDatabase = useCallback(async () => {
@@ -429,6 +439,22 @@ export default function TenantDashboardPage() {
       lastFetchedRoomNumberRef.current = activeRoom.number;
       (async () => {
         try {
+          // Alterar Período depende da diária do dia já estar lançada (ou não) para calcular a
+          // data mínima de saída permitida — força a checagem de virada de diária no servidor
+          // antes de buscar a hospedagem, em vez de confiar no polling de 1 em 1 minuto que pode
+          // estar até 60s desatualizado no exato momento em que o usuário abre o modal.
+          if (showAlterarPeriodoModal) {
+            try {
+              await fetch("/api/stay/rollover", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tenantId: "tenant-hoteisnet-demo" }),
+              });
+            } catch {
+              // segue com os dados que já existirem se a checagem de virada falhar
+            }
+          }
+
           const res = await fetch(`/api/stay/checkin?roomNumber=${activeRoom.number}&tenantId=tenant-hoteisnet-demo`);
           const data = await res.json();
 
@@ -438,8 +464,10 @@ export default function TenantDashboardPage() {
             setShowResumoModal(false);
             setShowLancarPagamentoModal(false);
             setShowAlterarTarifaModal(false);
+            setShowAlterarPeriodoModal(false);
             setShowConsumptionModal(false);
             setShowTransferDebitoModal(false);
+            setShowWppModal(false);
             return;
           }
 
@@ -465,12 +493,14 @@ export default function TenantDashboardPage() {
           setShowResumoModal(false);
           setShowLancarPagamentoModal(false);
           setShowAlterarTarifaModal(false);
+          setShowAlterarPeriodoModal(false);
           setShowConsumptionModal(false);
           setShowTransferDebitoModal(false);
+          setShowWppModal(false);
         }
       })();
     }
-  }, [showExtratoModal, showResumoModal, showLancarPagamentoModal, showAlterarTarifaModal, showConsumptionModal, showTransferDebitoModal, showWppModal, activeRoom]);
+  }, [showExtratoModal, showResumoModal, showLancarPagamentoModal, showAlterarTarifaModal, showAlterarPeriodoModal, showConsumptionModal, showTransferDebitoModal, showWppModal, activeRoom]);
 
   const handleOpenContextMenu = (e: React.MouseEvent, room: RoomItem) => {
     e.preventDefault();
@@ -960,6 +990,26 @@ export default function TenantDashboardPage() {
                     : ""
                 } ${cardBg} shadow-lg transition-all duration-200 hover:border-slate-400 flex flex-col justify-between space-y-4`}
               >
+
+                {/* 🎉 ANIMAÇÃO DE CHECK-IN: casal feliz entrando/se acomodando no quarto */}
+                {checkinCelebrationRoomId === room.id && (
+                  <CheckinCelebrationOverlay
+                    guestName={checkinCelebrationGuest}
+                    onFinished={() =>
+                      setCheckinCelebrationRoomId((prev) => (prev === room.id ? null : prev))
+                    }
+                  />
+                )}
+
+                {/* 👋 ANIMAÇÃO DE CHECK-OUT: casal deixando o quarto, feliz com a estadia */}
+                {checkoutFarewellRoomId === room.id && (
+                  <CheckoutFarewellOverlay
+                    roomNumber={room.number}
+                    onFinished={() =>
+                      setCheckoutFarewellRoomId((prev) => (prev === room.id ? null : prev))
+                    }
+                  />
+                )}
 
                 {/* ⚠️ BANNER DE ALERTA: RESERVA PARA O DIA */}
                 {hasTodayReservation && (
@@ -1695,6 +1745,10 @@ export default function TenantDashboardPage() {
               )
             );
 
+            // Dispara a animação de boas-vindas (casal entrando/se acomodando) no card recém-ocupado
+            setCheckinCelebrationGuest(checkinData.guestName);
+            setCheckinCelebrationRoomId(activeRoom.id);
+
             // Remover da lista de reservas pendentes de hoje (apaga a badge visual de overbooking "RESERVA HOJE")
             setTodayReservationsByRoom((prev) => {
               const copy = { ...prev };
@@ -2098,21 +2152,11 @@ export default function TenantDashboardPage() {
       )}
 
       {/* LOADING OVERLAY: dados da hospedagem ainda não chegaram do servidor */}
-      {showAlterarPeriodoModal && activeRoom && (!activeStayDetail || !realStayBilling) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-lg shadow-2xl border-2 border-slate-400 dark:border-slate-700 px-8 py-7 flex flex-col items-center gap-3">
-            <RefreshCw className="w-8 h-8 text-cyan-600 animate-spin" />
-            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Buscando dados no servidor. Aguarde...</p>
-            <button
-              type="button"
-              onClick={() => setShowAlterarPeriodoModal(false)}
-              className="text-xs text-slate-500 hover:text-red-600 underline"
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
-      )}
+      <LoadingOverlay
+        show={!!(showAlterarPeriodoModal && activeRoom && (!activeStayDetail || !realStayBilling))}
+        message="Buscando dados da hospedagem..."
+        submessage="Estamos carregando as informações mais recentes do quarto."
+      />
 
       {/* ALTERAR PERÍODO HOSPEDAGEM MODAL */}
       {showAlterarPeriodoModal && activeRoom && activeStayDetail && realStayBilling && (
@@ -2137,6 +2181,7 @@ export default function TenantDashboardPage() {
               amount: p.amount,
               paymentMethod: p.methodDescription,
             })),
+            lastChargeReferenceDateISO: realStayBilling.tariffList[realStayBilling.tariffList.length - 1]?.referenceDateISO,
           }}
           onSave={async (updatedData) => {
             try {
@@ -2337,6 +2382,10 @@ export default function TenantDashboardPage() {
               maintenanceUntil: undefined,
               notes: "Pendente troca de enxoval & higienização",
             } : r));
+
+            // Dispara a animação de despedida (casal deixando o quarto) no card recém-desocupado
+            setCheckoutFarewellRoomId(room.id);
+
             toast.success(`Check-out do Quarto ${room.number} efetuado com sucesso! Quarto encaminhado para Governança (Limpeza).`, "Check-out Concluído");
           }}
         />

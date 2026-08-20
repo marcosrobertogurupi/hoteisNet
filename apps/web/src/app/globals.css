@@ -82,6 +82,124 @@ html[data-theme="light-navy"] body {
   animation: statusFlashAmber 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
+/* Check-in Celebration Overlay: animação de boas-vindas ao efetuar check-in */
+@keyframes checkinOverlayFade {
+  0% { opacity: 0; transform: scale(0.98); }
+  8% { opacity: 1; transform: scale(1); }
+  88% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.01); }
+}
+
+.checkin-celebration-overlay {
+  animation: checkinOverlayFade 2.6s ease-in-out forwards;
+}
+
+@keyframes checkinSceneWalkFade {
+  0% { opacity: 0; transform: translateY(6px); }
+  10% { opacity: 1; transform: translateY(0); }
+  42% { opacity: 1; transform: translateY(0); }
+  52% { opacity: 0; transform: translateY(-6px); }
+  100% { opacity: 0; }
+}
+
+.checkin-scene-walk {
+  animation: checkinSceneWalkFade 2.6s ease-in-out forwards;
+}
+
+@keyframes checkinSceneBedFade {
+  0% { opacity: 0; transform: translateY(8px) scale(0.96); }
+  48% { opacity: 0; }
+  58% { opacity: 1; transform: translateY(0) scale(1); }
+  88% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: scale(1.02); }
+}
+
+.checkin-scene-bed {
+  animation: checkinSceneBedFade 2.6s ease-in-out forwards;
+}
+
+@keyframes checkinWalkIn {
+  0% { transform: translateX(-6px); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateX(4px); opacity: 1; }
+}
+
+.checkin-walk-in {
+  animation: checkinWalkIn 1.1s ease-out forwards;
+}
+
+@keyframes checkinHeartPulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.25); opacity: 1; }
+}
+
+.checkin-heart-1 {
+  animation: checkinHeartPulse 1.1s ease-in-out infinite;
+}
+
+.checkin-heart-2 {
+  animation: checkinHeartPulse 1.1s ease-in-out 0.35s infinite;
+}
+
+/* Checkout Farewell Overlay: animação de despedida ao efetuar check-out (desocupação do quarto) */
+@keyframes checkoutOverlayFade {
+  0% { opacity: 0; transform: scale(0.98); }
+  8% { opacity: 1; transform: scale(1); }
+  88% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.01); }
+}
+
+.checkout-farewell-overlay {
+  animation: checkoutOverlayFade 2.6s ease-in-out forwards;
+}
+
+@keyframes checkoutSceneLeaveFade {
+  0% { opacity: 0; transform: translateY(6px); }
+  10% { opacity: 1; transform: translateY(0); }
+  42% { opacity: 1; transform: translateY(0); }
+  52% { opacity: 0; transform: translateY(-6px); }
+  100% { opacity: 0; }
+}
+
+.checkout-scene-leave {
+  animation: checkoutSceneLeaveFade 2.6s ease-in-out forwards;
+}
+
+@keyframes checkoutSceneAiredFade {
+  0% { opacity: 0; transform: translateY(8px) scale(0.96); }
+  48% { opacity: 0; }
+  58% { opacity: 1; transform: translateY(0) scale(1); }
+  88% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: scale(1.02); }
+}
+
+.checkout-scene-aired {
+  animation: checkoutSceneAiredFade 2.6s ease-in-out forwards;
+}
+
+@keyframes checkoutWalkOut {
+  0% { transform: translateX(6px); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateX(-4px); opacity: 1; }
+}
+
+.checkout-walk-out {
+  animation: checkoutWalkOut 1.1s ease-out forwards;
+}
+
+@keyframes checkoutSparkleSpin {
+  0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.85; }
+  50% { transform: scale(1.2) rotate(90deg); opacity: 1; }
+}
+
+.checkout-sparkle-1 {
+  animation: checkoutSparkleSpin 1.3s ease-in-out infinite;
+}
+
+.checkout-sparkle-2 {
+  animation: checkoutSparkleSpin 1.3s ease-in-out 0.4s infinite;
+}
+
 /* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 6px;

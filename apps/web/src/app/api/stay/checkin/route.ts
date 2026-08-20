@@ -4,6 +4,7 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { sendUazapiText } from "@/lib/uazapi";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
+import { processPaymentLine } from "@/lib/paymentProcessing";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -313,6 +314,25 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      // Débito automático no saldo do hóspede equivalente ao valor total da hospedagem ao
+      // salvá-la (Win_Hospedagem.wdw do sistema legado) — é o contrapeso necessário para que os
+      // créditos gerados pelos pagamentos/adiantamentos (ver processPaymentLine) reflitam saldo
+      // credor de verdade, e não uma soma que só cresce.
+      await tx.guestBalanceEntry.create({
+        data: {
+          tenantId: room.tenantId,
+          guestId: guest.id,
+          stayCheckinId: stay.id,
+          type: "DEBITO",
+          amount: Number(totalAmount || dailyRate || 0),
+          description: `Débito automático — valor total da hospedagem (Quarto ${room.number})`,
+        },
+      });
+      await tx.guest.update({
+        where: { id: guest.id },
+        data: { balance: { decrement: Number(totalAmount || dailyRate || 0) } },
+      });
+
       const validSecondaryGuests = (Array.isArray(secondaryGuests) ? secondaryGuests : []).filter(
         (g: any) => g?.name && String(g.name).trim().length > 0
       );
@@ -372,20 +392,21 @@ export async function POST(req: NextRequest) {
         let totalPagoCheckin = 0;
         for (const p of validPayments) {
           const valorNum = Number(p.valor);
-          const fpg = (p.formaPagamento || "DINHEIRO").toUpperCase();
+          const fpg = p.formaPagamento || "DINHEIRO";
           const desc = p.descricao || `Pagamento de diárias — Quarto ${room.number}`;
 
-          await tx.cashTransaction.create({
-            data: {
-              cashRegisterId: caixa.id,
-              type: "ENTRADA",
-              amount: valorNum,
-              description: `${desc} (Hóspede: ${String(guestName).toUpperCase()})`,
-              paymentMethod: fpg,
-              stayCheckinId: stay.id,
-              roomNumber: room.number,
-              guestName: String(guestName).toUpperCase(),
-            },
+          await processPaymentLine(tx, {
+            tenantId: room.tenantId,
+            cashRegisterId: caixa.id,
+            stayCheckinId: stay.id,
+            guestId: guest.id,
+            roomNumber: room.number,
+            guestName: String(guestName).toUpperCase(),
+            amount: valorNum,
+            paymentMethodDescription: fpg,
+            description: `${desc} (Hóspede: ${String(guestName).toUpperCase()})`,
+            operatorId: opId,
+            operatorName: opName,
           });
           totalPagoCheckin += valorNum;
         }
