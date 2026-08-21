@@ -63,6 +63,10 @@ export async function POST(req: NextRequest) {
         content: content || null,
         filename: filename || null,
         read: true,
+        // Toda mensagem registrada por esta rota parte de uma ação manual do operador na tela —
+        // usado pelo agente de IA para não responder por cima de quem já assumiu a conversa (ver
+        // runGuestSupportAgent em api/uazapi/webhook/[tenantId]/route.ts).
+        sentBy: "HUMAN",
       },
     });
 

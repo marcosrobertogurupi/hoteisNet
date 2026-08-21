@@ -10,13 +10,19 @@ function currentCycleStart(): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
-export async function getRemainingAiQuota(tenantId: string): Promise<{ quota: number; used: number; remaining: number }> {
-  const subscription = await prisma.saASSubscription.findFirst({
-    where: { tenantId, active: true },
-    include: { plan: { select: { aiTokenQuota: true } } },
-    orderBy: { startDate: "desc" },
-  });
-  const quota = subscription?.plan.aiTokenQuota ?? 0;
+export async function getRemainingAiQuota(tenantId: string): Promise<{ quota: number; used: number; remaining: number; blocked: boolean }> {
+  const [subscription, agentSetting] = await Promise.all([
+    prisma.saASSubscription.findFirst({
+      where: { tenantId, active: true },
+      include: { plan: { select: { aiTokenQuota: true } } },
+      orderBy: { startDate: "desc" },
+    }),
+    prisma.aIAgentSetting.findUnique({ where: { tenantId }, select: { tokenQuotaOverride: true, blocked: true } }),
+  ]);
+
+  // tokenQuotaOverride é um controle exclusivo do admin master — sobrescreve a cota do plano
+  // quando definido (ver AIAgentSetting no schema).
+  const quota = agentSetting?.tokenQuotaOverride ?? subscription?.plan.aiTokenQuota ?? 0;
 
   const cycleStart = currentCycleStart();
   const usage = await prisma.aIUsageLog.aggregate({
@@ -25,12 +31,12 @@ export async function getRemainingAiQuota(tenantId: string): Promise<{ quota: nu
   });
   const used = (usage._sum.tokensInput || 0) + (usage._sum.tokensOutput || 0);
 
-  return { quota, used, remaining: Math.max(0, quota - used) };
+  return { quota, used, remaining: Math.max(0, quota - used), blocked: !!agentSetting?.blocked };
 }
 
 export async function hasAiQuotaAvailable(tenantId: string): Promise<boolean> {
-  const { remaining } = await getRemainingAiQuota(tenantId);
-  return remaining > 0;
+  const { remaining, blocked } = await getRemainingAiQuota(tenantId);
+  return !blocked && remaining > 0;
 }
 
 // Preço aproximado do gemini-3.7-flash via AI Gateway, em USD por token — usado só para o registro

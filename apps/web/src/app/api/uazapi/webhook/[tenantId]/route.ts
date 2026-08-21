@@ -39,8 +39,24 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
       .map((m) => ({ role: m.direction === "IN" ? ("user" as const) : ("assistant" as const), content: m.content! }));
     if (messages.length === 0) return;
 
-    const agent = buildGuestSupportAgent(tenantId, setting.systemPromptExtra);
+    let escalationReason: string | null = null;
+    const agent = buildGuestSupportAgent(
+      tenantId,
+      phone,
+      {
+        agentDisplayName: setting.agentDisplayName,
+        tonePreset: setting.tonePreset,
+        adminSystemPromptExtra: setting.systemPromptExtra,
+      },
+      (reason) => {
+        escalationReason = reason;
+      }
+    );
     const result = await agent.generate({ messages });
+
+    if (escalationReason) {
+      console.log(`[runGuestSupportAgent] escalado para humano — tenant=${tenantId} phone=${phone} motivo=${escalationReason}`);
+    }
 
     await logAiUsage({
       tenantId,

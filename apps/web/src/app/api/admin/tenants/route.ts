@@ -29,7 +29,10 @@ export async function GET(req: NextRequest) {
           where: { active: true },
           orderBy: { startDate: "desc" },
           take: 1,
-          select: { plan: { select: { name: true } } },
+          select: { plan: { select: { name: true, aiTokenQuota: true } } },
+        },
+        aiAgentSettings: {
+          select: { systemPromptExtra: true, tokenQuotaOverride: true, blocked: true },
         },
       },
     });
@@ -44,9 +47,13 @@ export async function GET(req: NextRequest) {
         state: t.state,
         status: t.status,
         planName: t.subscriptions[0]?.plan?.name || null,
+        planAiTokenQuota: t.subscriptions[0]?.plan?.aiTokenQuota ?? null,
         cpfQueryQuotaMonthly: t.cpfQueryQuotaMonthly,
         cpfQueryUsed: t.cpfQueryUsed,
         cpfQueryCycleStart: t.cpfQueryCycleStart,
+        aiSystemPromptExtra: t.aiAgentSettings?.systemPromptExtra || "",
+        aiTokenQuotaOverride: t.aiAgentSettings?.tokenQuotaOverride ?? null,
+        aiBlocked: t.aiAgentSettings?.blocked || false,
       })),
     });
   } catch (error) {

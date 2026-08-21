@@ -124,9 +124,10 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * **Contas a Receber ✅:** `AccountsReceivable` (título vinculado a uma hospedagem, hóspede ou empresa) é criado automaticamente por `processPaymentLine` quando a forma de pagamento tem `installment` ativo, com vencimento padrão de 30 dias. Tela `app/app/cadastros/contas-receber` + `api/cadastros/contas-receber` lista títulos em aberto/pagos; `api/cadastros/contas-receber/baixa` registra baixa total ou parcial (com juros/desconto) em `ReceivableSettlement`, marcando `isPaid=true` quando o saldo devedor zera — equivalente à aba "Baixa" do `Win_ContasReceber` original.
 * **Contas a Pagar ✅:** `AccountsPayable` (título vinculado a um Fornecedor, com Plano de Contas de despesa) e `PayableSettlement` seguem a mesma estrutura de Contas a Receber. Tela `app/app/cadastros/contas-pagar` + `api/cadastros/contas-pagar` (listagem) e `api/cadastros/contas-pagar/baixa` (quitação total/parcial com juros/desconto) — equivalente a `Win_ContasPagar`/`Win_GerarContasPagar` do sistema legado.
 
-### 3.7. Governança e Manutenção ✅
+### 3.7. Governança e Manutenção ✅ (parcialmente — ver ressalva)
 * **Painel da Governança:** Painel exclusivo para camareiras e supervisão de governança ordenando os quartos por prioridade de limpeza pós check-out.
 * **Controle de Manutenção:** Agendamento de reparos com bloqueio temporário de inventário de quartos.
+* 🟡 **Em desenvolvimento — atribuição de tarefas de limpeza:** novos models `Housekeeper`, `HousekeepingTask` e `HousekeepingSetting` no schema; `api/tenant/housekeeping-settings` (GET/PATCH) já persiste o modo de atribuição por tenant (`RECEPTION` — a recepção atribui manualmente — ou `QUEUE` — fila geral que qualquer camareira pode assumir). Ainda não há UI nem rotas conectadas aos models `Housekeeper`/`HousekeepingTask` em si.
 
 ### 3.8. Self Check-in & WhatsApp (Uazapi) ✅ (parcialmente — ver ressalvas)
 * **Pre-Checkin Antecipado ⏳/🟡:** Wizard de UI existe (ver 3.4) mas ainda não está conectado a dados reais nem ao envio/recebimento via WhatsApp.
@@ -140,16 +141,54 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * **Dívida de segurança remanescente ⚠️:** `api/uazapi/send-reserva` e `api/uazapi/send-extrato` ainda usam fallback de servidor/token padrão embutido no código quando o tenant não tem instância própria configurada — deve ser removido (ver seção 4).
 * **QR Code Expresso:** ⏳ não implementado.
 
-### 3.9. Central de Ajuda & Suporte com Inteligência Artificial (RAG) 🟡
-* **Status real:** `app/app/support/page.tsx` é um **mock de chat/ticket**, com tickets, histórico de mensagens e respostas de "IA" gerados por arrays estáticos e `setTimeout`, incluindo percentuais de "confiança" fabricados. Não existe nenhuma rota `/api/support/*`.
-* Os modelos Prisma `SupportTicket`, `TicketMessage` e `SupportKnowledgeBase` existem no schema mas **não são referenciados em nenhum lugar do código de aplicação**.
-* Não há embeddings, banco vetorial ou chamadas a LLM implementadas para esta funcionalidade.
+### 3.9. Agentes de IA (Atendimento WhatsApp + Operacional) ✅ (parcialmente — ver ressalvas)
+Plano completo e detalhado em `PLANO_AGENTE_IA.md`. Dois agentes autônomos via Vercel AI SDK
+(`ToolLoopAgent`), modelo `gemini-3.7-flash` pelo **provider direto do Google**
+(`GOOGLE_GENERATIVE_AI_API_KEY` — o Vercel AI Gateway está bloqueado até se cadastrar um cartão de
+crédito na conta Vercel; o código já está pronto para trocar de volta).
+* **Agente de Atendimento ✅** (`apps/web/src/lib/aiAgent/`): tools `check_availability`,
+  `get_reservation_by_phone`, `get_guest_by_cpf` (cadastro do hotel → fallback Hub do
+  Desenvolvedor), `list_room_categories`, `get_hotel_info`, `search_knowledge_base`,
+  `create_reservation` (transação atômica, guardrail `autoConfirmReservations` decidido em código,
+  nunca pelo modelo) e `escalate_to_human`. Ligado ao webhook da uazapi
+  (`api/uazapi/webhook/[tenantId]`), com guarda para não responder por cima de um humano que
+  respondeu a mesma conversa nos últimos 30min e checagem de cota/bloqueio antes de gastar tokens.
+  **Pendente:** envio de FNRH sob demanda pelo próprio agente, tool de enviar foto de quarto
+  (`Room.photos` já existe no schema), tools de serviços/café da manhã (dependem da Fase B do
+  plano — model `HotelService` real ainda não existe).
+* **Agente Operacional v1 ✅** (`apps/worker/src/operationalAgent.ts`, cron a cada 15min): detecção
+  100% determinística (FNRH travada no SNRHos, pré-check-in pendente com check-in próximo, quarto
+  em manutenção/sujo parado por tempo demais, WhatsApp do hotel desconectado); quando há problema
+  novo, o LLM só compõe o resumo em linguagem natural e o alerta é enviado por WhatsApp
+  (`OperationalAlertLog` evita repetir o mesmo alerta). Roda só para tenants com
+  `monitoringEnabled=true`. **Pendente:** modo de autonomia (`AUTONOMOUS_LIMITED`) — o toggle existe
+  na UI mas nenhuma ação automática foi implementada; requer lista explícita de ações permitidas
+  aprovada pelo usuário antes de codar.
+* **Base de conhecimento (aprendizado) ✅:** `SupportKnowledgeBase` (por tenant, `agentType`
+  SUPPORT/OPERATIONAL) — tela `app/cadastros/base-conhecimento` para o operador salvar
+  pergunta+resposta manualmente; busca por palavras-chave (sem embeddings/vetores — suficiente para
+  o volume esperado por hotel; migrar para pgvector se crescer muito).
+* **Separação de controle assinante vs. admin master ✅:** `AIAgentSetting` divide claramente os
+  campos editáveis pelo assinante (nome/foto do agente, preset de tom, toggles, telefone de alerta)
+  dos exclusivos do admin master (`systemPromptExtra` — prompt cru de personalidade,
+  `tokenQuotaOverride`, `blocked`) — nova seção em `admin/page.tsx` ("Agentes de IA — Prompt, Cota
+  de Tokens e Bloqueio por Assinante"), restrita a `SUPER_ADMIN`.
+* **`AIUsageLog` ✅:** grava tokens/custo real a cada chamada de qualquer um dos dois agentes; cota
+  vem de `SaaSPlan.aiTokenQuota`, sobrescrita por `AIAgentSetting.tokenQuotaOverride` quando definido.
+* **Ressalva:** `app/app/support/page.tsx` (Central de Ajuda voltada ao hóspede/staff, distinta dos
+  dois agentes acima) continua sendo um **mock de chat/ticket** com respostas de "IA" fabricadas por
+  `setTimeout` — não foi tocada nesta feature. Os modelos `SupportTicket`/`TicketMessage` também
+  seguem não referenciados no código.
+* **Não existe usuário `SUPER_ADMIN` real no banco ainda** (só `TENANT_ADMIN`) — o painel admin foi
+  testado com uma sessão JWT sintética; criar um usuário `SUPER_ADMIN` de verdade antes de usar em
+  produção.
 
 ### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡 (parcialmente — ver ressalva)
-* `admin/tenants`, `admin/ai-telemetry` e `admin/support` são **mocks de UI**: dados de tenants, consumo de IA/token e fila de suporte são arrays fixos em React state; nenhuma chamada de API é feita, e nenhum dos modelos `SaaSPlan`, `SaASSubscription` ou `AIUsageLog` é usado no código.
+* `admin/tenants` (tela separada, não usada) e `admin/support` são **mocks de UI**: dados fixos em React state, nenhuma chamada de API. `admin/ai-telemetry` também é mock (não confundir com a seção real de IA dentro de `admin/page.tsx`, ver abaixo).
 * O botão "Resolve & Vectorize RAG" em `admin/support` simula (via toast) uma vetorização no Supabase pgvector que não ocorre de fato.
 * **Cota de Consultas de CPF por Assinante ✅:** dentro de `admin/page.tsx` ("Configuração do Sistema"), a tabela de cota de CPF por hotel já é real — `api/admin/tenants` (GET) lista todos os tenants com `cpfQueryQuotaMonthly`/`cpfQueryUsed` vindos do banco, e `api/admin/tenants/[id]` (PATCH) grava a nova cota mensal editada pelo Super Admin, refletindo imediatamente no limite aplicado em `api/stay/hub-consult-cpf`.
-* **Pendente:** conectar as demais telas (`admin/tenants`, `admin/ai-telemetry`, `admin/support`) aos modelos Prisma correspondentes para virarem um painel real de gestão SaaS.
+* **Agentes de IA — Prompt, Cota de Tokens e Bloqueio por Assinante ✅:** mesma seção "Configuração do Sistema" de `admin/page.tsx`, mesmas rotas `api/admin/tenants`/`api/admin/tenants/[id]` estendidas — prompt cru de personalidade por tenant (`AIAgentSetting.systemPromptExtra`), override de cota de tokens (`tokenQuotaOverride`) e bloqueio de uso (`blocked`), tudo real e persistido. Ver 3.9.
+* **Pendente:** conectar as demais telas mock (`admin/tenants` standalone, `admin/ai-telemetry`, `admin/support`) aos modelos Prisma correspondentes.
 
 ### 3.11. Módulo Fiscal (NFe/NFSe) 🟡
 * `app/app/fiscal/page.tsx` exibe uma lista fixa de notas "emitidas" em estado local; o botão "Emitir NFSe de Teste" apenas adiciona um objeto fictício com protocolo SEFAZ inventado — sem integração real com prefeitura/SEFAZ.
@@ -216,3 +255,4 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * [x] **Fase 13 (nova):** Caixa obrigatório para operar o sistema (`CashRegisterGate`), Caixa Geral consolidado para Admin (`app/cash-register-geral` + `api/caixa/geral`), sangria vinculada a plano de contas e gestão de usuários multi-hotel para `SUPER_ADMIN` — implementados e conectados ao banco.
 * [x] **Fase 14 (nova):** Validação de placa de veículo única no cadastro de hóspede, cota mensal de consulta de CPF persistida no banco e editável por assinante no Painel SuperAdmin (`api/admin/tenants`), e resiliência da integração uazapi a instância fora do ar (`fetchUazapi`/`UazapiUnreachableError`) — implementados e conectados ao banco.
 * [x] **Fase 15 (nova):** Formas de Pagamento com regras de negócio (Parcelamento, Debitar Saldo Hóspede, Transf.Débito, Soma Caixa x Conta Corrente) centralizadas em `paymentProcessing.ts`, Saldo do Hóspede/Conta Corrente (`Guest.balance` + `GuestBalanceEntry`) e Contas a Pagar/Contas a Receber avulsas com baixa (total/parcial, juros/desconto) — implementados e conectados ao banco. Correção do loop infinito e adoção do tema claro/escuro no modal de Alterar Período, com a regra de data mínima de saída (nunca antes de hoje, travada na última diária lançada após o horário de virada). Overlays de celebração de check-in e despedida de check-out no Mapa de Quartos.
+* [~] **Fase 16 (nova):** Agentes de IA (Atendimento WhatsApp + Operacional) — ver detalhamento completo na seção 3.9 e em `PLANO_AGENTE_IA.md`. Núcleo funcional implementado: agente de atendimento com criação de reserva real (guardrail de auto-confirmação por tenant), identificação de hóspede por CPF, base de conhecimento (RAG leve) e escalonamento para humano; agente operacional v1 detectando inconsistências e alertando por WhatsApp; separação de controle assinante/admin master; painel admin real de prompt/cota/bloqueio por assinante. Pendente: tools de foto/serviços/café da manhã (Fase B do plano), envio de FNRH sob demanda, e autonomia de ação do agente operacional (aguardando lista de ações aprovada pelo usuário).

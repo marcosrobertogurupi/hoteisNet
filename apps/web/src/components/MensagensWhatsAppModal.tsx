@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound, Download, Image as ImageIcon } from "lucide-react";
+import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound, Download, Image as ImageIcon, Bot } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { generateExtratoPdfBase64, generateResumoPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
 import type { ExtratoRoomData } from "@/components/ImprimirExtratoHospedagemModal";
@@ -20,6 +20,7 @@ interface SentMessage {
   mimeType: string | null;
   senderName: string | null;
   externalId: string | null;
+  sentBy: "AI" | "HUMAN" | null;
   createdAt: string;
 }
 
@@ -585,15 +586,25 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
                     className={`max-w-[80%] px-3 py-2 rounded-lg text-xs ${
                       isIn
                         ? theme.isDark ? "bg-slate-800 text-slate-100" : "bg-slate-100 text-slate-900"
-                        : "bg-emerald-600 text-white"
+                        : m.sentBy === "AI"
+                          ? "bg-violet-600 text-white"
+                          : "bg-emerald-600 text-white"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3 mb-0.5">
                       <span className="font-semibold flex items-center gap-1">
-                        {m.type === "document" || m.type === "media" ? <Paperclip className="w-3 h-3" /> : <MessageCircle className="w-3 h-3" />}
-                        {isIn ? m.senderName || roomData.guestName || "Hóspede" : m.filename || (m.type === "document" ? "Documento" : "Você")}
+                        {m.type === "document" || m.type === "media" ? (
+                          <Paperclip className="w-3 h-3" />
+                        ) : !isIn && m.sentBy === "AI" ? (
+                          <Bot className="w-3 h-3" />
+                        ) : (
+                          <MessageCircle className="w-3 h-3" />
+                        )}
+                        {isIn
+                          ? m.senderName || roomData.guestName || "Hóspede"
+                          : m.filename || (m.type === "document" ? "Documento" : m.sentBy === "AI" ? "Agente de IA" : "Você")}
                       </span>
-                      <span className={`text-[10px] ${isIn ? theme.textMuted : "text-emerald-100"}`}>{new Date(m.createdAt).toLocaleString("pt-BR")}</span>
+                      <span className={`text-[10px] ${isIn ? theme.textMuted : m.sentBy === "AI" ? "text-violet-100" : "text-emerald-100"}`}>{new Date(m.createdAt).toLocaleString("pt-BR")}</span>
                     </div>
                     {m.type === "media" && (
                       <div className="mt-1 mb-1">

@@ -81,11 +81,21 @@ export default function SuperAdminDashboardPage() {
     planName: string | null;
     cpfQueryQuotaMonthly: number;
     cpfQueryUsed: number;
+    planAiTokenQuota: number | null;
+    aiSystemPromptExtra: string;
+    aiTokenQuotaOverride: number | null;
+    aiBlocked: boolean;
   }
   const [tenantQuotas, setTenantQuotas] = useState<TenantCpfQuota[]>([]);
   const [tenantQuotaDrafts, setTenantQuotaDrafts] = useState<Record<string, string>>({});
   const [isLoadingTenantQuotas, setIsLoadingTenantQuotas] = useState(false);
   const [savingTenantQuotaId, setSavingTenantQuotaId] = useState<string | null>(null);
+
+  // Controle admin do agente de IA por assinante: prompt de personalidade, override de cota de
+  // tokens e bloqueio de uso — nunca editáveis pela tela de Configurações do próprio assinante.
+  const [aiPromptDrafts, setAiPromptDrafts] = useState<Record<string, string>>({});
+  const [aiQuotaOverrideDrafts, setAiQuotaOverrideDrafts] = useState<Record<string, string>>({});
+  const [savingAiSettingsId, setSavingAiSettingsId] = useState<string | null>(null);
 
   const loadTenantQuotas = () => {
     setIsLoadingTenantQuotas(true);
@@ -97,10 +107,77 @@ export default function SuperAdminDashboardPage() {
           setTenantQuotaDrafts(
             Object.fromEntries(data.tenants.map((t: TenantCpfQuota) => [t.id, String(t.cpfQueryQuotaMonthly)]))
           );
+          setAiPromptDrafts(
+            Object.fromEntries(data.tenants.map((t: TenantCpfQuota) => [t.id, t.aiSystemPromptExtra || ""]))
+          );
+          setAiQuotaOverrideDrafts(
+            Object.fromEntries(
+              data.tenants.map((t: TenantCpfQuota) => [t.id, t.aiTokenQuotaOverride == null ? "" : String(t.aiTokenQuotaOverride)])
+            )
+          );
         }
       })
       .catch((err) => console.error("Erro ao buscar cota de CPF dos assinantes", err))
       .finally(() => setIsLoadingTenantQuotas(false));
+  };
+
+  const handleSaveAiSettings = async (tenantId: string) => {
+    const rawOverride = aiQuotaOverrideDrafts[tenantId] ?? "";
+    const parsedOverride = rawOverride.trim() === "" ? null : Number(rawOverride);
+    if (parsedOverride !== null && (!Number.isInteger(parsedOverride) || parsedOverride < 0)) {
+      toast.error("Override de cota de tokens deve ser um número inteiro maior ou igual a zero, ou vazio.");
+      return;
+    }
+    setSavingAiSettingsId(tenantId);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          aiSystemPromptExtra: aiPromptDrafts[tenantId] ?? "",
+          aiTokenQuotaOverride: parsedOverride,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Configuração de IA do assinante atualizada!");
+        setTenantQuotas((prev) =>
+          prev.map((t) =>
+            t.id === tenantId
+              ? { ...t, aiSystemPromptExtra: aiPromptDrafts[tenantId] ?? "", aiTokenQuotaOverride: parsedOverride }
+              : t
+          )
+        );
+      } else {
+        toast.error(data.error || "Erro ao salvar configuração de IA do assinante.");
+      }
+    } catch {
+      toast.error("Erro ao salvar configuração de IA do assinante.");
+    } finally {
+      setSavingAiSettingsId(null);
+    }
+  };
+
+  const handleToggleAiBlocked = async (tenantId: string, blocked: boolean) => {
+    setSavingAiSettingsId(tenantId);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ aiBlocked: blocked }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(blocked ? "IA bloqueada para este assinante." : "IA desbloqueada para este assinante.");
+        setTenantQuotas((prev) => prev.map((t) => (t.id === tenantId ? { ...t, aiBlocked: blocked } : t)));
+      } else {
+        toast.error(data.error || "Erro ao atualizar bloqueio de IA.");
+      }
+    } catch {
+      toast.error("Erro ao atualizar bloqueio de IA.");
+    } finally {
+      setSavingAiSettingsId(null);
+    }
   };
 
   useEffect(() => {
@@ -829,6 +906,99 @@ export default function SuperAdminDashboardPage() {
                     </table>
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION: CONTROLE DO AGENTE DE IA POR ASSINANTE (prompt, cota, bloqueio) */}
+          <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden shadow-lg">
+            <button
+              onClick={() => setOpenSection(openSection === "AI_AGENT_ADMIN" ? "" : "AI_AGENT_ADMIN")}
+              className="w-full px-6 py-4 bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 font-bold text-sm tracking-wide uppercase flex items-center justify-between transition-colors border-b border-slate-800"
+            >
+              <span className="flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-violet-400" /> Agentes de IA — Prompt, Cota de Tokens e Bloqueio por Assinante
+              </span>
+              {openSection === "AI_AGENT_ADMIN" ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+
+            {openSection === "AI_AGENT_ADMIN" && (
+              <div className="p-6 space-y-4 text-xs">
+                <p className="text-slate-400">
+                  Estes controles são exclusivos do SuperAdmin — o assinante nunca vê nem edita o prompt cru,
+                  só escolhe presets de tom nas próprias Configurações. Cota de tokens sem override usa o valor
+                  do plano contratado.
+                </p>
+
+                {isLoadingTenantQuotas ? (
+                  <p className="text-slate-500 text-center py-4">Carregando assinantes...</p>
+                ) : tenantQuotas.length === 0 ? (
+                  <p className="text-slate-500 text-center py-4">Nenhum assinante cadastrado.</p>
+                ) : (
+                  <div className="space-y-4">
+                    {tenantQuotas.map((t) => (
+                      <div key={t.id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <span className="text-white font-semibold">{t.tradeName || t.name}</span>
+                            <span className="block text-[10px] text-slate-500">
+                              {[t.city, t.state].filter(Boolean).join(" / ") || "—"} · Plano {t.planName || "—"}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={savingAiSettingsId === t.id}
+                            onClick={() => handleToggleAiBlocked(t.id, !t.aiBlocked)}
+                            className={`px-3 py-1.5 rounded-lg font-bold uppercase text-[10px] transition disabled:opacity-50 ${
+                              t.aiBlocked
+                                ? "bg-rose-500/20 text-rose-400 border border-rose-500/40 hover:bg-rose-500/30"
+                                : "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
+                            }`}
+                          >
+                            {t.aiBlocked ? "IA Bloqueada — Desbloquear" : "IA Liberada — Bloquear"}
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="md:col-span-2 space-y-1">
+                            <label className="text-slate-300 font-semibold block">
+                              Prompt de personalidade e forma de atendimento (admin)
+                            </label>
+                            <textarea
+                              value={aiPromptDrafts[t.id] ?? ""}
+                              onChange={(e) => setAiPromptDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                              rows={3}
+                              placeholder="Ex: Trate os hóspedes deste hotel de forma calorosa e regional, mencionando sempre o café da manhã caseiro."
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-slate-300 font-semibold block">Override de cota de tokens/mês</label>
+                            <input
+                              type="number"
+                              min={0}
+                              value={aiQuotaOverrideDrafts[t.id] ?? ""}
+                              onChange={(e) => setAiQuotaOverrideDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                              placeholder={`Padrão do plano: ${t.planAiTokenQuota ?? "—"}`}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            disabled={savingAiSettingsId === t.id}
+                            onClick={() => handleSaveAiSettings(t.id)}
+                            className="px-4 py-1.5 bg-violet-500 hover:bg-violet-600 disabled:opacity-50 text-white font-bold rounded-lg transition"
+                          >
+                            {savingAiSettingsId === t.id ? "Salvando..." : "Salvar"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { AgentTonePreset, OperationalAutonomyMode } from "@prisma/client";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 const DEFAULTS = {
   enabled: false,
   autoConfirmReservations: false,
-  systemPromptExtra: null as string | null,
+  agentDisplayName: null as string | null,
+  agentAvatarUrl: null as string | null,
+  tonePreset: "PROFISSIONAL" as AgentTonePreset,
   monitoringEnabled: false,
   alertPhone: null as string | null,
+  operationalAutonomyMode: "ALERT_ONLY" as OperationalAutonomyMode,
 };
 
 async function resolveTenantId(tenantId: string | null) {
@@ -19,9 +23,10 @@ async function resolveTenantId(tenantId: string | null) {
   return tenant?.id || null;
 }
 
-// GET /api/tenant/ai-agent-settings?tenantId=... — configuração do agente de IA do assinante.
-// Só comportamento/feature toggles: chave do AI Gateway, modelo e cota de tokens são globais,
-// nunca expostos aqui (ver AIAgentSetting no schema).
+// GET /api/tenant/ai-agent-settings?tenantId=... — configuração do agente de IA que o ASSINANTE
+// controla: liga/desliga, identidade (nome/foto) e tom de conversa dos agentes. O prompt cru de
+// personalidade e o controle de cota/bloqueio são exclusivos do admin master (/api/admin/tenants) —
+// nunca devolvidos nem aceitos aqui. Ver AIAgentSetting no schema e PLANO_AGENTE_IA.md.
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -38,9 +43,12 @@ export async function GET(req: NextRequest) {
         ? {
             enabled: settings.enabled,
             autoConfirmReservations: settings.autoConfirmReservations,
-            systemPromptExtra: settings.systemPromptExtra,
+            agentDisplayName: settings.agentDisplayName,
+            agentAvatarUrl: settings.agentAvatarUrl,
+            tonePreset: settings.tonePreset,
             monitoringEnabled: settings.monitoringEnabled,
             alertPhone: settings.alertPhone,
+            operationalAutonomyMode: settings.operationalAutonomyMode,
           }
         : DEFAULTS,
     });
@@ -53,7 +61,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// PATCH /api/tenant/ai-agent-settings — cria/atualiza (upsert) as preferências do agente de IA.
+// PATCH /api/tenant/ai-agent-settings — cria/atualiza (upsert) as preferências do assinante.
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
@@ -67,9 +75,16 @@ export async function PATCH(req: NextRequest) {
     const data: Record<string, any> = {};
     if (fields.enabled !== undefined) data.enabled = !!fields.enabled;
     if (fields.autoConfirmReservations !== undefined) data.autoConfirmReservations = !!fields.autoConfirmReservations;
-    if (fields.systemPromptExtra !== undefined) data.systemPromptExtra = fields.systemPromptExtra || null;
+    if (fields.agentDisplayName !== undefined) data.agentDisplayName = fields.agentDisplayName || null;
+    if (fields.agentAvatarUrl !== undefined) data.agentAvatarUrl = fields.agentAvatarUrl || null;
+    if (fields.tonePreset !== undefined && ["FORMAL", "PROFISSIONAL", "DESCONTRAIDO", "DIRETO"].includes(fields.tonePreset)) {
+      data.tonePreset = fields.tonePreset;
+    }
     if (fields.monitoringEnabled !== undefined) data.monitoringEnabled = !!fields.monitoringEnabled;
     if (fields.alertPhone !== undefined) data.alertPhone = fields.alertPhone || null;
+    if (fields.operationalAutonomyMode !== undefined && ["ALERT_ONLY", "AUTONOMOUS_LIMITED"].includes(fields.operationalAutonomyMode)) {
+      data.operationalAutonomyMode = fields.operationalAutonomyMode;
+    }
 
     await prisma.aIAgentSetting.upsert({
       where: { tenantId: resolvedTenantId },

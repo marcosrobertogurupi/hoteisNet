@@ -40,6 +40,8 @@ import {
   Webhook,
   Volume2,
   Bot,
+  ListChecks,
+  UserCheck,
 } from "lucide-react";
 
 export default function SubscriberSettingsPage() {
@@ -150,10 +152,19 @@ export default function SubscriberSettingsPage() {
 
   const [aiAgentEnabled, setAiAgentEnabled] = useState(false);
   const [aiAgentAutoConfirm, setAiAgentAutoConfirm] = useState(false);
-  const [aiAgentPromptExtra, setAiAgentPromptExtra] = useState("");
+  const [aiAgentDisplayName, setAiAgentDisplayName] = useState("");
+  const [aiAgentAvatarUrl, setAiAgentAvatarUrl] = useState("");
+  const [aiAgentTonePreset, setAiAgentTonePreset] = useState("PROFISSIONAL");
   const [aiAgentMonitoringEnabled, setAiAgentMonitoringEnabled] = useState(false);
   const [aiAgentAlertPhone, setAiAgentAlertPhone] = useState("");
+  const [aiAgentAutonomyMode, setAiAgentAutonomyMode] = useState("ALERT_ONLY");
   const [aiAgentSaveError, setAiAgentSaveError] = useState<string | null>(null);
+
+  // Governança de quartos — modo de atribuição das limpezas às governantas: RECEPTION (recepção
+  // define manualmente quem limpa cada quarto) ou QUEUE (fila geral de quartos sujos, qualquer
+  // governanta assume pelo app).
+  const [housekeepingAssignmentMode, setHousekeepingAssignmentMode] = useState<"RECEPTION" | "QUEUE">("RECEPTION");
+  const [housekeepingSaveError, setHousekeepingSaveError] = useState<string | null>(null);
 
   // Conexão da instância WhatsApp (uazapi) — tela "Configuração do sistema > API Whatsapp" do
   // sistema legado. Cada assinante conecta uma única instância (servidor + admin token para criar,
@@ -415,13 +426,24 @@ export default function SubscriberSettingsPage() {
         const s = data.settings;
         setAiAgentEnabled(!!s.enabled);
         setAiAgentAutoConfirm(!!s.autoConfirmReservations);
-        setAiAgentPromptExtra(s.systemPromptExtra || "");
+        setAiAgentDisplayName(s.agentDisplayName || "");
+        setAiAgentAvatarUrl(s.agentAvatarUrl || "");
+        setAiAgentTonePreset(s.tonePreset || "PROFISSIONAL");
         setAiAgentMonitoringEnabled(!!s.monitoringEnabled);
         setAiAgentAlertPhone(s.alertPhone || "");
+        setAiAgentAutonomyMode(s.operationalAutonomyMode || "ALERT_ONLY");
       })
       .catch(() => {});
 
-    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages, loadSnrhosSettings, loadAiAgentSettings]).finally(() =>
+    const loadHousekeepingSettings = fetch("/api/tenant/housekeeping-settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success || !data.settings) return;
+        setHousekeepingAssignmentMode(data.settings.assignmentMode === "QUEUE" ? "QUEUE" : "RECEPTION");
+      })
+      .catch(() => {});
+
+    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages, loadSnrhosSettings, loadAiAgentSettings, loadHousekeepingSettings]).finally(() =>
       setIsLoadingSettings(false)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -515,9 +537,12 @@ export default function SubscriberSettingsPage() {
         body: JSON.stringify({
           enabled: aiAgentEnabled,
           autoConfirmReservations: aiAgentAutoConfirm,
-          systemPromptExtra: aiAgentPromptExtra,
+          agentDisplayName: aiAgentDisplayName,
+          agentAvatarUrl: aiAgentAvatarUrl,
+          tonePreset: aiAgentTonePreset,
           monitoringEnabled: aiAgentMonitoringEnabled,
           alertPhone: aiAgentAlertPhone,
+          operationalAutonomyMode: aiAgentAutonomyMode,
         }),
       });
       const data = await res.json();
@@ -526,6 +551,21 @@ export default function SubscriberSettingsPage() {
       }
     } catch (err: any) {
       setAiAgentSaveError(err.message || "Erro de rede ao salvar configurações do agente de IA.");
+    }
+
+    setHousekeepingSaveError(null);
+    try {
+      const res = await fetch("/api/tenant/housekeeping-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignmentMode: housekeepingAssignmentMode }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setHousekeepingSaveError(data.error || "Erro ao salvar configurações de governança.");
+      }
+    } catch (err: any) {
+      setHousekeepingSaveError(err.message || "Erro de rede ao salvar configurações de governança.");
     }
 
     setHotelName(inputName);
@@ -1068,6 +1108,81 @@ export default function SubscriberSettingsPage() {
             </span>
           </div>
         </label>
+      </div>
+
+      {/* SECTION 3.7: Governança de Quartos — Modo de Atribuição de Limpeza */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-500">
+            <ListChecks className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">Governança de Quartos — Modo de Atribuição de Limpeza</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Define como os quartos a limpar chegam até as governantas no aplicativo.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <label
+            className={`flex items-start gap-3 cursor-pointer p-4 rounded-xl border transition-colors ${
+              housekeepingAssignmentMode === "RECEPTION"
+                ? "border-emerald-500 bg-emerald-500/10"
+                : theme.isDark
+                  ? "border-slate-800 hover:bg-slate-800/40"
+                  : "border-slate-200 hover:bg-slate-100"
+            }`}
+          >
+            <input
+              type="radio"
+              name="housekeepingAssignmentMode"
+              checked={housekeepingAssignmentMode === "RECEPTION"}
+              onChange={() => setHousekeepingAssignmentMode("RECEPTION")}
+              className="w-4 h-4 mt-0.5 text-emerald-600 focus:ring-emerald-500"
+            />
+            <div>
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-emerald-500" />
+                <span className="text-sm font-bold">Recepção define</span>
+              </div>
+              <span className={`text-xs ${theme.textMuted}`}>
+                A recepção/gestor atribui manualmente cada quarto a uma governanta específica. No app, cada governanta só vê os quartos que foram atribuídos a ela.
+              </span>
+            </div>
+          </label>
+
+          <label
+            className={`flex items-start gap-3 cursor-pointer p-4 rounded-xl border transition-colors ${
+              housekeepingAssignmentMode === "QUEUE"
+                ? "border-emerald-500 bg-emerald-500/10"
+                : theme.isDark
+                  ? "border-slate-800 hover:bg-slate-800/40"
+                  : "border-slate-200 hover:bg-slate-100"
+            }`}
+          >
+            <input
+              type="radio"
+              name="housekeepingAssignmentMode"
+              checked={housekeepingAssignmentMode === "QUEUE"}
+              onChange={() => setHousekeepingAssignmentMode("QUEUE")}
+              className="w-4 h-4 mt-0.5 text-emerald-600 focus:ring-emerald-500"
+            />
+            <div>
+              <div className="flex items-center gap-2">
+                <ListChecks className="w-4 h-4 text-emerald-500" />
+                <span className="text-sm font-bold">Fila de quartos</span>
+              </div>
+              <span className={`text-xs ${theme.textMuted}`}>
+                Os quartos sujos entram numa fila geral. No app, qualquer governanta pode ver a fila e assumir o quarto que for limpar.
+              </span>
+            </div>
+          </label>
+        </div>
+
+        {housekeepingSaveError && (
+          <p className="text-[11px] text-red-400">{housekeepingSaveError}</p>
+        )}
       </div>
 
       {/* SECTION 4: Configuração de Envio de E-mail (SMTP & Comprovantes por E-mail) */}
@@ -2022,15 +2137,39 @@ export default function SubscriberSettingsPage() {
               Reserva feita pelo agente entra já confirmada (sem isso, entra como pré-reserva pendente de confirmação da recepção)
             </label>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold">Nome do agente no WhatsApp</label>
+                <input
+                  value={aiAgentDisplayName}
+                  onChange={(e) => setAiAgentDisplayName(e.target.value)}
+                  placeholder="Ex: Sofia"
+                  className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold">URL da foto de perfil do agente</label>
+                <input
+                  value={aiAgentAvatarUrl}
+                  onChange={(e) => setAiAgentAvatarUrl(e.target.value)}
+                  placeholder="https://..."
+                  className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                />
+              </div>
+            </div>
+
             <div className="space-y-1">
-              <label className="text-xs font-semibold">Instruções adicionais / tom de voz (opcional)</label>
-              <textarea
-                value={aiAgentPromptExtra}
-                onChange={(e) => setAiAgentPromptExtra(e.target.value)}
-                rows={3}
-                placeholder="Ex: Trate os hóspedes de forma descontraída. Sempre mencione o café da manhã das 7h às 10h."
+              <label className="text-xs font-semibold">Tom de conversa</label>
+              <select
+                value={aiAgentTonePreset}
+                onChange={(e) => setAiAgentTonePreset(e.target.value)}
                 className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
-              />
+              >
+                <option value="FORMAL">Formal</option>
+                <option value="PROFISSIONAL">Profissional</option>
+                <option value="DESCONTRAIDO">Descontraído</option>
+                <option value="DIRETO">Direto</option>
+              </select>
             </div>
           </div>
         </div>
@@ -2051,17 +2190,34 @@ export default function SubscriberSettingsPage() {
               Monitoramento
             </div>
           </div>
-          <div className="flex-1 space-y-1">
-            <label className="text-xs font-semibold">Telefone WhatsApp para alertas</label>
-            <input
-              value={aiAgentAlertPhone}
-              onChange={(e) => setAiAgentAlertPhone(e.target.value)}
-              placeholder="(00) 00000-0000"
-              className={`w-full border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
-            />
-            <p className={`text-[10px] ${theme.textMuted}`}>
-              Quando algo precisar de atenção (ex: envio da FNRH travado), o agente manda um resumo para este número.
-            </p>
+          <div className="flex-1 space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold">Telefone WhatsApp para alertas</label>
+              <input
+                value={aiAgentAlertPhone}
+                onChange={(e) => setAiAgentAlertPhone(e.target.value)}
+                placeholder="(00) 00000-0000"
+                className={`w-full border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+              />
+              <p className={`text-[10px] ${theme.textMuted}`}>
+                Quando algo precisar de atenção (ex: envio da FNRH travado), o agente manda um resumo para este número.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold">Autonomia do agente operacional</label>
+              <select
+                value={aiAgentAutonomyMode}
+                onChange={(e) => setAiAgentAutonomyMode(e.target.value)}
+                className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+              >
+                <option value="ALERT_ONLY">Só alertar (recomendado)</option>
+                <option value="AUTONOMOUS_LIMITED">Agir sozinho em casos simples, com aviso</option>
+              </select>
+              <p className={`text-[10px] ${theme.textMuted}`}>
+                "Agir sozinho" ainda está em desenvolvimento — por enquanto o agente sempre só alerta, mesmo com essa opção marcada.
+              </p>
+            </div>
           </div>
         </div>
       </div>

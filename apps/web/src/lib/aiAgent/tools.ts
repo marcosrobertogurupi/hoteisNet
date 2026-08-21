@@ -7,6 +7,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
+import { findConflictingReservation } from "@/lib/reservationHelpers";
 
 function startOfToday(): Date {
   const now = new Date();
@@ -143,6 +144,118 @@ async function findGuestByCpf(tenantId: string, cpf: string) {
   return { encontrado: false, origem: null, motivo: hubResult.message };
 }
 
+// RAG leve: sem embeddings/vetores, busca por palavras-chave do título/pergunta/categoria já
+// verificados. Suficiente para o volume esperado de conhecimento por hotel; se a base crescer
+// muito, migrar para busca vetorial no Supabase (pgvector) é o próximo passo natural.
+async function searchKnowledgeBase(tenantId: string, query: string) {
+  const keywords = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length >= 4)
+    .slice(0, 6);
+  if (keywords.length === 0) return [];
+
+  const entries = await prisma.supportKnowledgeBase.findMany({
+    where: {
+      tenantId,
+      agentType: "SUPPORT",
+      verified: true,
+      OR: keywords.flatMap((kw) => [
+        { question: { contains: kw, mode: "insensitive" as const } },
+        { title: { contains: kw, mode: "insensitive" as const } },
+        { category: { contains: kw, mode: "insensitive" as const } },
+      ]),
+    },
+    select: { title: true, category: true, question: true, resolution: true },
+    take: 5,
+  });
+  return entries.map((e) => ({ titulo: e.title, categoria: e.category, pergunta: e.question, resposta: e.resolution }));
+}
+
+// Cria a reserva de verdade, dentro de uma transação (mesmo princípio de atomic-checkout-balance-guard
+// já aplicado no resto do sistema: a checagem de conflito acontece dentro da própria transação, não
+// só antes dela). O status (CONFIRMED vs PRE_RESERVATION) nunca é decidido pelo modelo — vem de
+// AIAgentSetting.autoConfirmReservations, configurado pelo assinante. tenantId da Reservation em si
+// é sempre "TNT-01" por convenção histórica do projeto (ver room.tenantId para o tenant real).
+async function createReservationForAgent(
+  tenantId: string,
+  guestPhone: string,
+  params: { checkIn: Date; checkOut: Date; categoryName: string; guestName: string; guestCpf?: string; adults: number }
+) {
+  const [agentSetting, category] = await Promise.all([
+    prisma.aIAgentSetting.findUnique({ where: { tenantId }, select: { autoConfirmReservations: true } }),
+    prisma.roomCategory.findFirst({ where: { tenantId, active: true, name: { equals: params.categoryName, mode: "insensitive" } } }),
+  ]);
+  if (!category) return { sucesso: false, erro: "Categoria de apartamento não encontrada." };
+
+  return prisma.$transaction(async (tx) => {
+    const rooms = await tx.room.findMany({ where: { tenantId, categoryId: category.id, active: true } });
+    let freeRoom: (typeof rooms)[number] | null = null;
+    for (const room of rooms) {
+      const [conflict, openStay] = await Promise.all([
+        findConflictingReservation(tx, room.id, params.checkIn, params.checkOut),
+        tx.stayCheckin.findFirst({
+          where: { roomId: room.id, isClosed: false, checkInDate: { lt: params.checkOut }, expectedCheckOut: { gt: params.checkIn } },
+        }),
+      ]);
+      if (!conflict && !openStay) {
+        freeRoom = room;
+        break;
+      }
+    }
+    if (!freeRoom) return { sucesso: false, erro: "Não há mais quartos livres nessa categoria para o período pedido." };
+
+    const tariff =
+      (await tx.tariff.findFirst({ where: { tenantId, active: true, adults: { gte: params.adults } }, orderBy: { adults: "asc" } })) ||
+      (await tx.tariff.findFirst({ where: { tenantId, active: true }, orderBy: { price: "asc" } }));
+    if (!tariff) {
+      return { sucesso: false, erro: "Hotel ainda não tem tarifa cadastrada — encaminhe para a recepção fechar a reserva manualmente." };
+    }
+
+    const nights = Math.max(1, Math.round((params.checkOut.getTime() - params.checkIn.getTime()) / (24 * 60 * 60 * 1000)));
+    const totalAmount = Number(tariff.price) * nights;
+    const status = agentSetting?.autoConfirmReservations ? "CONFIRMED" : "PRE_RESERVATION";
+    const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+
+    await tx.reservation.create({
+      data: {
+        tenantId: "TNT-01",
+        roomId: freeRoom.id,
+        guestName: params.guestName,
+        guestPhone,
+        guestCpf: params.guestCpf || null,
+        checkInDate: params.checkIn,
+        checkOutDate: params.checkOut,
+        tariffId: tariff.id,
+        tariffName: tariff.name,
+        dailyRate: tariff.price,
+        totalDiarias: totalAmount,
+        totalAmount,
+        adults: params.adults,
+        children: 0,
+        hasWhatsapp: true,
+        reservationNumber,
+        roomDescription: freeRoom.number,
+        roomCategory: category.name,
+        status,
+        preCheckinSent: false,
+        operatorName: "Agente de IA",
+      },
+    });
+
+    return {
+      sucesso: true,
+      numeroReserva: reservationNumber,
+      status,
+      quarto: freeRoom.number,
+      categoria: category.name,
+      diarias: nights,
+      valorTotal: totalAmount,
+      confirmadaAutomaticamente: status === "CONFIRMED",
+    };
+  });
+}
+
 async function getHotelInfo(tenantId: string) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
@@ -157,9 +270,11 @@ async function getHotelInfo(tenantId: string) {
   };
 }
 
-// Constrói o conjunto de tools do agente já vinculado a um tenant específico. `tenantId` vem
-// sempre do webhook (resolvido a partir da URL /api/uazapi/webhook/[tenantId]), nunca do modelo.
-export function buildGuestSupportTools(tenantId: string) {
+// Constrói o conjunto de tools do agente já vinculado a um tenant e a uma conversa específicos.
+// `tenantId` e `guestPhone` vêm sempre do webhook (nunca do modelo — mesmo princípio de defesa
+// contra prompt injection já aplicado em toda a Fase FNRH). `onEscalate` é chamado quando o agente
+// decide que precisa de um humano, para o chamador (webhook) decidir o que fazer com isso.
+export function buildGuestSupportTools(tenantId: string, guestPhone: string, onEscalate?: (reason: string) => void) {
   return {
     check_availability: tool({
       description:
@@ -209,6 +324,48 @@ export function buildGuestSupportTools(tenantId: string) {
       description: "Retorna informações institucionais do hotel (nome, telefone, endereço).",
       inputSchema: z.object({}),
       execute: async () => await getHotelInfo(tenantId),
+    }),
+
+    search_knowledge_base: tool({
+      description:
+        "Busca na base de conhecimento deste hotel por respostas já validadas para perguntas parecidas (regras da casa, políticas, dúvidas recorrentes). Use antes de dizer que não sabe algo ou de escalar para um humano.",
+      inputSchema: z.object({
+        query: z.string().describe("A pergunta ou tópico do hóspede, em texto livre"),
+      }),
+      execute: async ({ query }) => ({ resultados: await searchKnowledgeBase(tenantId, query) }),
+    }),
+
+    create_reservation: tool({
+      description:
+        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando confirmação da recepção — informe o resultado exato que a tool devolver, não invente.",
+      inputSchema: z.object({
+        checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
+        checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
+        categoryName: z.string().describe("Nome da categoria de apartamento, exatamente como retornado por check_availability/list_room_categories"),
+        guestName: z.string().describe("Nome completo do hóspede"),
+        guestCpf: z.string().optional().describe("CPF do hóspede, se já identificado"),
+        adults: z.number().int().min(1).default(1),
+      }),
+      execute: async ({ checkIn, checkOut, categoryName, guestName, guestCpf, adults }) => {
+        const inDate = new Date(checkIn);
+        const outDate = new Date(checkOut);
+        if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
+          return { sucesso: false, erro: "Datas inválidas. checkOut deve ser depois de checkIn." };
+        }
+        return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, guestName, guestCpf, adults });
+      },
+    }),
+
+    escalate_to_human: tool({
+      description:
+        "Chame quando não conseguir ajudar o hóspede mesmo depois de consultar as tools disponíveis, ou quando ele pedir explicitamente para falar com uma pessoa. Depois de chamar, encerre com uma mensagem curta avisando que a recepção vai continuar o atendimento.",
+      inputSchema: z.object({
+        motivo: z.string().describe("Resumo curto do que o hóspede precisa, para a recepção entender o contexto rapidamente"),
+      }),
+      execute: async ({ motivo }) => {
+        onEscalate?.(motivo);
+        return { ok: true };
+      },
     }),
   };
 }

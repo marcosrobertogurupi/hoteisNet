@@ -5,6 +5,7 @@ import { runOccupancySnapshot } from "./occupancySnapshot";
 import { runCheckoutPrevision } from "./checkoutPrevision";
 import { runPreCheckinFnrh } from "./preCheckinFnrh";
 import { runSnrhosTransmit } from "./snrhosTransmit";
+import { runOperationalAgent } from "./operationalAgent";
 
 console.log("[worker] Virada de diária — worker iniciado.");
 
@@ -35,5 +36,11 @@ cron.schedule("* * * * *", () => {
 cron.schedule("*/5 * * * *", () => {
   runSnrhosTransmit().catch((err) => {
     console.error("[worker] Erro ao rodar transmissão ao SNRHos:", err);
+  });
+});
+
+cron.schedule("*/15 * * * *", () => {
+  runOperationalAgent().catch((err) => {
+    console.error("[worker] Erro ao rodar agente operacional:", err);
   });
 });

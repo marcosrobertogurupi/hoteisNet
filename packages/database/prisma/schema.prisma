@@ -46,56 +46,61 @@ model Municipality {
 }
 
 model Tenant {
-  id                String              @id @default(uuid())
-  name              String
-  tradeName         String?
-  cnpj              String?             @unique
-  cadastur          String?
-  status            TenantStatus        @default(TRIAL)
-  email             String
-  phone             String?
-  city              String?
-  state             String?
-  address           String?
-  zipCode           String?
-  logoUrl           String?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-  dailyRolloverTime String              @default("14:30")
-  allowNegativeStock Boolean            @default(false)
-  cpfQueryQuotaMonthly Int              @default(100)
-  cpfQueryUsed         Int              @default(0)
-  cpfQueryCycleStart   DateTime         @default(now())
-  accountPlans      AccountPlan[]
-  aiAgentSettings   AIAgentSetting?
-  aiUsageLogs       AIUsageLog[]
-  cashRegisters     CashRegister[]      @relation("TenantCashRegisters")
-  companies         Company[]
-  emailSettings     EmailSetting?
-  floors            Floor[]
-  guests            Guest[]
-  paymentMethods    PaymentMethod[]
-  accountsReceivable AccountsReceivable[]
-  accountsPayable   AccountsPayable[]
-  guestBalanceEntries GuestBalanceEntry[]
-  posLocations      POSLocation[]
-  products          Product[]
-  reservations      Reservation[]       @relation("TenantReservations")
-  roomCategories    RoomCategory[]
-  rooms             Room[]
-  occupancySnapshots RoomOccupancySnapshot[]
-  subscriptions     SaASSubscription[]
-  preCheckinLinks   PreCheckinLink[]
-  checkins          StayCheckin[]
-  debitTransfers    StayDebitTransfer[]
-  suppliers         Supplier[]
-  supportTickets    SupportTicket[]
-  tariffs           Tariff[]
-  activityLogs      AuditLog[]
-  uazapiSettings    UazapiSetting?
-  snrhosSettings    SNRHosSetting?
-  users             User[]
-  vehicles          Vehicle[]
+  id                      String                  @id @default(uuid())
+  name                    String
+  tradeName               String?
+  cnpj                    String?                 @unique
+  cadastur                String?
+  status                  TenantStatus            @default(TRIAL)
+  email                   String
+  phone                   String?
+  city                    String?
+  state                   String?
+  address                 String?
+  zipCode                 String?
+  logoUrl                 String?
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+  dailyRolloverTime       String                  @default("14:30")
+  allowNegativeStock      Boolean                 @default(false)
+  cpfQueryQuotaMonthly    Int                     @default(100)
+  cpfQueryUsed            Int                     @default(0)
+  cpfQueryCycleStart      DateTime                @default(now())
+  accountPlans            AccountPlan[]
+  aiAgentSettings         AIAgentSetting?
+  aiUsageLogs             AIUsageLog[]
+  cashRegisters           CashRegister[]          @relation("TenantCashRegisters")
+  companies               Company[]
+  emailSettings           EmailSetting?
+  floors                  Floor[]
+  guests                  Guest[]
+  housekeepers            Housekeeper[]
+  housekeepingTasks       HousekeepingTask[]
+  housekeepingSettings    HousekeepingSetting?
+  paymentMethods          PaymentMethod[]
+  accountsReceivable      AccountsReceivable[]
+  accountsPayable         AccountsPayable[]
+  guestBalanceEntries     GuestBalanceEntry[]
+  posLocations            POSLocation[]
+  products                Product[]
+  reservations            Reservation[]           @relation("TenantReservations")
+  roomCategories          RoomCategory[]
+  rooms                   Room[]
+  occupancySnapshots      RoomOccupancySnapshot[]
+  subscriptions           SaASSubscription[]
+  preCheckinLinks         PreCheckinLink[]
+  checkins                StayCheckin[]
+  debitTransfers          StayDebitTransfer[]
+  suppliers               Supplier[]
+  supportTickets          SupportTicket[]
+  supportKnowledgeBase    SupportKnowledgeBase[]
+  operationalAlertLogs    OperationalAlertLog[]
+  tariffs                 Tariff[]
+  activityLogs            AuditLog[]
+  uazapiSettings          UazapiSetting?
+  snrhosSettings          SNRHosSetting?
+  users                   User[]
+  vehicles                Vehicle[]
   whatsappMessageSettings WhatsappMessageSetting?
   whatsappMessages        WhatsappMessage[]
 
@@ -152,20 +157,20 @@ model AIUsageLog {
 // Trilha de auditoria: registra quem fez o quê, quando e de qual terminal/IP, para
 // investigação posterior (ex.: "quem fez o check-out do quarto 106 e às 14h32 de qual estação").
 model AuditLog {
-  id         String   @id @default(uuid())
-  tenantId   String
-  userId     String?
-  userName   String?
-  action     String
+  id          String   @id @default(uuid())
+  tenantId    String
+  userId      String?
+  userName    String?
+  action      String
   description String?
-  entityType String?
-  entityId   String?
-  terminal   String?
-  ipAddress  String?
-  details    Json?
-  createdAt  DateTime @default(now())
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user       User?    @relation(fields: [userId], references: [id])
+  entityType  String?
+  entityId    String?
+  terminal    String?
+  ipAddress   String?
+  details     Json?
+  createdAt   DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User?    @relation(fields: [userId], references: [id])
 
   @@map("tenant_activity_logs")
 }
@@ -201,17 +206,31 @@ model TicketMessage {
   @@map("ticket_messages")
 }
 
+// Base de conhecimento por tenant que os dois agentes de IA consultam antes de responder/alertar —
+// o mecanismo de "aprendizado" deles (não é re-treino do modelo, é RAG leve: pergunta+resposta
+// salva quando um humano resolve algo que o agente não soube, consultada em conversas parecidas
+// no futuro). Ver Fase G em PLANO_AGENTE_IA.md.
 model SupportKnowledgeBase {
-  id         String   @id @default(uuid())
+  id         String             @id @default(uuid())
+  tenantId   String
+  agentType  KnowledgeAgentType @default(SUPPORT)
+  sourceType String             @default("MANUAL") // MANUAL | HUMAN_CORRECTION | ESCALATION_RESOLVED
   title      String
   category   String
   question   String
   resolution String
-  verified   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  verified   Boolean            @default(true)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId, agentType])
   @@map("support_knowledge_base")
+}
+
+enum KnowledgeAgentType {
+  SUPPORT
+  OPERATIONAL
 }
 
 model RoomCategory {
@@ -231,62 +250,62 @@ model RoomCategory {
 }
 
 model PaymentMethod {
-  id          String  @id @default(uuid())
-  tenantId    String
-  description String
+  id                 String  @id @default(uuid())
+  tenantId           String
+  description        String
   // Parcelamento = ao lançar um pagamento com esta forma, o valor vai para o contas a receber
   // (AccountsReceivable) em vez de ser quitado em caixa — ver apps/web/src/lib/paymentProcessing.ts.
-  installment       Boolean @default(false)
+  installment        Boolean @default(false)
   // Debitar Saldo Hóspede = ao usar esta forma, o sistema consulta e debita o saldo disponível
   // do hóspede (Guest.balance / GuestBalanceEntry) — ver apps/web/src/lib/paymentProcessing.ts.
-  debitGuestBalance Boolean @default(false)
+  debitGuestBalance  Boolean @default(false)
   // Transf.Débito = o valor lançado nesta forma é transferido para outro quarto ocupado. Fluxo
   // dedicado em /api/stay/transfer-debit; formas com esta flag são ocultadas do seletor normal
   // de pagamento (ver LancarPagamentoHospedagemModal.tsx).
-  transferDebit     Boolean @default(false)
+  transferDebit      Boolean @default(false)
   // true = Soma Caixa (lança e soma nos totais do caixa); false = Conta Corrente
   // (apenas informa o lançamento, sem somar nos totais). Mutuamente exclusivos por natureza.
   sumsToCashRegister Boolean @default(true)
-  active      Boolean @default(true)
-  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  active             Boolean @default(true)
+  tenant             Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("payment_methods")
 }
 
 model AccountsReceivable {
-  id             String    @id @default(uuid())
-  tenantId       String
-  stayCheckinId  String
-  companyId      String?
-  guestId        String?
-  billedToName   String
-  documentNumber String
-  issueDate      DateTime  @default(now())
-  dueDate        DateTime
-  amount         Decimal   @db.Decimal(10, 2)
-  amountPaid     Decimal   @default(0) @db.Decimal(10, 2)
-  isPaid         Boolean   @default(false)
-  paidAt         DateTime?
+  id                       String                 @id @default(uuid())
+  tenantId                 String
+  stayCheckinId            String
+  companyId                String?
+  guestId                  String?
+  billedToName             String
+  documentNumber           String
+  issueDate                DateTime               @default(now())
+  dueDate                  DateTime
+  amount                   Decimal                @db.Decimal(10, 2)
+  amountPaid               Decimal                @default(0) @db.Decimal(10, 2)
+  isPaid                   Boolean                @default(false)
+  paidAt                   DateTime?
   paymentMethodDescription String
-  notes          String?
-  createdAt      DateTime  @default(now())
-  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  stayCheckin    StayCheckin  @relation(fields: [stayCheckinId], references: [id])
-  company        Company?     @relation(fields: [companyId], references: [id])
-  guest          Guest?       @relation(fields: [guestId], references: [id])
-  settlements    ReceivableSettlement[]
+  notes                    String?
+  createdAt                DateTime               @default(now())
+  tenant                   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stayCheckin              StayCheckin            @relation(fields: [stayCheckinId], references: [id])
+  company                  Company?               @relation(fields: [companyId], references: [id])
+  guest                    Guest?                 @relation(fields: [guestId], references: [id])
+  settlements              ReceivableSettlement[]
 
   @@map("accounts_receivable")
 }
 
 model ReceivableSettlement {
-  id                       String   @id @default(uuid())
+  id                       String             @id @default(uuid())
   accountsReceivableId     String
-  amount                   Decimal  @db.Decimal(10, 2)
-  interest                 Decimal  @default(0) @db.Decimal(10, 2)
-  discount                 Decimal  @default(0) @db.Decimal(10, 2)
+  amount                   Decimal            @db.Decimal(10, 2)
+  interest                 Decimal            @default(0) @db.Decimal(10, 2)
+  discount                 Decimal            @default(0) @db.Decimal(10, 2)
   paymentMethodDescription String
-  paidAt                   DateTime @default(now())
+  paidAt                   DateTime           @default(now())
   operatorId               String?
   operatorName             String?
   accountsReceivable       AccountsReceivable @relation(fields: [accountsReceivableId], references: [id], onDelete: Cascade)
@@ -299,38 +318,38 @@ model ReceivableSettlement {
 // Hóspedes/Empresas, com o Plano de Contas de despesa (Pag_PlContas/Pag_IDPLC no legado) informando
 // em qual conta contábil o débito deve ser lançado.
 model AccountsPayable {
-  id                String    @id @default(uuid())
-  tenantId          String
-  supplierId        String?
-  supplierName      String
-  documentNumber    String
-  originDocument    String?
-  accountPlanId     String?
-  accountPlanCode   String?
-  issueDate         DateTime  @default(now())
-  dueDate           DateTime
-  amount            Decimal   @db.Decimal(10, 2)
-  amountPaid        Decimal   @default(0) @db.Decimal(10, 2)
-  isPaid            Boolean   @default(false)
-  paidAt            DateTime?
-  notes             String?
-  createdAt         DateTime  @default(now())
-  tenant            Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  supplier          Supplier?    @relation(fields: [supplierId], references: [id])
-  accountPlan       AccountPlan? @relation(fields: [accountPlanId], references: [id])
-  settlements       PayableSettlement[]
+  id              String              @id @default(uuid())
+  tenantId        String
+  supplierId      String?
+  supplierName    String
+  documentNumber  String
+  originDocument  String?
+  accountPlanId   String?
+  accountPlanCode String?
+  issueDate       DateTime            @default(now())
+  dueDate         DateTime
+  amount          Decimal             @db.Decimal(10, 2)
+  amountPaid      Decimal             @default(0) @db.Decimal(10, 2)
+  isPaid          Boolean             @default(false)
+  paidAt          DateTime?
+  notes           String?
+  createdAt       DateTime            @default(now())
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier        Supplier?           @relation(fields: [supplierId], references: [id])
+  accountPlan     AccountPlan?        @relation(fields: [accountPlanId], references: [id])
+  settlements     PayableSettlement[]
 
   @@map("accounts_payable")
 }
 
 model PayableSettlement {
-  id                       String   @id @default(uuid())
+  id                       String          @id @default(uuid())
   accountsPayableId        String
-  amount                   Decimal  @db.Decimal(10, 2)
-  interest                 Decimal  @default(0) @db.Decimal(10, 2)
-  discount                 Decimal  @default(0) @db.Decimal(10, 2)
+  amount                   Decimal         @db.Decimal(10, 2)
+  interest                 Decimal         @default(0) @db.Decimal(10, 2)
+  discount                 Decimal         @default(0) @db.Decimal(10, 2)
   paymentMethodDescription String
-  paidAt                   DateTime @default(now())
+  paidAt                   DateTime        @default(now())
   operatorId               String?
   operatorName             String?
   accountsPayable          AccountsPayable @relation(fields: [accountsPayableId], references: [id], onDelete: Cascade)
@@ -341,17 +360,17 @@ model PayableSettlement {
 // Ledger de crédito/débito do saldo do hóspede — equivalente a HospedeNetMov do sistema legado.
 // Guest.balance é o saldo consolidado; estas entradas são o histórico auditável que o compõe.
 model GuestBalanceEntry {
-  id                       String   @id @default(uuid())
+  id                       String       @id @default(uuid())
   tenantId                 String
   guestId                  String
   stayCheckinId            String?
-  type                     String   // "CREDITO" | "DEBITO"
-  amount                   Decimal  @db.Decimal(10, 2)
+  type                     String // "CREDITO" | "DEBITO"
+  amount                   Decimal      @db.Decimal(10, 2)
   paymentMethodDescription String?
   operatorId               String?
   operatorName             String?
   description              String?
-  createdAt                DateTime @default(now())
+  createdAt                DateTime     @default(now())
   tenant                   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   guest                    Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
   stayCheckin              StayCheckin? @relation(fields: [stayCheckinId], references: [id])
@@ -375,25 +394,85 @@ model Floor {
 }
 
 model Room {
-  id              String        @id @default(uuid())
-  tenantId        String
-  categoryId      String
-  number          String
-  floor           String?
-  bloco           String?
-  camasCasal      Int           @default(0)
-  camasSolteiro   Int           @default(0)
-  caracteristicas String[]      @default([])
-  photos          String[]      @default([])
-  status          RoomStatus    @default(VACANT_CLEAN)
-  notes           String?
-  active          Boolean       @default(true)
-  reservations    Reservation[]
-  category        RoomCategory  @relation(fields: [categoryId], references: [id])
-  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  checkins        StayCheckin[]
+  id                String             @id @default(uuid())
+  tenantId          String
+  categoryId        String
+  number            String
+  floor             String?
+  bloco             String?
+  camasCasal        Int                @default(0)
+  camasSolteiro     Int                @default(0)
+  caracteristicas   String[]           @default([])
+  photos            String[]           @default([])
+  status            RoomStatus         @default(VACANT_CLEAN)
+  notes             String?
+  active            Boolean            @default(true)
+  // Última alteração no registro do quarto (Prisma atualiza em qualquer campo, não só status) —
+  // usado como aproximação pelo Agente Operacional para detectar quarto parado em manutenção ou
+  // limpeza há tempo demais (ver apps/worker/src/operationalAgent.ts).
+  updatedAt         DateTime           @default(now()) @updatedAt
+  reservations      Reservation[]
+  category          RoomCategory       @relation(fields: [categoryId], references: [id])
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  checkins          StayCheckin[]
+  housekeepingTasks HousekeepingTask[]
 
   @@map("rooms")
+}
+
+// Governanta/camareira responsável pela limpeza dos quartos. Login próprio (WhatsApp + senha),
+// separado do login administrativo (User), usado pelo app mobile de governança.
+model Housekeeper {
+  id                String             @id @default(uuid())
+  tenantId          String
+  name              String
+  whatsapp          String
+  photoUrl          String?
+  passwordHash      String
+  active            Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  housekeepingTasks HousekeepingTask[]
+
+  @@unique([tenantId, whatsapp])
+  @@map("housekeepers")
+}
+
+// Uma limpeza (ciclo completo) de um quarto. Nunca é sobrescrita — cada limpeza gera um novo
+// registro, formando o histórico de duração/observações usado no acompanhamento do painel.
+model HousekeepingTask {
+  id              String                 @id @default(uuid())
+  tenantId        String
+  roomId          String
+  housekeeperId   String?
+  status          HousekeepingTaskStatus @default(PENDING)
+  notes           String?
+  assignedAt      DateTime?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  durationSeconds Int?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room            Room                   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  housekeeper     Housekeeper?           @relation(fields: [housekeeperId], references: [id])
+
+  @@index([tenantId, status])
+  @@index([roomId, status])
+  @@map("housekeeping_tasks")
+}
+
+// Parametrização por assinante de como os quartos são atribuídos às governantas (ver app/settings).
+model HousekeepingSetting {
+  id             String                     @id @default(uuid())
+  tenantId       String                     @unique
+  assignmentMode HousekeepingAssignmentMode @default(RECEPTION)
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+  tenant         Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("housekeeping_settings")
 }
 
 // Histórico de taxa de ocupação do hotel, gravado a cada hora (ver apps/worker/src/occupancySnapshot.ts),
@@ -413,7 +492,7 @@ model RoomOccupancySnapshot {
 }
 
 model Company {
-  id           String             @id @default(uuid())
+  id           String               @id @default(uuid())
   tenantId     String
   name         String
   tradeName    String?
@@ -423,18 +502,18 @@ model Company {
   address      String?
   city         String?
   state        String?
-  creditLimit  Decimal?           @db.Decimal(10, 2)
-  paymentTerms Int                @default(15)
-  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creditLimit  Decimal?             @db.Decimal(10, 2)
+  paymentTerms Int                  @default(15)
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   invoices     CorporateInvoice[]
-  guests       Guest[]            @relation("GuestCompanyLink")
+  guests       Guest[]              @relation("GuestCompanyLink")
   receivables  AccountsReceivable[]
 
   @@map("companies")
 }
 
 model Guest {
-  id             String        @id @default(uuid())
+  id             String               @id @default(uuid())
   tenantId       String
   companyId      String?
   fullName       String
@@ -447,14 +526,14 @@ model Guest {
   whatsappPhone  String?
   nomeUsuarioWpp String?
   whatsappName   String?
-  hasWhatsapp    Boolean       @default(false)
+  hasWhatsapp    Boolean              @default(false)
   zipCode        String?
   street         String?
   number         String?
   neighborhood   String?
   city           String?
   state          String?
-  country        String        @default("Brasil")
+  country        String               @default("Brasil")
   // Campos exigidos pela FNRH (Ficha Nacional de Registro de Hóspedes / SNRHos) além do
   // cadastro comercial básico já existente acima. `country` continua sendo o país do endereço
   // (nome livre, ex: "Brasil"); `nationality` é a nacionalidade do hóspede em si (podem
@@ -463,19 +542,19 @@ model Guest {
   rgNumber       String?
   rgIssuer       String?
   rgIssuerState  String?
-  nationality    String?       @default("BR")
+  nationality    String?              @default("BR")
   raceColor      String?
   occupation     String?
   // Campos de deficiência exigidos pela FNRH/SNRHos (domínios opcao_deficiencia/tipos_deficiencia).
-  disability     String?       @default("NAOINFORMAR")
+  disability     String?              @default("NAOINFORMAR")
   disabilityType String?
   // Saldo credor consolidado do hóspede — ver GuestBalanceEntry para o ledger de auditoria
   // (créditos/débitos) que compõe este valor. Equivalente ao conceito de HospedeNetMov do
   // sistema legado.
-  balance        Decimal       @default(0) @db.Decimal(10, 2)
+  balance        Decimal              @default(0) @db.Decimal(10, 2)
   fnrhRecords    FNRHRecord[]
-  company        Company?      @relation("GuestCompanyLink", fields: [companyId], references: [id])
-  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  company        Company?             @relation("GuestCompanyLink", fields: [companyId], references: [id])
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   checkins       StayCheckin[]
   vehicles       Vehicle[]
   balanceEntries GuestBalanceEntry[]
@@ -528,7 +607,7 @@ model FNRHRecord {
   createdAt              DateTime     @default(now())
   guest                  Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
   stayCheckin            StayCheckin? @relation(fields: [stayCheckinId], references: [id])
-  reservation             Reservation? @relation(fields: [reservationId], references: [id])
+  reservation            Reservation? @relation(fields: [reservationId], references: [id])
 
   @@index([reservationId])
   @@map("fnrh_records")
@@ -579,80 +658,80 @@ model Reservation {
 // controle de estado explícito (reenvio invalida o link anterior), no mesmo padrão de
 // UazapiSetting/WhatsappMessageSetting de modelar estado em tabela.
 model PreCheckinLink {
-  id            String       @id @default(uuid())
+  id            String      @id @default(uuid())
   tenantId      String
   reservationId String
-  token         String       @unique
-  status        String       @default("PENDING") // PENDING | OPENED | COMPLETED | EXPIRED | REVOKED
+  token         String      @unique
+  status        String      @default("PENDING") // PENDING | OPENED | COMPLETED | EXPIRED | REVOKED
   expiresAt     DateTime
   openedAt      DateTime?
   completedAt   DateTime?
   sentAt        DateTime?
-  sendAttempts  Int          @default(0)
-  createdAt     DateTime     @default(now())
-  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  reservation   Reservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  sendAttempts  Int         @default(0)
+  createdAt     DateTime    @default(now())
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
 
   @@index([reservationId])
   @@map("pre_checkin_links")
 }
 
 model StayCheckin {
-  id               String            @id @default(uuid())
-  tenantId         String
-  roomId           String
-  primaryGuestId   String
-  reservationId    String?           @unique
-  checkInDate      DateTime          @default(now())
-  expectedCheckOut DateTime
-  actualCheckOut   DateTime?
-  billingType      String            @default("DIRECT")
-  totalDaily       Decimal           @db.Decimal(10, 2)
-  totalConsumption Decimal           @default(0) @db.Decimal(10, 2)
-  discount         Decimal           @default(0) @db.Decimal(10, 2)
-  adults           Int               @default(1)
-  children         Int               @default(0)
-  isClosed         Boolean           @default(false)
-  dailiesCount     Int               @default(1)
-  lastRolloverDate DateTime          @default(now())
+  id                        String               @id @default(uuid())
+  tenantId                  String
+  roomId                    String
+  primaryGuestId            String
+  reservationId             String?              @unique
+  checkInDate               DateTime             @default(now())
+  expectedCheckOut          DateTime
+  actualCheckOut            DateTime?
+  billingType               String               @default("DIRECT")
+  totalDaily                Decimal              @db.Decimal(10, 2)
+  totalConsumption          Decimal              @default(0) @db.Decimal(10, 2)
+  discount                  Decimal              @default(0) @db.Decimal(10, 2)
+  adults                    Int                  @default(1)
+  children                  Int                  @default(0)
+  isClosed                  Boolean              @default(false)
+  dailiesCount              Int                  @default(1)
+  lastRolloverDate          DateTime             @default(now())
   checkoutPrevisionSentDate String?
   // Diárias lançadas por virada automática além da previsão original de saída (expectedCheckOut) —
   // equivalente a hpd_qtddiariasextras do sistema legado. dailiesCount continua sendo o total geral.
-  extraDailiesCount      Int         @default(0)
+  extraDailiesCount         Int                  @default(0)
   // Snapshot de auditoria: quem fez o check-in/check-out desta hospedagem e quem operava o caixa
   // no momento do fechamento financeiro — equivalentes a hpd_idusucheckin/hpd_idusucheckout/hpd_operadorfechou.
-  checkedInByUserId      String?
-  checkedInByUserName    String?
-  checkedOutByUserId     String?
-  checkedOutByUserName   String?
-  closingOperatorId      String?
-  closingOperatorName    String?
+  checkedInByUserId         String?
+  checkedInByUserName       String?
+  checkedOutByUserId        String?
+  checkedOutByUserName      String?
+  closingOperatorId         String?
+  closingOperatorName       String?
   // Cancelamento da hospedagem em si (distinto de um check-out normal) — equivalente a
   // hpd_idusucancelam. Ainda sem fluxo de UI que grave estes campos.
-  isCanceled             Boolean     @default(false)
-  canceledAt             DateTime?
-  canceledByUserId       String?
-  canceledByUserName     String?
+  isCanceled                Boolean              @default(false)
+  canceledAt                DateTime?
+  canceledByUserId          String?
+  canceledByUserName        String?
   // Totais financeiros consolidados na própria hospedagem (equivalentes a hpd_totaladiant,
   // hpd_saldopagar e hpd_outrosdeb) — recalculados a cada pagamento/fechamento em vez de
   // apenas derivados on-the-fly, para preservar o valor histórico mesmo após a hospedagem fechar.
-  totalAdvance           Decimal     @default(0) @db.Decimal(10, 2)
-  balanceDue             Decimal     @default(0) @db.Decimal(10, 2)
-  otherDebits            Decimal     @default(0) @db.Decimal(10, 2)
-  fnrhRecords      FNRHRecord[]
-  charges          StayCharge[]
-  primaryGuest     Guest             @relation(fields: [primaryGuestId], references: [id])
-  room             Room              @relation(fields: [roomId], references: [id])
-  reservation      Reservation?      @relation(fields: [reservationId], references: [id])
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  consumptions     StayConsumption[]
-  payments         CashTransaction[]
-  secondaryGuests  StayGuest[]
-  debitTransfersOut StayDebitTransfer[] @relation("DebitTransferFrom")
-  debitTransfersIn  StayDebitTransfer[] @relation("DebitTransferTo")
-  whatsappMessages  WhatsappMessage[]
-  accountsReceivable   AccountsReceivable[]
-  guestBalanceEntries  GuestBalanceEntry[]
+  totalAdvance              Decimal              @default(0) @db.Decimal(10, 2)
+  balanceDue                Decimal              @default(0) @db.Decimal(10, 2)
+  otherDebits               Decimal              @default(0) @db.Decimal(10, 2)
+  fnrhRecords               FNRHRecord[]
+  charges                   StayCharge[]
+  primaryGuest              Guest                @relation(fields: [primaryGuestId], references: [id])
+  room                      Room                 @relation(fields: [roomId], references: [id])
+  reservation               Reservation?         @relation(fields: [reservationId], references: [id])
+  tenant                    Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  consumptions              StayConsumption[]
+  payments                  CashTransaction[]
+  secondaryGuests           StayGuest[]
+  debitTransfersOut         StayDebitTransfer[]  @relation("DebitTransferFrom")
+  debitTransfersIn          StayDebitTransfer[]  @relation("DebitTransferTo")
+  whatsappMessages          WhatsappMessage[]
+  accountsReceivable        AccountsReceivable[]
+  guestBalanceEntries       GuestBalanceEntry[]
 
   @@map("stay_checkins")
 }
@@ -742,14 +821,14 @@ model CorporateInvoice {
 }
 
 model POSLocation {
-  id            String            @id @default(uuid())
-  tenantId      String
-  name          String
-  isCentral     Boolean           @default(false)
-  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  stocks        POSProductStock[]
-  transfersTo   StockTransfer[]   @relation("TransferToPOS")
-  consumptions  StayConsumption[]
+  id           String            @id @default(uuid())
+  tenantId     String
+  name         String
+  isCentral    Boolean           @default(false)
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocks       POSProductStock[]
+  transfersTo  StockTransfer[]   @relation("TransferToPOS")
+  consumptions StayConsumption[]
 
   @@map("pos_locations")
 }
@@ -829,30 +908,30 @@ model CashRegister {
 }
 
 model CashTransaction {
-  id             String       @id @default(uuid())
-  cashRegisterId String
-  type           String
-  amount         Decimal      @db.Decimal(10, 2)
-  description    String
-  paymentMethod  String
+  id                String       @id @default(uuid())
+  cashRegisterId    String
+  type              String
+  amount            Decimal      @db.Decimal(10, 2)
+  description       String
+  paymentMethod     String
   // Denormalizado no momento da criação a partir de PaymentMethod.sumsToCashRegister — evita
   // precisar de join para somar os totais físicos do caixa (sessão/geral/fechamento). Default
   // true preserva o comportamento de todos os lançamentos existentes (abertura, sangria etc).
-  countsInCashTotal Boolean   @default(true)
+  countsInCashTotal Boolean      @default(true)
   // Só usado pela transferência de débito entre quartos: o lançamento de baixa no quarto de
   // origem não representa nenhum dinheiro ainda (o dinheiro real só aparece quando o quarto de
   // destino pagar), então fica fora da lista de movimentações do turno inteiramente — não é
   // suficiente apenas excluí-lo dos totais, como ocorre com Conta Corrente/Parcelamento/Saldo do
   // Hóspede, que continuam visíveis na lista (só não somam).
-  hiddenFromCashLog Boolean  @default(false)
-  stayCheckinId  String?
-  roomNumber     String?
-  guestName      String?
-  accountPlanId  String?
-  createdAt      DateTime     @default(now())
-  cashRegister   CashRegister @relation(fields: [cashRegisterId], references: [id], onDelete: Cascade)
-  stay           StayCheckin? @relation(fields: [stayCheckinId], references: [id])
-  accountPlan    AccountPlan? @relation(fields: [accountPlanId], references: [id])
+  hiddenFromCashLog Boolean      @default(false)
+  stayCheckinId     String?
+  roomNumber        String?
+  guestName         String?
+  accountPlanId     String?
+  createdAt         DateTime     @default(now())
+  cashRegister      CashRegister @relation(fields: [cashRegisterId], references: [id], onDelete: Cascade)
+  stay              StayCheckin? @relation(fields: [stayCheckinId], references: [id])
+  accountPlan       AccountPlan? @relation(fields: [accountPlanId], references: [id])
 
   @@map("cash_transactions")
 }
@@ -885,37 +964,80 @@ model UazapiSetting {
 // (ver apps/worker/src/snrhosTransmit.ts) só roda para tenants que configurarem credenciais reais
 // e habilitarem explicitamente, já que o envio ao governo tem efeito legal/tem multa associada.
 model SNRHosSetting {
-  id            String   @id @default(uuid())
-  tenantId      String   @unique
-  environment   String   @default("HOMOLOGACAO") // HOMOLOGACAO | PRODUCAO
-  apiUsername   String   @default("")
-  apiPassword   String   @default("")
-  cpfSolicitante String  @default("")
-  enabled       Boolean  @default(false)
-  updatedAt     DateTime @updatedAt
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id             String   @id @default(uuid())
+  tenantId       String   @unique
+  environment    String   @default("HOMOLOGACAO") // HOMOLOGACAO | PRODUCAO
+  apiUsername    String   @default("")
+  apiPassword    String   @default("")
+  cpfSolicitante String   @default("")
+  enabled        Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("snrhos_settings")
 }
 
-// Configuração do agente de IA por tenant — só comportamento/feature toggles, nunca credenciais ou
-// cota. A chave do AI Gateway (env AI_GATEWAY_API_KEY) e o modelo usado são globais, definidos pelo
-// código/infra; a cota de tokens por assinante vem de SaaSPlan.aiTokenQuota, definida pelo admin
-// master ao configurar o plano. O assinante nunca tem acesso a nenhum desses dois controles — só
-// liga/desliga funcionalidades e ajusta comportamento de negócio (persona, auto-confirmação de
-// reserva feita pelo bot, telefone de alerta do monitoramento).
+// Configuração dos dois agentes de IA por tenant (Atendimento + Operacional). Separação rígida de
+// controle: campos marcados "assinante" são editáveis pela tela de Configurações do próprio
+// assinante; campos marcados "admin" só são editáveis pelo painel admin master
+// (/admin/tenants/[id]) — nunca pela tela do assinante. Chave de API e modelo usado continuam
+// globais, definidos por env var/infra, fora deste model. Ver PLANO_AGENTE_IA.md.
 model AIAgentSetting {
-  id                       String   @id @default(uuid())
-  tenantId                 String   @unique
-  enabled                  Boolean  @default(false) // atendimento via WhatsApp ligado/desligado
-  autoConfirmReservations  Boolean  @default(false) // false = reserva feita pelo bot entra como PRE_RESERVATION
-  systemPromptExtra        String?  // instruções/tom de voz adicionais definidos pelo assinante
-  monitoringEnabled        Boolean  @default(false)
-  alertPhone               String?  // número WhatsApp que recebe alertas do agente de monitoramento
-  updatedAt                DateTime @updatedAt
-  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid())
+  tenantId String @unique
+
+  // --- Agente de Atendimento (assinante) ---
+  enabled                 Boolean         @default(false) // atendimento via WhatsApp ligado/desligado
+  autoConfirmReservations Boolean         @default(false) // false = reserva feita pelo bot entra como PRE_RESERVATION
+  agentDisplayName        String? // nome com que o agente se apresenta no WhatsApp
+  agentAvatarUrl          String? // foto de perfil do agente
+  tonePreset              AgentTonePreset @default(PROFISSIONAL)
+
+  // --- Agente de Atendimento (admin master) ---
+  systemPromptExtra  String? // prompt cru de personalidade/forma de atendimento, só o admin edita
+  tokenQuotaOverride Int? // sobrescreve SaaSPlan.aiTokenQuota para este tenant, se definido
+  blocked            Boolean @default(false) // força desligar os dois agentes, independente dos toggles do assinante
+
+  // --- Agente Operacional (assinante) ---
+  monitoringEnabled       Boolean                 @default(false)
+  alertPhone              String? // número WhatsApp que recebe alertas do agente operacional
+  operationalAutonomyMode OperationalAutonomyMode @default(ALERT_ONLY)
+
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("ai_agent_settings")
+}
+
+enum AgentTonePreset {
+  FORMAL
+  PROFISSIONAL
+  DESCONTRAIDO
+  DIRETO
+}
+
+// Controla se o Agente Operacional só alerta (padrão, mais seguro) ou pode agir sozinho em uma
+// lista fechada de situações de baixo risco. Nenhuma ação autônoma de escrita deve ser implementada
+// sem antes definir explicitamente, com o usuário, o escopo exato permitido — ver PLANO_AGENTE_IA.md.
+enum OperationalAutonomyMode {
+  ALERT_ONLY
+  AUTONOMOUS_LIMITED
+}
+
+// Evita que o Agente Operacional (apps/worker/src/operationalAgent.ts) reenvie o mesmo alerta a
+// cada ciclo do cron — um registro por (tenant, tipo de problema, entidade) enquanto o problema
+// segue não resolvido; removido/expira quando o problema deixa de ser detectado.
+model OperationalAlertLog {
+  id             String   @id @default(uuid())
+  tenantId       String
+  issueType      String // ex: "SNRHOS_STUCK" | "PRECHECKIN_PENDING" | "ROOM_MAINTENANCE_STUCK" | "ROOM_DIRTY_STUCK" | "WHATSAPP_DISCONNECTED"
+  entityId       String // id da entidade com problema (FNRHRecord, Reservation, Room, etc.) ou tenantId quando não há entidade específica
+  firstAlertedAt DateTime @default(now())
+  lastAlertedAt  DateTime @default(now())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, issueType, entityId])
+  @@map("operational_alert_logs")
 }
 
 // Histórico de mensagens WhatsApp da tela "Mensagens WhatsApp" do quarto ocupado — tanto o que o
@@ -927,15 +1049,15 @@ model WhatsappMessage {
   stayId     String?
   phone      String
   direction  String       @default("OUT") // "IN" (do hóspede) | "OUT" (enviada pelo hotel)
-  type       String       // "text" | "document" | "media"
-  content    String?      // texto da mensagem ou legenda (caption) do documento
+  type       String // "text" | "document" | "media"
+  content    String? // texto da mensagem ou legenda (caption) do documento
   filename   String?
-  mediaUrl   String?      // URL do anexo (imagem/documento/áudio/vídeo) recebido do hóspede via webhook
-  mimeType   String?      // tipo bruto do anexo reportado pela uazapi (image, document, audio, video, ptt, sticker)
-  senderName String?      // nome de perfil do WhatsApp de quem enviou (preenchido em mensagens IN)
-  externalId String?      // messageid da uazapi — evita duplicar em reentregas de webhook
+  mediaUrl   String? // URL do anexo (imagem/documento/áudio/vídeo) recebido do hóspede via webhook
+  mimeType   String? // tipo bruto do anexo reportado pela uazapi (image, document, audio, video, ptt, sticker)
+  senderName String? // nome de perfil do WhatsApp de quem enviou (preenchido em mensagens IN)
+  externalId String? // messageid da uazapi — evita duplicar em reentregas de webhook
   read       Boolean      @default(true) // mensagens IN começam false até o operador abrir a conversa
-  sentBy     String?      // só em mensagens OUT: "AI" (agente de atendimento) | "HUMAN" (operador). null em mensagens IN.
+  sentBy     String? // só em mensagens OUT: "AI" (agente de atendimento) | "HUMAN" (operador). null em mensagens IN.
   createdAt  DateTime     @default(now())
   tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stay       StayCheckin? @relation(fields: [stayId], references: [id], onDelete: SetNull)
@@ -1023,21 +1145,21 @@ model AccountPlan {
 }
 
 model Supplier {
-  id        String   @id @default(uuid())
-  tenantId  String
-  name      String
-  tradeName String?
-  cnpj      String?
-  email     String?
-  phone     String?
-  category  String?
-  city      String?
-  state     String?
-  address   String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id              String            @id @default(uuid())
+  tenantId        String
+  name            String
+  tradeName       String?
+  cnpj            String?
+  email           String?
+  phone           String?
+  category        String?
+  city            String?
+  state           String?
+  address         String?
+  active          Boolean           @default(true)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   accountsPayable AccountsPayable[]
 
   @@map("suppliers")
@@ -1090,6 +1212,17 @@ enum RoomStatus {
   VACANT_DIRTY
   OCCUPIED
   MAINTENANCE
+}
+
+enum HousekeepingTaskStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+}
+
+enum HousekeepingAssignmentMode {
+  RECEPTION
+  QUEUE
 }
 
 enum ReservationStatus {
