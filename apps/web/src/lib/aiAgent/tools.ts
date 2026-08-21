@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
 import { findConflictingReservation } from "@/lib/reservationHelpers";
+import { sendUazapiImage } from "@/lib/uazapi";
 
 function startOfToday(): Date {
   const now = new Date();
@@ -256,10 +257,39 @@ async function createReservationForAgent(
   });
 }
 
+// Envia até 3 fotos de um quarto da categoria pedida. Fotos ficam em Room.photos (não em
+// RoomCategory), então pega o primeiro quarto ativo da categoria que já tenha alguma foto
+// cadastrada — mostrar fotos de um quarto real da categoria é suficiente para o hóspede ter uma
+// ideia, não precisa ser exatamente o quarto que ele vai ocupar.
+async function sendRoomPhotos(tenantId: string, guestPhone: string, categoryName: string) {
+  const category = await prisma.roomCategory.findFirst({
+    where: { tenantId, active: true, name: { equals: categoryName, mode: "insensitive" } },
+  });
+  if (!category) return { sucesso: false, erro: "Categoria de apartamento não encontrada." };
+
+  const room = await prisma.room.findFirst({
+    where: { tenantId, categoryId: category.id, active: true, photos: { isEmpty: false } },
+  });
+  if (!room || room.photos.length === 0) {
+    return { sucesso: false, erro: `Não há fotos cadastradas para a categoria ${category.name}.` };
+  }
+
+  const photosToSend = room.photos.slice(0, 3);
+  let enviadas = 0;
+  for (const photo of photosToSend) {
+    const sent = await sendUazapiImage(guestPhone, photo, `${category.name}`, tenantId);
+    if (sent) enviadas++;
+  }
+
+  return enviadas > 0
+    ? { sucesso: true, fotosEnviadas: enviadas }
+    : { sucesso: false, erro: "Falha ao enviar as fotos pelo WhatsApp." };
+}
+
 async function getHotelInfo(tenantId: string) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { name: true, tradeName: true, phone: true, address: true, city: true, state: true },
+    select: { name: true, tradeName: true, phone: true, address: true, city: true, state: true, breakfastHours: true },
   });
   return {
     nome: tenant?.tradeName || tenant?.name,
@@ -267,7 +297,16 @@ async function getHotelInfo(tenantId: string) {
     endereco: tenant?.address,
     cidade: tenant?.city,
     estado: tenant?.state,
+    horarioCafeDaManha: tenant?.breakfastHours || null,
   };
+}
+
+async function listServices(tenantId: string) {
+  const services = await prisma.hotelService.findMany({
+    where: { tenantId, active: true },
+    select: { description: true, category: true, price: true },
+  });
+  return services.map((s) => ({ servico: s.description, categoria: s.category, preco: Number(s.price) }));
 }
 
 // Constrói o conjunto de tools do agente já vinculado a um tenant e a uma conversa específicos.
@@ -321,9 +360,15 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
     }),
 
     get_hotel_info: tool({
-      description: "Retorna informações institucionais do hotel (nome, telefone, endereço).",
+      description: "Retorna informações institucionais do hotel (nome, telefone, endereço, horário do café da manhã).",
       inputSchema: z.object({}),
       execute: async () => await getHotelInfo(tenantId),
+    }),
+
+    list_services: tool({
+      description: "Lista os serviços extras oferecidos pelo hotel (lavanderia, traslado, cama extra, estacionamento etc.) com preços.",
+      inputSchema: z.object({}),
+      execute: async () => ({ servicos: await listServices(tenantId) }),
     }),
 
     search_knowledge_base: tool({
@@ -354,6 +399,14 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
         }
         return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, guestName, guestCpf, adults });
       },
+    }),
+
+    send_photo: tool({
+      description: "Envia fotos reais de um quarto da categoria pedida pelo hóspede via WhatsApp. Use quando ele pedir para ver fotos do quarto/apartamento.",
+      inputSchema: z.object({
+        categoryName: z.string().describe("Nome da categoria de apartamento, exatamente como retornado por check_availability/list_room_categories"),
+      }),
+      execute: async ({ categoryName }) => await sendRoomPhotos(tenantId, guestPhone, categoryName),
     }),
 
     escalate_to_human: tool({

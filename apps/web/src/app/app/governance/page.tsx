@@ -1,13 +1,58 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { BedDouble, Sparkles, CheckCircle2, Power, ShieldAlert, Eye, EyeOff } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { BedDouble, Sparkles, CheckCircle2, Power, ShieldAlert, Eye, EyeOff, UserCheck, Timer, X } from "lucide-react";
 import LoadingOverlay from "@/components/LoadingOverlay";
+
+interface Housekeeper {
+  id: string;
+  name: string;
+  photoUrl: string | null;
+}
+
+interface HousekeepingTask {
+  id: string;
+  roomId: string;
+  type: "CHECKOUT" | "OCCUPIED";
+  status: "PENDING" | "IN_PROGRESS" | "DONE";
+  housekeeper: Housekeeper | null;
+}
 
 export default function TenantGovernancePage() {
   const [rooms, setRooms] = useState<any[]>([]);
   const [notification, setNotification] = useState<string | null>(null);
   const [isLoadingRooms, setIsLoadingRooms] = useState(true);
+
+  // Governança de quartos — modo de atribuição (RECEPTION/QUEUE), lista de governantas ativas e
+  // tarefas de limpeza em aberto (PENDING/IN_PROGRESS), usadas para montar a tela de atribuição
+  // manual quando o assinante está no modo RECEPTION.
+  const [assignmentMode, setAssignmentMode] = useState<"RECEPTION" | "QUEUE">("RECEPTION");
+  const [housekeepers, setHousekeepers] = useState<Housekeeper[]>([]);
+  const [tasksByRoom, setTasksByRoom] = useState<Record<string, HousekeepingTask>>({});
+  const [selectedHousekeeper, setSelectedHousekeeper] = useState<Record<string, string>>({});
+  const [assigningRoomId, setAssigningRoomId] = useState<string | null>(null);
+
+  const loadHousekeepingData = useCallback(() => {
+    Promise.all([
+      fetch("/api/tenant/housekeeping-settings").then((r) => r.json()),
+      fetch("/api/tenant/housekeepers").then((r) => r.json()),
+      fetch("/api/tenant/housekeeping-tasks").then((r) => r.json()),
+    ])
+      .then(([settingsData, housekeepersData, tasksData]) => {
+        if (settingsData.success && settingsData.settings) {
+          setAssignmentMode(settingsData.settings.assignmentMode === "QUEUE" ? "QUEUE" : "RECEPTION");
+        }
+        if (housekeepersData.success && Array.isArray(housekeepersData.housekeepers)) {
+          setHousekeepers(housekeepersData.housekeepers.filter((h: any) => h.active));
+        }
+        if (tasksData.success && Array.isArray(tasksData.tasks)) {
+          const map: Record<string, HousekeepingTask> = {};
+          for (const t of tasksData.tasks) map[t.roomId] = t;
+          setTasksByRoom(map);
+        }
+      })
+      .catch((e) => console.error("Erro ao carregar dados de governança de limpeza:", e));
+  }, []);
 
   // Sync rooms from database API (o campo "active" já vem persistido no banco)
   useEffect(() => {
@@ -29,7 +74,60 @@ export default function TenantGovernancePage() {
       })
       .catch((e) => console.error("Erro ao carregar quartos na Governança:", e))
       .finally(() => setIsLoadingRooms(false));
-  }, []);
+
+    loadHousekeepingData();
+  }, [loadHousekeepingData]);
+
+  const handleAssignRoom = async (roomId: string, type: "CHECKOUT" | "OCCUPIED") => {
+    const housekeeperId = selectedHousekeeper[roomId];
+    if (!housekeeperId) return;
+
+    setAssigningRoomId(roomId);
+    try {
+      const res = await fetch("/api/tenant/housekeeping-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId, housekeeperId, type }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setNotification(data.error || "Erro ao atribuir quarto.");
+        setTimeout(() => setNotification(null), 4000);
+        return;
+      }
+      setTasksByRoom((prev) => ({ ...prev, [roomId]: data.task }));
+      setNotification(`Quarto atribuído a ${data.task.housekeeper?.name} com sucesso!`);
+      setTimeout(() => setNotification(null), 4000);
+    } catch (err: any) {
+      setNotification(err.message || "Erro de rede ao atribuir quarto.");
+      setTimeout(() => setNotification(null), 4000);
+    } finally {
+      setAssigningRoomId(null);
+    }
+  };
+
+  const handleCancelAssignment = async (roomId: string) => {
+    const task = tasksByRoom[roomId];
+    if (!task) return;
+
+    try {
+      const res = await fetch(`/api/tenant/housekeeping-tasks/${task.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setNotification(data.error || "Erro ao cancelar atribuição.");
+        setTimeout(() => setNotification(null), 4000);
+        return;
+      }
+      setTasksByRoom((prev) => {
+        const next = { ...prev };
+        delete next[roomId];
+        return next;
+      });
+    } catch (err: any) {
+      setNotification(err.message || "Erro de rede ao cancelar atribuição.");
+      setTimeout(() => setNotification(null), 4000);
+    }
+  };
 
   const handleUpdateStatus = (roomId: string, newStatus: string, statusLabel: string) => {
     setRooms((prev) =>
@@ -140,6 +238,100 @@ export default function TenantGovernancePage() {
                   {badgeText}
                 </span>
               </div>
+
+              {/* Sinal visual de limpeza em andamento — muda de cor/texto conforme o tipo */}
+              {tasksByRoom[room.id]?.status === "IN_PROGRESS" && (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold animate-pulse ${
+                  tasksByRoom[room.id]?.type === "OCCUPIED"
+                    ? "bg-violet-500/15 border border-violet-500/40 text-violet-400"
+                    : "bg-[#F59E0B]/15 border border-[#F59E0B]/40 text-[#F59E0B]"
+                }`}>
+                  <Timer className="w-4 h-4" />
+                  {tasksByRoom[room.id]?.type === "OCCUPIED" ? "Arrumação c/ hóspede" : "Limpeza pós check-out"} — {tasksByRoom[room.id]?.housekeeper?.name || "Governanta"}
+                </div>
+              )}
+
+              {/* Atribuição manual de limpeza pós check-out (modo RECEPTION) */}
+              {assignmentMode === "RECEPTION" && room.status === "VACANT_DIRTY" && room.active && (
+                <div className="pt-3 border-t border-slate-800/80 space-y-2">
+                  {tasksByRoom[room.id]?.status === "PENDING" && tasksByRoom[room.id]?.type === "CHECKOUT" ? (
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="flex items-center gap-1.5 text-slate-300">
+                        <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        Atribuído a <strong className="text-white">{tasksByRoom[room.id]?.housekeeper?.name}</strong>
+                      </span>
+                      <button
+                        onClick={() => handleCancelAssignment(room.id)}
+                        title="Cancelar atribuição"
+                        className="p-1.5 rounded-lg bg-slate-800 text-red-400 hover:bg-red-600 hover:text-white transition"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={selectedHousekeeper[room.id] || ""}
+                        onChange={(e) => setSelectedHousekeeper((prev) => ({ ...prev, [room.id]: e.target.value }))}
+                        className="flex-1 bg-slate-950 border border-slate-700 text-white text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="">Selecione a governanta...</option>
+                        {housekeepers.map((h) => (
+                          <option key={h.id} value={h.id}>{h.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handleAssignRoom(room.id, "CHECKOUT")}
+                        disabled={!selectedHousekeeper[room.id] || assigningRoomId === room.id}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition disabled:opacity-40"
+                      >
+                        Atribuir
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Arrumação com hóspede no quarto — sempre manual, independe do modo do assinante */}
+              {room.status === "OCCUPIED" && room.active && (
+                <div className="pt-3 border-t border-slate-800/80 space-y-2">
+                  {tasksByRoom[room.id]?.status === "PENDING" && tasksByRoom[room.id]?.type === "OCCUPIED" ? (
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="flex items-center gap-1.5 text-slate-300">
+                        <UserCheck className="w-3.5 h-3.5 text-violet-400" />
+                        Arrumação atribuída a <strong className="text-white">{tasksByRoom[room.id]?.housekeeper?.name}</strong>
+                      </span>
+                      <button
+                        onClick={() => handleCancelAssignment(room.id)}
+                        title="Cancelar atribuição"
+                        className="p-1.5 rounded-lg bg-slate-800 text-red-400 hover:bg-red-600 hover:text-white transition"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : !tasksByRoom[room.id] ? (
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={selectedHousekeeper[room.id] || ""}
+                        onChange={(e) => setSelectedHousekeeper((prev) => ({ ...prev, [room.id]: e.target.value }))}
+                        className="flex-1 bg-slate-950 border border-slate-700 text-white text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-violet-500"
+                      >
+                        <option value="">Arrumar quarto com hóspede...</option>
+                        {housekeepers.map((h) => (
+                          <option key={h.id} value={h.id}>{h.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handleAssignRoom(room.id, "OCCUPIED")}
+                        disabled={!selectedHousekeeper[room.id] || assigningRoomId === room.id}
+                        className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold transition disabled:opacity-40"
+                      >
+                        Atribuir
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
 
               {/* Action Buttons for Housekeepers & Room Deactivation */}
               <div className="pt-3 border-t border-slate-800/80 flex flex-wrap gap-2 text-xs">

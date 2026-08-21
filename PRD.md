@@ -150,12 +150,16 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
   `get_reservation_by_phone`, `get_guest_by_cpf` (cadastro do hotel → fallback Hub do
   Desenvolvedor), `list_room_categories`, `get_hotel_info`, `search_knowledge_base`,
   `create_reservation` (transação atômica, guardrail `autoConfirmReservations` decidido em código,
-  nunca pelo modelo) e `escalate_to_human`. Ligado ao webhook da uazapi
+  nunca pelo modelo), `escalate_to_human`, `send_photo` (envia fotos reais de `Room.photos` via
+  `sendUazapiImage`) e `list_services`. Ligado ao webhook da uazapi
   (`api/uazapi/webhook/[tenantId]`), com guarda para não responder por cima de um humano que
   respondeu a mesma conversa nos últimos 30min e checagem de cota/bloqueio antes de gastar tokens.
-  **Pendente:** envio de FNRH sob demanda pelo próprio agente, tool de enviar foto de quarto
-  (`Room.photos` já existe no schema), tools de serviços/café da manhã (dependem da Fase B do
-  plano — model `HotelService` real ainda não existe).
+  **Pendente:** envio de FNRH sob demanda pelo próprio agente, atalho de salvar conhecimento direto
+  da conversa.
+* **`HotelService` ✅:** model real substituindo a tela mock de `cadastros/servicos` — CRUD completo
+  (`api/tenant/services`, restrito a administradores), consultado pelo agente via `list_services`.
+* **`Tenant.breakfastHours` ✅:** campo simples em Configurações ("Hotel (Dados)"), consultado pelo
+  agente via `get_hotel_info`.
 * **Agente Operacional v1 ✅** (`apps/worker/src/operationalAgent.ts`, cron a cada 15min): detecção
   100% determinística (FNRH travada no SNRHos, pré-check-in pendente com check-in próximo, quarto
   em manutenção/sujo parado por tempo demais, WhatsApp do hotel desconectado); quando há problema
@@ -197,10 +201,10 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
 
 ### 3.12. Cadastros / Dados Mestres (Master Data)
 Telas existentes em `app/app/cadastros/*`, com status de integração real:
-* ✅ **Conectados ao backend (CRUD real):** Apartamentos, Empresas, Fornecedores, Hóspedes, Usuários, Plano de Contas, Formas de Pagamento (ver 3.6), Contas a Pagar (ver 3.6), Contas a Receber (ver 3.6), Saldo do Hóspede (ver 3.6).
+* ✅ **Conectados ao backend (CRUD real):** Apartamentos, Empresas, Fornecedores, Hóspedes, Usuários, Plano de Contas, Formas de Pagamento (ver 3.6), Contas a Pagar (ver 3.6), Contas a Receber (ver 3.6), Saldo do Hóspede (ver 3.6), Serviços (`HotelService`, ver 3.9).
 * **Validação de Placa de Veículo Única ✅:** No cadastro de hóspede, ao adicionar um veículo a placa é consultada em `api/veiculos/search` antes de ser aceita — se já pertencer a outro hóspede (checagem exclui o próprio hóspede em edição), o cadastro é bloqueado e a mensagem "Veículo já cadastrado para \<nome completo do hóspede\>" é exibida, evitando duas fichas com a mesma placa.
 * **Usuários — visão multi-hotel para Super Admin ✅:** `SUPER_ADMIN` enxerga e gerencia usuários de todos os hotéis (com filtro/seleção do tenant de destino ao criar); `TENANT_ADMIN` continua restrito aos usuários do próprio hotel e não pode criar, promover ou alterar um `SUPER_ADMIN` (proteção contra elevação de privilégio em `api/users`).
-* 🟡 **Somente UI, sem persistência (pendentes de conexão):** Bancos, Colaboradores, Comandas, Grupos, Localidades, PDV, Pratos, Serviços.
+* 🟡 **Somente UI, sem persistência (pendentes de conexão):** Bancos, Colaboradores, Comandas, Grupos, Localidades, PDV, Pratos.
 * **Tarifas ⚠️:** existem **dois caminhos de leitura paralelos e inconsistentes** — `/api/tariffs` lê a tabela `Tariff` via Prisma; `/api/reservations/tariffs` lê uma tabela `tariffs` via cliente Supabase direto (não Prisma). A tela `app/app/tariffs/page.tsx`, por sua vez, não chama nenhuma das duas — usa `CadastroTarifasModal` com uma constante `INITIAL_TARIFFS` fixa. **Pendente:** unificar em uma única fonte de dados (Prisma) e conectar a tela real à API.
 
 ### 3.13. Integração de E-mail ✅
@@ -255,4 +259,4 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * [x] **Fase 13 (nova):** Caixa obrigatório para operar o sistema (`CashRegisterGate`), Caixa Geral consolidado para Admin (`app/cash-register-geral` + `api/caixa/geral`), sangria vinculada a plano de contas e gestão de usuários multi-hotel para `SUPER_ADMIN` — implementados e conectados ao banco.
 * [x] **Fase 14 (nova):** Validação de placa de veículo única no cadastro de hóspede, cota mensal de consulta de CPF persistida no banco e editável por assinante no Painel SuperAdmin (`api/admin/tenants`), e resiliência da integração uazapi a instância fora do ar (`fetchUazapi`/`UazapiUnreachableError`) — implementados e conectados ao banco.
 * [x] **Fase 15 (nova):** Formas de Pagamento com regras de negócio (Parcelamento, Debitar Saldo Hóspede, Transf.Débito, Soma Caixa x Conta Corrente) centralizadas em `paymentProcessing.ts`, Saldo do Hóspede/Conta Corrente (`Guest.balance` + `GuestBalanceEntry`) e Contas a Pagar/Contas a Receber avulsas com baixa (total/parcial, juros/desconto) — implementados e conectados ao banco. Correção do loop infinito e adoção do tema claro/escuro no modal de Alterar Período, com a regra de data mínima de saída (nunca antes de hoje, travada na última diária lançada após o horário de virada). Overlays de celebração de check-in e despedida de check-out no Mapa de Quartos.
-* [~] **Fase 16 (nova):** Agentes de IA (Atendimento WhatsApp + Operacional) — ver detalhamento completo na seção 3.9 e em `PLANO_AGENTE_IA.md`. Núcleo funcional implementado: agente de atendimento com criação de reserva real (guardrail de auto-confirmação por tenant), identificação de hóspede por CPF, base de conhecimento (RAG leve) e escalonamento para humano; agente operacional v1 detectando inconsistências e alertando por WhatsApp; separação de controle assinante/admin master; painel admin real de prompt/cota/bloqueio por assinante. Pendente: tools de foto/serviços/café da manhã (Fase B do plano), envio de FNRH sob demanda, e autonomia de ação do agente operacional (aguardando lista de ações aprovada pelo usuário).
+* [~] **Fase 16 (nova):** Agentes de IA (Atendimento WhatsApp + Operacional) — ver detalhamento completo na seção 3.9 e em `PLANO_AGENTE_IA.md`. Agente de atendimento completo: disponibilidade, criação de reserva real (guardrail de auto-confirmação por tenant), identificação de hóspede por CPF, envio de fotos de quarto, lista de serviços/café da manhã, base de conhecimento (RAG leve) e escalonamento para humano; agente operacional v1 detectando inconsistências e alertando por WhatsApp; separação de controle assinante/admin master; painel admin real de prompt/cota/bloqueio por assinante. Pendente: envio de FNRH sob demanda pelo agente, atalho de salvar conhecimento direto da conversa, e autonomia de ação do agente operacional (aguardando lista de ações aprovada pelo usuário).

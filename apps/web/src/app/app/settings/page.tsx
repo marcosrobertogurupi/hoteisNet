@@ -124,6 +124,7 @@ export default function SubscriberSettingsPage() {
   // Aceitar estoque negativo — permite baixar o estoque do PDV no lançamento de consumo mesmo
   // quando o saldo disponível é insuficiente, em vez de bloquear o lançamento.
   const [allowNegativeStockInput, setAllowNegativeStockInput] = useState(false);
+  const [breakfastHoursInput, setBreakfastHoursInput] = useState("");
 
   // Mensagens automáticas de WhatsApp para o hóspede (confirmação de reserva, boas-vindas no
   // check-in, previsão de check-out e check-out) — persistidas no Tenant e lidas pelo worker
@@ -383,6 +384,9 @@ export default function SubscriberSettingsPage() {
         if (data.success && typeof data.settings?.allowNegativeStock === "boolean") {
           setAllowNegativeStockInput(data.settings.allowNegativeStock);
         }
+        if (data.success) {
+          setBreakfastHoursInput(data.settings?.breakfastHours || "");
+        }
       })
       .catch(() => {});
 
@@ -467,7 +471,11 @@ export default function SubscriberSettingsPage() {
       const res = await fetch("/api/tenant/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dailyRolloverTime: dailyRolloverTimeInput, allowNegativeStock: allowNegativeStockInput }),
+        body: JSON.stringify({
+          dailyRolloverTime: dailyRolloverTimeInput,
+          allowNegativeStock: allowNegativeStockInput,
+          breakfastHours: breakfastHoursInput,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -825,6 +833,25 @@ export default function SubscriberSettingsPage() {
                   }`}
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold block mb-1.5">
+                Horário do Café da Manhã
+              </label>
+              <div className="relative">
+                <Clock3 className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                <input
+                  type="text"
+                  value={breakfastHoursInput}
+                  onChange={(e) => setBreakfastHoursInput(e.target.value)}
+                  placeholder="Ex: 07:00 às 10:00"
+                  className={`w-full border rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+                    theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+                  }`}
+                />
+              </div>
+              <p className={`text-[10px] mt-1 ${theme.textMuted}`}>Usado pelo Agente de Atendimento para responder o hóspede pelo WhatsApp.</p>
             </div>
 
             <div>

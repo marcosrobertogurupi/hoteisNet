@@ -299,6 +299,36 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
   const [rooms, setRooms] = useState<RoomDefinition[]>([]);
   const [reservations, setReservations] = useState<ReservationItem[]>([]);
 
+  // Selo visual "em limpeza" — tarefas de governança em andamento (IN_PROGRESS), indexadas por
+  // roomId. CHECKOUT (limpeza profunda pós check-out) e OCCUPIED (arrumação com hóspede no quarto).
+  const [housekeepingByRoomId, setHousekeepingByRoomId] = useState<Record<string, {
+    type: "CHECKOUT" | "OCCUPIED";
+    housekeeperName: string | null;
+  }>>({});
+
+  const syncHousekeepingTasks = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/tenant/housekeeping-tasks`);
+      const data = await res.json();
+      if (!data || !data.success || !Array.isArray(data.tasks)) return;
+      const map: Record<string, { type: "CHECKOUT" | "OCCUPIED"; housekeeperName: string | null }> = {};
+      for (const t of data.tasks) {
+        if (t.status === "IN_PROGRESS") {
+          map[t.roomId] = { type: t.type, housekeeperName: t.housekeeper?.name || null };
+        }
+      }
+      setHousekeepingByRoomId(map);
+    } catch (err) {
+      console.warn("[ReservationGridMap] Erro ao sincronizar tarefas de governança:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    syncHousekeepingTasks();
+    const interval = setInterval(syncHousekeepingTasks, 3000);
+    return () => clearInterval(interval);
+  }, [syncHousekeepingTasks]);
+
   const syncGridRooms = useCallback(async () => {
     try {
       const res = await fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`);
@@ -1499,6 +1529,15 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
                   {room.isMaintenance && (
                     <span className="mt-0.5 px-1 py-0.5 rounded text-[8px] bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold">
                       Manutenção
+                    </span>
+                  )}
+                  {housekeepingByRoomId[room.id] && (
+                    <span className={`mt-0.5 px-1 py-0.5 rounded text-[8px] font-semibold border animate-pulse ${
+                      housekeepingByRoomId[room.id].type === "OCCUPIED"
+                        ? "bg-violet-500/20 text-violet-400 border-violet-500/30"
+                        : "bg-amber-500/20 text-amber-500 border-amber-500/30"
+                    }`}>
+                      {housekeepingByRoomId[room.id].type === "OCCUPIED" ? "Arrumação c/ hóspede" : "Em limpeza"}
                     </span>
                   )}
                 </div>

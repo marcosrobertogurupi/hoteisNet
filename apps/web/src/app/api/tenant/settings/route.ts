@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
 
     const tenant = await prisma.tenant.findFirst({
       where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-      select: { id: true, dailyRolloverTime: true, allowNegativeStock: true },
+      select: { id: true, dailyRolloverTime: true, allowNegativeStock: true, breakfastHours: true },
     });
 
     if (!tenant) {
@@ -20,7 +20,11 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      settings: { dailyRolloverTime: tenant.dailyRolloverTime, allowNegativeStock: tenant.allowNegativeStock },
+      settings: {
+        dailyRolloverTime: tenant.dailyRolloverTime,
+        allowNegativeStock: tenant.allowNegativeStock,
+        breakfastHours: tenant.breakfastHours,
+      },
     });
   } catch (error: any) {
     console.error("[GET /api/tenant/settings] Erro:", error);
@@ -32,7 +36,7 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { tenantId, dailyRolloverTime, allowNegativeStock } = body;
+    const { tenantId, dailyRolloverTime, allowNegativeStock, breakfastHours } = body;
 
     if (dailyRolloverTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(dailyRolloverTime)) {
       return NextResponse.json(
@@ -55,6 +59,7 @@ export async function PATCH(req: NextRequest) {
       data: {
         ...(dailyRolloverTime !== undefined ? { dailyRolloverTime } : {}),
         ...(allowNegativeStock !== undefined ? { allowNegativeStock: Boolean(allowNegativeStock) } : {}),
+        ...(breakfastHours !== undefined ? { breakfastHours: breakfastHours || null } : {}),
       },
     });
 

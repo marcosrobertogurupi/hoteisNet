@@ -17,6 +17,7 @@ import {
   EyeOff,
   User,
   Power,
+  Send,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
@@ -42,6 +43,8 @@ export default function GovernantasPage() {
   const [housekeepers, setHousekeepers] = useState<Housekeeper[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [sendingLinkId, setSendingLinkId] = useState<string | null>(null);
+  const [linkFeedback, setLinkFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editing, setEditing] = useState<Housekeeper | null>(null);
@@ -219,6 +222,25 @@ export default function GovernantasPage() {
     }
   };
 
+  const handleSendLink = async (h: Housekeeper) => {
+    setSendingLinkId(h.id);
+    setLinkFeedback(null);
+    try {
+      const res = await fetch(`/api/tenant/housekeepers/${h.id}/send-link`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setLinkFeedback({ type: "error", text: data.error || "Erro ao enviar link por WhatsApp." });
+        return;
+      }
+      setLinkFeedback({ type: "success", text: `Link do app enviado para ${h.name} via WhatsApp!` });
+    } catch (err: any) {
+      setLinkFeedback({ type: "error", text: err.message || "Erro de rede ao enviar link." });
+    } finally {
+      setSendingLinkId(null);
+      setTimeout(() => setLinkFeedback(null), 5000);
+    }
+  };
+
   return (
     <div className={`min-h-screen p-4 md:p-8 ${theme.bgApp} ${theme.textMain} transition-colors`}>
       <LoadingOverlay show={isLoading} message="Buscando governantas..." submessage="Estamos carregando o cadastro de governança." />
@@ -267,6 +289,17 @@ export default function GovernantasPage() {
             <Plus className="w-4 h-4" /> Nova Governanta
           </button>
         </div>
+
+        {linkFeedback && (
+          <div className={`p-3.5 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
+            linkFeedback.type === "success"
+              ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-400"
+              : "bg-red-500/15 border-red-500/40 text-red-400"
+          }`}>
+            <Send className="w-4 h-4 shrink-0" />
+            <span>{linkFeedback.text}</span>
+          </div>
+        )}
 
         <div className={`flex items-center justify-between gap-4 p-4 rounded-2xl border ${
           isDark ? "bg-slate-900/50 border-slate-800" : "bg-white border-slate-200 shadow-sm"
@@ -338,6 +371,16 @@ export default function GovernantasPage() {
                     </td>
                     <td className="px-5 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleSendLink(h)}
+                          disabled={sendingLinkId === h.id}
+                          title="Enviar link do app por WhatsApp"
+                          className={`p-2 rounded-xl transition disabled:opacity-50 ${
+                            isDark ? "bg-slate-800 text-emerald-400 hover:bg-emerald-600 hover:text-white" : "bg-slate-100 text-emerald-600 hover:bg-emerald-600 hover:text-white"
+                          }`}
+                        >
+                          <Send className="w-4 h-4" />
+                        </button>
                         <button
                           onClick={() => handleOpenEdit(h)}
                           title="Editar Governanta"

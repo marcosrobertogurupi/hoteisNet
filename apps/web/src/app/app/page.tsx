@@ -220,10 +220,35 @@ export default function TenantDashboardPage() {
   // Animação de despedida exibida no card do quarto logo após um check-out ser confirmado
   const [checkoutFarewellRoomId, setCheckoutFarewellRoomId] = useState<string | null>(null);
 
+  // Selo visual "em limpeza" — tarefas de governança em andamento (IN_PROGRESS), indexadas por
+  // roomId. Cobre os dois tipos: CHECKOUT (limpeza profunda pós check-out) e OCCUPIED (arrumação
+  // com hóspede no quarto). Some automaticamente quando a governanta conclui a limpeza no app dela.
+  const [housekeepingByRoomId, setHousekeepingByRoomId] = useState<Record<string, {
+    type: "CHECKOUT" | "OCCUPIED";
+    housekeeperName: string | null;
+  }>>({});
+
   // Sincronização automática e transparente a partir do banco de dados (sem piscamento de tela)
   const syncRoomsFromDatabase = useCallback(async () => {
     try {
-      const res = await fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`);
+      const [res, housekeepingRes] = await Promise.all([
+        fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`),
+        fetch(`/api/tenant/housekeeping-tasks`).catch(() => null),
+      ]);
+
+      if (housekeepingRes) {
+        const housekeepingData = await housekeepingRes.json().catch(() => null);
+        if (housekeepingData?.success && Array.isArray(housekeepingData.tasks)) {
+          const map: Record<string, { type: "CHECKOUT" | "OCCUPIED"; housekeeperName: string | null }> = {};
+          for (const t of housekeepingData.tasks) {
+            if (t.status === "IN_PROGRESS") {
+              map[t.roomId] = { type: t.type, housekeeperName: t.housekeeper?.name || null };
+            }
+          }
+          setHousekeepingByRoomId(map);
+        }
+      }
+
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.rooms)) return;
 
@@ -1066,10 +1091,23 @@ export default function TenantDashboardPage() {
                   </div>
                 )}
 
+                {/* 🧹 SELO: LIMPEZA EM ANDAMENTO (governança) — some quando a governanta conclui pelo app */}
+                {housekeepingByRoomId[room.id] && (
+                  <div className={`absolute -top-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap animate-pulse ${
+                    housekeepingByRoomId[room.id].type === "OCCUPIED"
+                      ? "bg-violet-600 text-white border-violet-400 shadow-violet-600/40"
+                      : "bg-amber-500 text-white border-amber-300 shadow-amber-500/40"
+                  }`}>
+                    <Sparkles className="w-3 h-3 shrink-0" />
+                    {housekeepingByRoomId[room.id].type === "OCCUPIED" ? "Arrumação c/ hóspede" : "Em limpeza"}
+                    {housekeepingByRoomId[room.id].housekeeperName ? ` — ${housekeepingByRoomId[room.id].housekeeperName}` : ""}
+                  </div>
+                )}
+
                 {/* Top Header Card */}
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3">
-                    <div 
+                    <div
                       style={{ backgroundColor: isVacantClean ? "#10B981" : isOccupied ? "#184176" : isCleaning ? "#D97706" : isMaintenance ? "#BE123C" : "#475569" }}
                       className="w-11 h-11 rounded-xl text-white font-mono font-bold flex items-center justify-center text-lg shadow-md shrink-0"
                     >

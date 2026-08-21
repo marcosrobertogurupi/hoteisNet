@@ -103,22 +103,23 @@ incluindo poder bloquear o uso de IA de um assinante específico independente do
   conhecimento (hoje precisa reescrever manualmente em `/app/cadastros/base-conhecimento`) —
   **ainda pendente**.
 
-### Fase B (do plano original) — dados que faltam para o Agente de Atendimento
+### Fase B ✅ concluída
 
-- Model `HotelService` real (hoje mock).
-- Horário de café da manhã / informações institucionais (`Tenant.breakfastHours` ou `TenantInfo`)
-  — hoje a `search_knowledge_base` já cobre parte disso via conhecimento manual, mas um campo
-  estruturado seria mais confiável para perguntas diretas.
-- Envio de foto de quarto: `Room.photos` já existe no schema (populado em outra sessão), falta a
-  tool `send_photo` e `sendUazapiImage` (`type: "image"` no `POST /send/media`, endpoint já usado
-  para PDF em `api/uazapi/send-reserva`).
+- `HotelService` (model real) substitui a tela mock de `cadastros/servicos` — CRUD completo
+  (`api/tenant/services`), tool `list_services` no agente. Testado via UI (criação real de um
+  serviço) e via agente (respondeu preço corretamente).
+- `Tenant.breakfastHours` — campo em Configurações ("Hotel (Dados)"), exposto via `get_hotel_info`.
+  Testado: agente respondeu o horário correto configurado.
+- `sendUazapiImage` (`apps/web/src/lib/uazapi.ts`) + tool `send_photo` — envia até 3 fotos de um
+  quarto da categoria pedida (`Room.photos`, já populado em outra sessão via
+  `CadastroApartamentoModal.tsx`). Testado o caminho de erro (categoria sem fotos cadastradas);
+  envio real ainda não testado por não haver fotos nos quartos demo atuais.
 
-## Ordem de implementação recomendada
+## O que falta
 
-1. Fase B — fotos e serviços/café da manhã (o que resta de maior valor).
-2. Os dois itens pendentes da Fase C (envio de FNRH sob demanda, atalho de salvar conhecimento
+1. Os dois itens pendentes da Fase C (envio de FNRH sob demanda, atalho de salvar conhecimento
    direto da conversa).
-3. Autonomia do Agente Operacional (`AUTONOMOUS_LIMITED`) — só depois de definir a lista exata de
+2. Autonomia do Agente Operacional (`AUTONOMOUS_LIMITED`) — só depois de definir a lista exata de
    ações permitidas com o usuário.
 
 ## Riscos e decisões abertas

@@ -80,6 +80,18 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       return NextResponse.json({ success: false, error: "Governanta não encontrada." }, { status: 404 });
     }
 
+    // Bloqueia a exclusão com tarefa ativa: sem isso, uma limpeza IN_PROGRESS ficaria órfã
+    // (housekeeperId nulo) e o selo "em limpeza" nunca sumiria do Mapa de Quartos/Reservas.
+    const activeTask = await prisma.housekeepingTask.findFirst({
+      where: { housekeeperId: id, status: { in: ["PENDING", "IN_PROGRESS"] } },
+    });
+    if (activeTask) {
+      return NextResponse.json(
+        { success: false, error: "Esta governanta tem uma limpeza pendente ou em andamento. Cancele ou aguarde a conclusão antes de excluir." },
+        { status: 409 }
+      );
+    }
+
     await prisma.housekeeper.delete({ where: { id } });
 
     return NextResponse.json({ success: true });

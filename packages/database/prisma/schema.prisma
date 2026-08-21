@@ -63,6 +63,7 @@ model Tenant {
   updatedAt               DateTime                @updatedAt
   dailyRolloverTime       String                  @default("14:30")
   allowNegativeStock      Boolean                 @default(false)
+  breakfastHours          String?                 // ex: "07:00 às 10:00" — usado pelo agente de atendimento (get_hotel_info)
   cpfQueryQuotaMonthly    Int                     @default(100)
   cpfQueryUsed            Int                     @default(0)
   cpfQueryCycleStart      DateTime                @default(now())
@@ -95,6 +96,7 @@ model Tenant {
   supportTickets          SupportTicket[]
   supportKnowledgeBase    SupportKnowledgeBase[]
   operationalAlertLogs    OperationalAlertLog[]
+  hotelServices           HotelService[]
   tariffs                 Tariff[]
   activityLogs            AuditLog[]
   uazapiSettings          UazapiSetting?
@@ -247,6 +249,24 @@ model RoomCategory {
   rooms       Room[]
 
   @@map("room_categories")
+}
+
+// Serviços prestados pelo hotel (lavanderia, traslado, cama extra, estacionamento etc.) —
+// substitui a tela mock anterior de cadastros/servicos. Também consultado pelo agente de
+// atendimento via tool list_services.
+model HotelService {
+  id          String   @id @default(uuid())
+  tenantId    String
+  code        String?
+  description String
+  category    String?
+  price       Decimal  @default(0) @db.Decimal(10, 2)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("hotel_services")
 }
 
 model PaymentMethod {
@@ -446,6 +466,10 @@ model HousekeepingTask {
   tenantId        String
   roomId          String
   housekeeperId   String?
+  // CHECKOUT: limpeza profunda de quarto vago após check-out (pode entrar na fila automática no
+  // modo QUEUE). OCCUPIED: arrumação de quarto com hóspede hospedado — nunca cai em fila, sempre
+  // atribuída manualmente pela recepção, porque só ela sabe se o hóspede está no quarto/autoriza.
+  type            HousekeepingTaskType   @default(CHECKOUT)
   status          HousekeepingTaskStatus @default(PENDING)
   notes           String?
   assignedAt      DateTime?
@@ -1218,6 +1242,11 @@ enum HousekeepingTaskStatus {
   PENDING
   IN_PROGRESS
   DONE
+}
+
+enum HousekeepingTaskType {
+  CHECKOUT
+  OCCUPIED
 }
 
 enum HousekeepingAssignmentMode {
