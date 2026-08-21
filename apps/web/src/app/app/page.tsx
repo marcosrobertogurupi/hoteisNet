@@ -146,6 +146,9 @@ export default function TenantDashboardPage() {
     }[];
   } | null>(null);
   const [activeStayPayments, setActiveStayPayments] = useState<{ id: string; date: string; amount: number; methodDescription: string; operatorName?: string; caixaMovimentoId: string }[]>([]);
+  // Reservas futuras (ainda não check-in) do quarto em edição no Alterar Período — usado para
+  // bloquear no calendário datas que colidiriam com uma reserva já confirmada para o mesmo quarto.
+  const [activeRoomReservations, setActiveRoomReservations] = useState<{ id: string; guestName: string; roomNumber: string; checkInDate: string; checkOutDate: string }[]>([]);
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const [showWppModal, setShowWppModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
@@ -481,6 +484,35 @@ export default function TenantDashboardPage() {
               if (contaData.success) payments = contaData.payments || [];
             } catch {
               // segue sem histórico de pagamentos se o caixa não responder
+            }
+          }
+
+          // Reservas futuras do mesmo quarto — necessário para o Alterar Período bloquear no
+          // calendário datas que colidiriam com uma reserva já confirmada. Ignora canceladas e as
+          // que já viraram a própria hospedagem em curso (CHECKED_IN) ou já encerradas (CHECKED_OUT).
+          if (showAlterarPeriodoModal) {
+            try {
+              const reservasRes = await fetch(`/api/reservations?tenantId=TNT-01`);
+              const reservasData = await reservasRes.json();
+              if (reservasData.success && Array.isArray(reservasData.reservations)) {
+                const roomReservas = reservasData.reservations
+                  .filter((r: any) => {
+                    if (["CANCELLED", "CHECKED_IN", "CHECKED_OUT"].includes(r.status)) return false;
+                    const roomNum = r.rooms?.number ? String(r.rooms.number) : (r.roomDescription?.match(/\d+/)?.[0] || "");
+                    return roomNum === activeRoom.number;
+                  })
+                  .map((r: any) => ({
+                    id: r.id,
+                    guestName: r.guestName || "Hóspede",
+                    roomNumber: activeRoom.number,
+                    checkInDate: (r.checkInDate || "").split("T")[0],
+                    checkOutDate: (r.checkOutDate || "").split("T")[0],
+                  }));
+                setActiveRoomReservations(roomReservas);
+              }
+            } catch {
+              // segue sem checagem de conflito de reserva se a busca falhar
+              setActiveRoomReservations([]);
             }
           }
 
@@ -2182,6 +2214,7 @@ export default function TenantDashboardPage() {
               paymentMethod: p.methodDescription,
             })),
             lastChargeReferenceDateISO: realStayBilling.tariffList[realStayBilling.tariffList.length - 1]?.referenceDateISO,
+            existingReservations: activeRoomReservations,
           }}
           onSave={async (updatedData) => {
             try {

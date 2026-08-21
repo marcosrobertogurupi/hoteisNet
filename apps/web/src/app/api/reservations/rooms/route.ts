@@ -32,6 +32,7 @@ function formatRoom(r: any) {
     camasCasal: r.camasCasal ?? 0,
     camasSolteiro: r.camasSolteiro ?? 0,
     caracteristicas: r.caracteristicas || [],
+    photos: r.photos || [],
     status: r.status,
     notes: r.notes || "",
     active: r.active,
@@ -158,6 +159,7 @@ export async function POST(req: NextRequest) {
       camasCasal,
       camasSolteiro,
       caracteristicas,
+      photos,
       status,
       observacao,
     } = body;
@@ -179,6 +181,7 @@ export async function POST(req: NextRequest) {
         camasCasal: camasCasal ?? 0,
         camasSolteiro: camasSolteiro ?? 0,
         caracteristicas: caracteristicas || [],
+        photos: photos || [],
         status: (mapStatusToDb(status) as any) || "VACANT_CLEAN",
         notes: observacao || null,
       },
@@ -212,6 +215,7 @@ export async function PATCH(req: NextRequest) {
       camasCasal,
       camasSolteiro,
       caracteristicas,
+      photos,
     } = body;
 
     const target = String(id || roomId || roomNumber || "");
@@ -232,6 +236,7 @@ export async function PATCH(req: NextRequest) {
     if (camasCasal !== undefined) data.camasCasal = camasCasal;
     if (camasSolteiro !== undefined) data.camasSolteiro = camasSolteiro;
     if (caracteristicas !== undefined) data.caracteristicas = caracteristicas;
+    if (photos !== undefined) data.photos = photos;
     if (categoria !== undefined) {
       data.categoryId = await resolveCategoryId(tenantId || DEFAULT_TENANT_ID, categoria);
     }

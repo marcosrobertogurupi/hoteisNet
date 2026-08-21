@@ -60,6 +60,7 @@ export default function ApartamentosPage() {
             Array.isArray(r.caracteristicas) && r.caracteristicas.length > 0
               ? r.caracteristicas
               : ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Wi-Fi de Alta Velocidade"];
+          const fotosArr = Array.isArray(r.photos) ? r.photos : [];
 
           const candidate: ApartamentoFormData = {
             id: r.id,
@@ -70,6 +71,7 @@ export default function ApartamentosPage() {
             camasCasal: casalCount,
             camasSolteiro: solteiroCount,
             caracteristicas: caracteristicasArr,
+            fotos: fotosArr,
             status: st,
             observacao: notesStr,
           };
@@ -82,7 +84,8 @@ export default function ApartamentosPage() {
             existing.andar === floorStr &&
             existing.bloco === blocoStr &&
             existing.camasCasal === casalCount &&
-            existing.camasSolteiro === solteiroCount
+            existing.camasSolteiro === solteiroCount &&
+            existing.fotos.length === fotosArr.length
           ) {
             return existing;
           }
@@ -168,6 +171,7 @@ export default function ApartamentosPage() {
           camasCasal: data.camasCasal,
           camasSolteiro: data.camasSolteiro,
           caracteristicas: data.caracteristicas,
+          photos: data.fotos,
           status: data.status,
           observacao: data.observacao,
         }),
@@ -189,6 +193,7 @@ export default function ApartamentosPage() {
             camasCasal: savedRoom.camasCasal,
             camasSolteiro: savedRoom.camasSolteiro,
             caracteristicas: savedRoom.caracteristicas,
+            fotos: savedRoom.photos || [],
             status: data.status,
             observacao: savedRoom.notes,
           }
@@ -344,9 +349,22 @@ export default function ApartamentosPage() {
                 {filteredAptos.map((a) => (
                   <tr key={a.id} className={`transition ${isDark ? "hover:bg-slate-800/40" : "hover:bg-slate-50"}`}>
                     <td className="px-5 py-4">
-                      <div className="space-y-0.5">
-                        <span className={`font-bold text-base block font-mono ${isDark ? "text-white" : "text-slate-900"}`}>Quarto {a.numero}</span>
-                        <span className="text-teal-600 dark:text-teal-400 text-[11px] block">{a.categoria}</span>
+                      <div className="flex items-center gap-3">
+                        {a.fotos && a.fotos.length > 0 ? (
+                          <img
+                            src={a.fotos[0]}
+                            alt={`Foto do quarto ${a.numero}`}
+                            className={`w-10 h-10 rounded-lg object-cover border flex-shrink-0 ${isDark ? "border-slate-700" : "border-slate-200"}`}
+                          />
+                        ) : (
+                          <div className={`w-10 h-10 rounded-lg border flex items-center justify-center flex-shrink-0 ${isDark ? "border-slate-800 bg-slate-950 text-slate-600" : "border-slate-200 bg-slate-100 text-slate-400"}`}>
+                            <BedDouble className="w-4 h-4" />
+                          </div>
+                        )}
+                        <div className="space-y-0.5">
+                          <span className={`font-bold text-base block font-mono ${isDark ? "text-white" : "text-slate-900"}`}>Quarto {a.numero}</span>
+                          <span className="text-teal-600 dark:text-teal-400 text-[11px] block">{a.categoria}</span>
+                        </div>
                       </div>
                     </td>
 

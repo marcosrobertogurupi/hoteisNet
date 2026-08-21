@@ -24,6 +24,27 @@ model SaaSPlan {
   @@map("saas_plans")
 }
 
+// Tabela de referência nacional (municípios do IBGE), compartilhada por todos os assinantes —
+// não é isolada por tenantId, ao contrário dos demais cadastros do sistema, porque o código IBGE
+// de um município é sempre o mesmo independente de qual hotel está usando o sistema. Importada a
+// partir da tabela CidadesNet do sistema legado em WinDev (ver script de importação em
+// packages/database/scripts/import-municipalities.js). Usada para resolver o campo cidade_id
+// exigido pela API do SNRHos (ver apps/web/src/lib/snrhosClient.ts).
+model Municipality {
+  id        String   @id @default(uuid())
+  name      String
+  ibgeCode  String   @unique
+  uf        String
+  dddCode   String?
+  country   String   @default("Brasil")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([uf])
+  @@map("municipalities")
+}
+
 model Tenant {
   id                String              @id @default(uuid())
   name              String
@@ -46,6 +67,7 @@ model Tenant {
   cpfQueryUsed         Int              @default(0)
   cpfQueryCycleStart   DateTime         @default(now())
   accountPlans      AccountPlan[]
+  aiAgentSettings   AIAgentSetting?
   aiUsageLogs       AIUsageLog[]
   cashRegisters     CashRegister[]      @relation("TenantCashRegisters")
   companies         Company[]
@@ -63,6 +85,7 @@ model Tenant {
   rooms             Room[]
   occupancySnapshots RoomOccupancySnapshot[]
   subscriptions     SaASSubscription[]
+  preCheckinLinks   PreCheckinLink[]
   checkins          StayCheckin[]
   debitTransfers    StayDebitTransfer[]
   suppliers         Supplier[]
@@ -70,6 +93,7 @@ model Tenant {
   tariffs           Tariff[]
   activityLogs      AuditLog[]
   uazapiSettings    UazapiSetting?
+  snrhosSettings    SNRHosSetting?
   users             User[]
   vehicles          Vehicle[]
   whatsappMessageSettings WhatsappMessageSetting?
@@ -360,6 +384,7 @@ model Room {
   camasCasal      Int           @default(0)
   camasSolteiro   Int           @default(0)
   caracteristicas String[]      @default([])
+  photos          String[]      @default([])
   status          RoomStatus    @default(VACANT_CLEAN)
   notes           String?
   active          Boolean       @default(true)
@@ -430,6 +455,20 @@ model Guest {
   city           String?
   state          String?
   country        String        @default("Brasil")
+  // Campos exigidos pela FNRH (Ficha Nacional de Registro de Hóspedes / SNRHos) além do
+  // cadastro comercial básico já existente acima. `country` continua sendo o país do endereço
+  // (nome livre, ex: "Brasil"); `nationality` é a nacionalidade do hóspede em si (podem
+  // divergir) e é armazenada como código ISO 3166-1 alpha-2 (ex: "BR", "US") porque é o formato
+  // exigido pela API do SNRHos (campo PaisNacionalidade_id) — ver apps/web/src/lib/snrhosClient.ts.
+  rgNumber       String?
+  rgIssuer       String?
+  rgIssuerState  String?
+  nationality    String?       @default("BR")
+  raceColor      String?
+  occupation     String?
+  // Campos de deficiência exigidos pela FNRH/SNRHos (domínios opcao_deficiencia/tipos_deficiencia).
+  disability     String?       @default("NAOINFORMAR")
+  disabilityType String?
   // Saldo credor consolidado do hóspede — ver GuestBalanceEntry para o ledger de auditoria
   // (créditos/débitos) que compõe este valor. Equivalente ao conceito de HospedeNetMov do
   // sistema legado.
@@ -463,6 +502,10 @@ model FNRHRecord {
   id                     String       @id @default(uuid())
   guestId                String
   stayCheckinId          String?
+  // Vínculo com a reserva de origem: o pré-check-in é preenchido pelo hóspede horas ANTES da
+  // chegada, quando a StayCheckin ainda não existe. stayCheckinId só passa a ser preenchido
+  // quando o check-in físico acontece de fato; reservationId é o vínculo estável desde o início.
+  reservationId          String?
   travelReason           String
   transportMode          String
   lastOriginCity         String
@@ -474,10 +517,20 @@ model FNRHRecord {
   signatureUrl           String?
   transmittedSNRHos      Boolean      @default(false)
   transmittedAt          DateTime?
+  // IDs devolvidos pelo SNRHos em POST /hospedagem/registrar — necessários para futuras
+  // atualizações de situação (PATCH /hospedes/{id}/checkin|checkout) e para diagnosticar
+  // reenvios. snrhosLastError guarda a última falha (sem preencher em caso de sucesso).
+  snrhosReservaId        String?
+  snrhosHospedeId        String?
+  snrhosPessoaId         String?
+  snrhosLastError        String?
+  snrhosAttempts         Int          @default(0)
   createdAt              DateTime     @default(now())
   guest                  Guest        @relation(fields: [guestId], references: [id], onDelete: Cascade)
   stayCheckin            StayCheckin? @relation(fields: [stayCheckinId], references: [id])
+  reservation             Reservation? @relation(fields: [reservationId], references: [id])
 
+  @@index([reservationId])
   @@map("fnrh_records")
 }
 
@@ -515,8 +568,33 @@ model Reservation {
   room              Room              @relation(fields: [roomId], references: [id])
   tenant            Tenant            @relation("TenantReservations", fields: [tenantId], references: [id], onDelete: Cascade)
   stayCheckin       StayCheckin?
+  fnrhRecords       FNRHRecord[]
+  preCheckinLinks   PreCheckinLink[]
 
   @@map("reservations")
+}
+
+// Token de acesso público e de uso único para o hóspede preencher o pré-check-in/FNRH pelo
+// celular antes de chegar ao hotel. Token opaco em banco (não JWT) para permitir revogação e
+// controle de estado explícito (reenvio invalida o link anterior), no mesmo padrão de
+// UazapiSetting/WhatsappMessageSetting de modelar estado em tabela.
+model PreCheckinLink {
+  id            String       @id @default(uuid())
+  tenantId      String
+  reservationId String
+  token         String       @unique
+  status        String       @default("PENDING") // PENDING | OPENED | COMPLETED | EXPIRED | REVOKED
+  expiresAt     DateTime
+  openedAt      DateTime?
+  completedAt   DateTime?
+  sentAt        DateTime?
+  sendAttempts  Int          @default(0)
+  createdAt     DateTime     @default(now())
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation   Reservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@index([reservationId])
+  @@map("pre_checkin_links")
 }
 
 model StayCheckin {
@@ -802,6 +880,44 @@ model UazapiSetting {
   @@map("uazapi_settings")
 }
 
+// Credenciais e configuração da transmissão eletrônica ao SNRHos (FNRH Digital, Ministério do
+// Turismo/Serpro) por tenant. `enabled` começa em false por padrão — a transmissão automática
+// (ver apps/worker/src/snrhosTransmit.ts) só roda para tenants que configurarem credenciais reais
+// e habilitarem explicitamente, já que o envio ao governo tem efeito legal/tem multa associada.
+model SNRHosSetting {
+  id            String   @id @default(uuid())
+  tenantId      String   @unique
+  environment   String   @default("HOMOLOGACAO") // HOMOLOGACAO | PRODUCAO
+  apiUsername   String   @default("")
+  apiPassword   String   @default("")
+  cpfSolicitante String  @default("")
+  enabled       Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("snrhos_settings")
+}
+
+// Configuração do agente de IA por tenant — só comportamento/feature toggles, nunca credenciais ou
+// cota. A chave do AI Gateway (env AI_GATEWAY_API_KEY) e o modelo usado são globais, definidos pelo
+// código/infra; a cota de tokens por assinante vem de SaaSPlan.aiTokenQuota, definida pelo admin
+// master ao configurar o plano. O assinante nunca tem acesso a nenhum desses dois controles — só
+// liga/desliga funcionalidades e ajusta comportamento de negócio (persona, auto-confirmação de
+// reserva feita pelo bot, telefone de alerta do monitoramento).
+model AIAgentSetting {
+  id                       String   @id @default(uuid())
+  tenantId                 String   @unique
+  enabled                  Boolean  @default(false) // atendimento via WhatsApp ligado/desligado
+  autoConfirmReservations  Boolean  @default(false) // false = reserva feita pelo bot entra como PRE_RESERVATION
+  systemPromptExtra        String?  // instruções/tom de voz adicionais definidos pelo assinante
+  monitoringEnabled        Boolean  @default(false)
+  alertPhone               String?  // número WhatsApp que recebe alertas do agente de monitoramento
+  updatedAt                DateTime @updatedAt
+  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("ai_agent_settings")
+}
+
 // Histórico de mensagens WhatsApp da tela "Mensagens WhatsApp" do quarto ocupado — tanto o que o
 // hotel enviou (resumo/consumo/extrato em PDF, texto avulso) quanto o que o hóspede respondeu,
 // recebido via webhook da uazapi (POST /api/uazapi/webhook/[tenantId]).
@@ -819,6 +935,7 @@ model WhatsappMessage {
   senderName String?      // nome de perfil do WhatsApp de quem enviou (preenchido em mensagens IN)
   externalId String?      // messageid da uazapi — evita duplicar em reentregas de webhook
   read       Boolean      @default(true) // mensagens IN começam false até o operador abrir a conversa
+  sentBy     String?      // só em mensagens OUT: "AI" (agente de atendimento) | "HUMAN" (operador). null em mensagens IN.
   createdAt  DateTime     @default(now())
   tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stay       StayCheckin? @relation(fields: [stayId], references: [id], onDelete: SetNull)
@@ -863,6 +980,9 @@ model WhatsappMessageSetting {
   checkoutPrevisionTime     String   @default("10:00")
   checkoutEnabled           Boolean  @default(false)
   checkoutMessage           String   @default("Checkout feito com sucesso. Esperamos que seja breve o seu retorno.") @db.Text
+  preCheckinFnrhEnabled     Boolean  @default(true)
+  preCheckinFnrhMessage     String   @default("Olá {HOSPEDE}! Faltam poucas horas para sua chegada ao {HOTEL}. Para agilizar seu check-in, preencha seus dados no link abaixo:\n{LINK}") @db.Text
+  preCheckinFnrhHoursBefore Int      @default(3)
   updatedAt                 DateTime @updatedAt
   tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
           include: { category: true },
         },
         stayCheckin: { select: { checkInDate: true, dailiesCount: true, isClosed: true } },
+        fnrhRecords: { select: { id: true } },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -42,6 +43,11 @@ export async function GET(req: NextRequest) {
       // "Dt.Prev.Saída" original. Usado só para a barra visual do Mapa de Reservas — a data
       // prevista de saída (checkOutDate) do hóspede não é alterada por isso.
       occupiedUntilDate: occupiedUntilDate(r.checkOutDate, r.stayCheckin),
+      // true quando o hóspede já preencheu o pré-check-in/FNRH pelo link (existe ao menos um
+      // FNRHRecord vinculado a esta reserva) — distinto de preCheckinSent, que só indica que o
+      // link foi disparado.
+      fnrhCompleted: r.fnrhRecords.length > 0,
+      fnrhRecords: undefined,
       rooms: r.room
         ? {
             id: r.room.id,
@@ -91,6 +97,7 @@ export async function GET(req: NextRequest) {
       depositPaid: 0,
       status: "CHECKED_IN" as const,
       preCheckinSent: false,
+      fnrhCompleted: false,
       notes: null,
       reservationNumber: null,
       tariffName: s.room.category?.name || null,

@@ -15,6 +15,10 @@ const DEFAULTS = {
   checkoutPrevisionTime: "10:00",
   checkoutEnabled: false,
   checkoutMessage: "Checkout feito com sucesso. Esperamos que seja breve o seu retorno.",
+  preCheckinFnrhEnabled: true,
+  preCheckinFnrhMessage:
+    "Olá {HOSPEDE}! Faltam poucas horas para sua chegada ao {HOTEL}. Para agilizar seu check-in, preencha seus dados no link abaixo:\n{LINK}",
+  preCheckinFnrhHoursBefore: 3,
 };
 
 async function resolveTenantId(tenantId: string | null) {
@@ -51,6 +55,9 @@ export async function GET(req: NextRequest) {
             checkoutPrevisionTime: settings.checkoutPrevisionTime,
             checkoutEnabled: settings.checkoutEnabled,
             checkoutMessage: settings.checkoutMessage,
+            preCheckinFnrhEnabled: settings.preCheckinFnrhEnabled,
+            preCheckinFnrhMessage: settings.preCheckinFnrhMessage,
+            preCheckinFnrhHoursBefore: settings.preCheckinFnrhHoursBefore,
           }
         : DEFAULTS,
     });
@@ -92,6 +99,9 @@ export async function PATCH(req: NextRequest) {
       "checkoutPrevisionTime",
       "checkoutEnabled",
       "checkoutMessage",
+      "preCheckinFnrhEnabled",
+      "preCheckinFnrhMessage",
+      "preCheckinFnrhHoursBefore",
     ] as const;
 
     const data: Record<string, any> = {};

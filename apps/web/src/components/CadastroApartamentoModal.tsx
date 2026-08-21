@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import type { ChangeEvent } from "react";
 import Link from "next/link";
-import { X, BedDouble, Check, Settings2 } from "lucide-react";
+import { X, BedDouble, Check, Settings2, ImagePlus, Trash2, Eye, Images } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
 
@@ -17,6 +18,7 @@ export interface ApartamentoFormData {
   camasCasal: number;
   camasSolteiro: number;
   caracteristicas: string[];
+  fotos: string[];
   status: "LIVRE" | "OCUPADO" | "MANUTENCAO" | "LIMPEZA";
   observacao: string;
 }
@@ -53,6 +55,9 @@ export default function CadastroApartamentoModal({
 
   const [andares, setAndares] = useState<{ id: string; name: string }[]>([]);
   const [categorias, setCategorias] = useState<{ id: string; name: string }[]>([]);
+  const [fotoUploadError, setFotoUploadError] = useState<string | null>(null);
+  const [previewFoto, setPreviewFoto] = useState<string | null>(null);
+  const fotoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -84,13 +89,14 @@ export default function CadastroApartamentoModal({
     camasCasal: 1,
     camasSolteiro: 1,
     caracteristicas: ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Frigobar Abastecido"],
+    fotos: [],
     status: "LIVRE",
     observacao: "",
   });
 
   useEffect(() => {
     if (initialData) {
-      setFormData(initialData);
+      setFormData({ fotos: [], ...initialData });
     } else {
       setFormData({
         numero: "",
@@ -100,10 +106,13 @@ export default function CadastroApartamentoModal({
         camasCasal: 1,
         camasSolteiro: 1,
         caracteristicas: ["Ar-Condicionado Split", "TV a Cabo / Smart TV", "Frigobar Abastecido"],
+        fotos: [],
         status: "LIVRE",
         observacao: "",
       });
     }
+    setFotoUploadError(null);
+    setPreviewFoto(null);
   }, [initialData, isOpen]);
 
   // Ao carregar as listas de pré-cadastro, seleciona o primeiro item por padrão em
@@ -128,6 +137,50 @@ export default function CadastroApartamentoModal({
         return { ...prev, caracteristicas: [...prev.caracteristicas, item] };
       }
     });
+  };
+
+  const ACCEPTED_FOTO_TYPES = ["image/png", "image/jpeg", "image/webp"];
+  const MAX_FOTO_SIZE_BYTES = 3 * 1024 * 1024; // 3MB
+  const MAX_FOTOS = 12;
+
+  const handleFotoFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setFotoUploadError(null);
+
+    const disponiveis = MAX_FOTOS - formData.fotos.length;
+    if (disponiveis <= 0) {
+      setFotoUploadError(`Limite de ${MAX_FOTOS} fotos por apartamento atingido.`);
+      e.target.value = "";
+      return;
+    }
+
+    const selecionados = Array.from(files).slice(0, disponiveis);
+
+    selecionados.forEach((file) => {
+      if (!ACCEPTED_FOTO_TYPES.includes(file.type)) {
+        setFotoUploadError("Formato inválido. Envie imagens PNG, JPEG ou WEBP.");
+        return;
+      }
+      if (file.size > MAX_FOTO_SIZE_BYTES) {
+        setFotoUploadError("Uma ou mais imagens excedem o tamanho máximo de 3MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          setFormData((prev) => ({ ...prev, fotos: [...prev.fotos, reader.result as string] }));
+        }
+      };
+      reader.onerror = () => setFotoUploadError("Não foi possível ler uma das imagens selecionadas.");
+      reader.readAsDataURL(file);
+    });
+
+    e.target.value = "";
+  };
+
+  const handleRemoveFoto = (index: number) => {
+    setFormData((prev) => ({ ...prev, fotos: prev.fotos.filter((_, i) => i !== index) }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -320,6 +373,77 @@ export default function CadastroApartamentoModal({
             </div>
           </div>
 
+          {/* Galeria de Fotos do Apartamento */}
+          <div className={`p-4 rounded-2xl border space-y-3 ${
+            isDark ? "bg-slate-950/60 border-slate-800" : "bg-slate-50 border-slate-200"
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-teal-600 dark:text-teal-400 uppercase tracking-wider inline-flex items-center gap-1.5">
+                <Images className="w-3.5 h-3.5" /> Fotos do Apartamento ({formData.fotos.length}/{MAX_FOTOS})
+              </span>
+              <button
+                type="button"
+                onClick={() => fotoInputRef.current?.click()}
+                disabled={formData.fotos.length >= MAX_FOTOS}
+                className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-bold flex items-center gap-1.5 transition"
+              >
+                <ImagePlus className="w-3.5 h-3.5" /> Inserir Fotos
+              </button>
+              <input
+                ref={fotoInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                multiple
+                onChange={handleFotoFileChange}
+                className="hidden"
+              />
+            </div>
+
+            {fotoUploadError && (
+              <p className="text-[11px] text-red-500 font-medium">{fotoUploadError}</p>
+            )}
+
+            {formData.fotos.length === 0 ? (
+              <div className={`flex flex-col items-center justify-center gap-2 py-8 rounded-xl border border-dashed text-center ${
+                isDark ? "border-slate-800 text-slate-500" : "border-slate-300 text-slate-400"
+              }`}>
+                <Images className="w-6 h-6" />
+                <p className="text-[11px]">Nenhuma foto cadastrada para este apartamento.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                {formData.fotos.map((foto, idx) => (
+                  <div
+                    key={idx}
+                    className={`relative group rounded-xl overflow-hidden border aspect-square ${
+                      isDark ? "border-slate-800 bg-slate-900" : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <img src={foto} alt={`Foto ${idx + 1} do apartamento`} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-slate-950/0 group-hover:bg-slate-950/50 transition flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                      <button
+                        type="button"
+                        title="Visualizar foto"
+                        onClick={() => setPreviewFoto(foto)}
+                        className="p-2 rounded-lg bg-white/90 text-slate-800 hover:bg-white transition"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        title="Excluir foto"
+                        onClick={() => handleRemoveFoto(idx)}
+                        className="p-2 rounded-lg bg-rose-600/90 text-white hover:bg-rose-600 transition"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="space-y-1.5">
             <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Observações Internas</label>
             <textarea
@@ -352,6 +476,27 @@ export default function CadastroApartamentoModal({
           </div>
         </form>
       </div>
+
+      {previewFoto && (
+        <div
+          className="fixed inset-0 z-[60] bg-slate-950/85 flex items-center justify-center p-6"
+          onClick={() => setPreviewFoto(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setPreviewFoto(null)}
+            className="absolute top-5 right-5 p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img
+            src={previewFoto}
+            alt="Visualização da foto do apartamento"
+            className="max-w-full max-h-full rounded-2xl shadow-2xl object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }

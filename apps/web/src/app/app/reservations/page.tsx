@@ -15,6 +15,8 @@ export default function TenantReservationsPage() {
   const [showLancarModal, setShowLancarModal] = useState(false);
   const [showMultiplasModal, setShowMultiplasModal] = useState(false);
   const [uazapiSentSuccess, setUazapiSentSuccess] = useState<string | null>(null);
+  const [uazapiSentError, setUazapiSentError] = useState<string | null>(null);
+  const [sendingLinkId, setSendingLinkId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [isLoadingReservations, setIsLoadingReservations] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -48,15 +50,31 @@ export default function TenantReservationsPage() {
     return () => clearInterval(interval);
   }, [fetchReservations, showLancarModal, showMultiplasModal]);
 
-  const handleSendUazapiLink = (resId: string) => {
-    setUazapiSentSuccess(`Link de Pré-Checkin FNRH enviado com sucesso via WhatsApp Uazapi para a Reserva ${resId}!`);
-    setReservations((prev) =>
-      prev.map((r) => (r.id === resId ? { ...r, preCheckinSent: true } : r))
-    );
+  const handleSendUazapiLink = async (resId: string) => {
+    setSendingLinkId(resId);
+    setUazapiSentError(null);
+    try {
+      const res = await fetch("/api/uazapi/send-precheckin-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reservationId: resId }),
+      });
+      const data = await res.json();
 
-    setTimeout(() => {
-      setUazapiSentSuccess(null);
-    }, 4000);
+      if (data.success) {
+        setUazapiSentSuccess("Link de pré-check-in FNRH enviado com sucesso via WhatsApp!");
+        setReservations((prev) => prev.map((r) => (r.id === resId ? { ...r, preCheckinSent: true } : r)));
+        setTimeout(() => setUazapiSentSuccess(null), 4000);
+      } else {
+        setUazapiSentError(data.error || "Não foi possível enviar o link de pré-check-in.");
+        setTimeout(() => setUazapiSentError(null), 6000);
+      }
+    } catch (err) {
+      setUazapiSentError("Erro de conexão ao enviar o link de pré-check-in.");
+      setTimeout(() => setUazapiSentError(null), 6000);
+    } finally {
+      setSendingLinkId(null);
+    }
   };
 
   const now = new Date();
@@ -157,6 +175,11 @@ export default function TenantReservationsPage() {
           <span>{uazapiSentSuccess}</span>
         </div>
       )}
+      {uazapiSentError && (
+        <div className="p-4 rounded-xl bg-[#EF4444]/15 border border-[#EF4444]/40 text-[#EF4444] text-xs font-semibold flex items-center gap-2">
+          <span>{uazapiSentError}</span>
+        </div>
+      )}
 
       {/* RENDER VIEW BASED ON TAB */}
       {activeTab === "GRID" ? (
@@ -238,9 +261,13 @@ export default function TenantReservationsPage() {
                         </span>
                       </td>
                       <td className="p-3.5">
-                        {r.preCheckinSent ? (
+                        {r.fnrhCompleted ? (
                           <span className="px-2 py-0.5 rounded text-[10px] bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 flex items-center gap-1 w-fit">
                             <CheckCircle2 className="w-3 h-3" /> Preenchido / FNRH OK
+                          </span>
+                        ) : r.preCheckinSent ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] bg-[#38BDF8]/15 text-[#38BDF8] border border-[#38BDF8]/30 flex items-center gap-1 w-fit">
+                            <Clock className="w-3 h-3" /> Aguardando Preenchimento
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 rounded text-[10px] bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/30 flex items-center gap-1 w-fit">
@@ -251,9 +278,10 @@ export default function TenantReservationsPage() {
                       <td className="p-3.5">
                         <button
                           onClick={() => handleSendUazapiLink(r.id)}
-                          className="px-3 py-1 bg-[#38BDF8]/15 hover:bg-[#38BDF8]/30 text-[#38BDF8] border border-[#38BDF8]/30 rounded text-xs transition-colors flex items-center gap-1 font-medium"
+                          disabled={sendingLinkId === r.id}
+                          className="px-3 py-1 bg-[#38BDF8]/15 hover:bg-[#38BDF8]/30 disabled:opacity-50 disabled:cursor-not-allowed text-[#38BDF8] border border-[#38BDF8]/30 rounded text-xs transition-colors flex items-center gap-1 font-medium"
                         >
-                          <PhoneCall className="w-3 h-3" /> Disparar Wpp Uazapi
+                          <PhoneCall className="w-3 h-3" /> {sendingLinkId === r.id ? "Enviando..." : r.preCheckinSent ? "Reenviar Link" : "Disparar Wpp Uazapi"}
                         </button>
                       </td>
                     </tr>

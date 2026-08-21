@@ -334,7 +334,10 @@ export default function AlterarPeriodoModal({
         if (startStr && endStr) {
           const start = new Date(startStr + "T00:00:00");
           const end = new Date(endStr + "T00:00:00");
-          const cur = new Date(start);
+          // Como Dt.Saída é uma data de CHECK-OUT (sempre pela manhã), o próprio dia de chegada
+          // da próxima reserva (start) não é conflito — o hóspede atual libera o quarto antes do
+          // horário de check-in do próximo. O bloqueio começa só no dia seguinte à chegada dela.
+          const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
           while (cur < end) {
             const y = cur.getFullYear();
             const m = String(cur.getMonth() + 1).padStart(2, "0");

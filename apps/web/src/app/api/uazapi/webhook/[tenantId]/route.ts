@@ -1,6 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
+import { sendUazapiText } from "@/lib/uazapi";
+import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
+import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
+
+// Roda o agente de atendimento por IA para uma mensagem recebida, se o tenant tiver habilitado.
+// Nunca deixa uma falha do agente derrubar o webhook — a mensagem do hóspede já foi salva antes
+// desta função ser chamada, então o pior caso é só não haver resposta automática.
+async function runGuestSupportAgent(tenantId: string, phone: string) {
+  try {
+    const setting = await prisma.aIAgentSetting.findUnique({ where: { tenantId } });
+    if (!setting?.enabled) return;
+    if (!(await hasAiQuotaAvailable(tenantId))) return;
+
+    // Se um humano respondeu recentemente nesta conversa, deixa o atendimento com ele — o agente
+    // não entra por cima de um atendente que já assumiu a conversa.
+    const recentHumanReply = await prisma.whatsappMessage.findFirst({
+      where: {
+        tenantId,
+        phone,
+        direction: "OUT",
+        sentBy: "HUMAN",
+        createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },
+      },
+    });
+    if (recentHumanReply) return;
+
+    const history = await prisma.whatsappMessage.findMany({
+      where: { tenantId, phone, type: "text" },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { direction: true, content: true },
+    });
+    const messages = history
+      .reverse()
+      .filter((m) => m.content)
+      .map((m) => ({ role: m.direction === "IN" ? ("user" as const) : ("assistant" as const), content: m.content! }));
+    if (messages.length === 0) return;
+
+    const agent = buildGuestSupportAgent(tenantId, setting.systemPromptExtra);
+    const result = await agent.generate({ messages });
+
+    await logAiUsage({
+      tenantId,
+      feature: "whatsapp_guest_support",
+      tokensInput: result.usage.inputTokens ?? 0,
+      tokensOutput: result.usage.outputTokens ?? 0,
+    });
+
+    if (result.text?.trim()) {
+      const sent = await sendUazapiText(phone, result.text.trim(), tenantId);
+      if (sent) {
+        await prisma.whatsappMessage.create({
+          data: { tenantId, phone, direction: "OUT", type: "text", content: result.text.trim(), sentBy: "AI" },
+        });
+      }
+    }
+  } catch (error) {
+    console.error("[runGuestSupportAgent] Erro:", error);
+  }
+}
 
 // POST /api/uazapi/webhook/[tenantId] — recebe eventos da uazapi (configurados em Configurações >
 // API Whatsapp > URL WebHook). Só processa mensagens recebidas do hóspede (fromMe=false); mensagens
@@ -92,6 +152,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
         read: false,
       },
     });
+
+    if (type === "text") {
+      await runGuestSupportAgent(tenantId, phone);
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

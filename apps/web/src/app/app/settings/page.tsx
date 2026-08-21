@@ -39,6 +39,7 @@ import {
   Unplug,
   Webhook,
   Volume2,
+  Bot,
 } from "lucide-react";
 
 export default function SubscriberSettingsPage() {
@@ -134,7 +135,25 @@ export default function SubscriberSettingsPage() {
   const [waPrevisaoTime, setWaPrevisaoTime] = useState("10:00");
   const [waCheckoutEnabled, setWaCheckoutEnabled] = useState(false);
   const [waCheckoutMessage, setWaCheckoutMessage] = useState("");
+  const [waPreCheckinEnabled, setWaPreCheckinEnabled] = useState(true);
+  const [waPreCheckinMessage, setWaPreCheckinMessage] = useState("");
+  const [waPreCheckinHoursBefore, setWaPreCheckinHoursBefore] = useState(3);
   const [waSaveError, setWaSaveError] = useState<string | null>(null);
+
+  const [snrhosEnvironment, setSnrhosEnvironment] = useState("HOMOLOGACAO");
+  const [snrhosApiUsername, setSnrhosApiUsername] = useState("");
+  const [snrhosApiPassword, setSnrhosApiPassword] = useState("");
+  const [snrhosApiPasswordConfigured, setSnrhosApiPasswordConfigured] = useState(false);
+  const [snrhosCpfSolicitante, setSnrhosCpfSolicitante] = useState("");
+  const [snrhosEnabled, setSnrhosEnabled] = useState(false);
+  const [snrhosSaveError, setSnrhosSaveError] = useState<string | null>(null);
+
+  const [aiAgentEnabled, setAiAgentEnabled] = useState(false);
+  const [aiAgentAutoConfirm, setAiAgentAutoConfirm] = useState(false);
+  const [aiAgentPromptExtra, setAiAgentPromptExtra] = useState("");
+  const [aiAgentMonitoringEnabled, setAiAgentMonitoringEnabled] = useState(false);
+  const [aiAgentAlertPhone, setAiAgentAlertPhone] = useState("");
+  const [aiAgentSaveError, setAiAgentSaveError] = useState<string | null>(null);
 
   // Conexão da instância WhatsApp (uazapi) — tela "Configuração do sistema > API Whatsapp" do
   // sistema legado. Cada assinante conecta uma única instância (servidor + admin token para criar,
@@ -370,10 +389,39 @@ export default function SubscriberSettingsPage() {
         setWaPrevisaoTime(s.checkoutPrevisionTime || "10:00");
         setWaCheckoutEnabled(!!s.checkoutEnabled);
         setWaCheckoutMessage(s.checkoutMessage || "");
+        setWaPreCheckinEnabled(s.preCheckinFnrhEnabled !== false);
+        setWaPreCheckinMessage(s.preCheckinFnrhMessage || "");
+        setWaPreCheckinHoursBefore(s.preCheckinFnrhHoursBefore ?? 3);
       })
       .catch(() => {});
 
-    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages]).finally(() =>
+    const loadSnrhosSettings = fetch("/api/tenant/snrhos-settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success || !data.settings) return;
+        const s = data.settings;
+        setSnrhosEnvironment(s.environment || "HOMOLOGACAO");
+        setSnrhosApiUsername(s.apiUsername || "");
+        setSnrhosApiPasswordConfigured(!!s.apiPasswordConfigured);
+        setSnrhosCpfSolicitante(s.cpfSolicitante || "");
+        setSnrhosEnabled(!!s.enabled);
+      })
+      .catch(() => {});
+
+    const loadAiAgentSettings = fetch("/api/tenant/ai-agent-settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success || !data.settings) return;
+        const s = data.settings;
+        setAiAgentEnabled(!!s.enabled);
+        setAiAgentAutoConfirm(!!s.autoConfirmReservations);
+        setAiAgentPromptExtra(s.systemPromptExtra || "");
+        setAiAgentMonitoringEnabled(!!s.monitoringEnabled);
+        setAiAgentAlertPhone(s.alertPhone || "");
+      })
+      .catch(() => {});
+
+    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages, loadSnrhosSettings, loadAiAgentSettings]).finally(() =>
       setIsLoadingSettings(false)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -422,6 +470,9 @@ export default function SubscriberSettingsPage() {
           checkoutPrevisionTime: waPrevisaoTime,
           checkoutEnabled: waCheckoutEnabled,
           checkoutMessage: waCheckoutMessage,
+          preCheckinFnrhEnabled: waPreCheckinEnabled,
+          preCheckinFnrhMessage: waPreCheckinMessage,
+          preCheckinFnrhHoursBefore: waPreCheckinHoursBefore,
         }),
       });
       const data = await res.json();
@@ -430,6 +481,51 @@ export default function SubscriberSettingsPage() {
       }
     } catch (err: any) {
       setWaSaveError(err.message || "Erro de rede ao salvar mensagens de WhatsApp.");
+    }
+
+    setSnrhosSaveError(null);
+    try {
+      const res = await fetch("/api/tenant/snrhos-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          environment: snrhosEnvironment,
+          apiUsername: snrhosApiUsername,
+          apiPassword: snrhosApiPassword || undefined,
+          cpfSolicitante: snrhosCpfSolicitante,
+          enabled: snrhosEnabled,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setSnrhosSaveError(data.error || "Erro ao salvar configurações do SNRHos.");
+      } else if (snrhosApiPassword) {
+        setSnrhosApiPasswordConfigured(true);
+        setSnrhosApiPassword("");
+      }
+    } catch (err: any) {
+      setSnrhosSaveError(err.message || "Erro de rede ao salvar configurações do SNRHos.");
+    }
+
+    setAiAgentSaveError(null);
+    try {
+      const res = await fetch("/api/tenant/ai-agent-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: aiAgentEnabled,
+          autoConfirmReservations: aiAgentAutoConfirm,
+          systemPromptExtra: aiAgentPromptExtra,
+          monitoringEnabled: aiAgentMonitoringEnabled,
+          alertPhone: aiAgentAlertPhone,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setAiAgentSaveError(data.error || "Erro ao salvar configurações do agente de IA.");
+      }
+    } catch (err: any) {
+      setAiAgentSaveError(err.message || "Erro de rede ao salvar configurações do agente de IA.");
     }
 
     setHotelName(inputName);
@@ -1404,6 +1500,52 @@ export default function SubscriberSettingsPage() {
             </div>
           </div>
 
+          {/* Mensagem de pré-check-in FNRH */}
+          <div className={`p-4 rounded-xl border flex flex-col md:flex-row gap-4 ${theme.isDark ? "bg-slate-900/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+            <div className="flex md:flex-col items-center md:items-start gap-2 md:w-40 shrink-0">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={waPreCheckinEnabled}
+                onClick={() => setWaPreCheckinEnabled(!waPreCheckinEnabled)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${waPreCheckinEnabled ? "bg-emerald-500" : "bg-slate-600"}`}
+              >
+                <span className={`inline-block h-[18px] w-[18px] transform rounded-full bg-white shadow transition-transform ${waPreCheckinEnabled ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
+              <div className="flex items-center gap-1.5 text-xs font-bold">
+                <FileText className="w-3.5 h-3.5 text-emerald-500" />
+                Pré-Check-in FNRH
+              </div>
+            </div>
+            <div className="flex-1 space-y-2">
+              <textarea
+                rows={3}
+                value={waPreCheckinMessage}
+                onChange={(e) => setWaPreCheckinMessage(e.target.value)}
+                disabled={!waPreCheckinEnabled}
+                placeholder="Olá {HOSPEDE}! Faltam poucas horas para sua chegada ao {HOTEL}. Preencha seus dados no link: {LINK}"
+                className={`w-full border rounded-xl p-3 text-xs focus:outline-none focus:border-emerald-500 disabled:opacity-50 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+              />
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold">Enviar quantas horas antes do check-in:</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={48}
+                  value={waPreCheckinHoursBefore}
+                  onChange={(e) => setWaPreCheckinHoursBefore(Math.max(1, Number(e.target.value) || 1))}
+                  disabled={!waPreCheckinEnabled}
+                  className={`w-20 border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500 disabled:opacity-50 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                />
+              </div>
+              <p className={`text-[10px] ${theme.textMuted}`}>
+                Enviada automaticamente com o link para o hóspede preencher a Ficha Nacional de Registro de Hóspedes
+                (FNRH) antes de chegar. Use {"{HOSPEDE}"}, {"{HOTEL}"} e {"{LINK}"} — são substituídos
+                automaticamente. Pode também ser disparada manualmente na Grade de Reservas.
+              </p>
+            </div>
+          </div>
+
           {/* Mensagem de previsão de checkout */}
           <div className={`p-4 rounded-xl border flex flex-col md:flex-row gap-4 ${theme.isDark ? "bg-slate-900/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
             <div className="flex md:flex-col items-center md:items-start gap-2 md:w-40 shrink-0">
@@ -1742,6 +1884,184 @@ export default function SubscriberSettingsPage() {
                 <Unplug className="w-3.5 h-3.5" /> {uazDisconnecting ? "Desconectando..." : "Desconectar instância"}
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 8: SNRHos (Transmissão eletrônica da FNRH ao Ministério do Turismo) */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-500">
+            <FileText className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">SNRHos (FNRH Digital — Ministério do Turismo)</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Credenciais para transmitir eletronicamente a Ficha Nacional de Registro de Hóspedes ao governo federal.
+            </p>
+          </div>
+        </div>
+
+        {snrhosSaveError && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-500 text-xs">{snrhosSaveError}</div>
+        )}
+
+        <div className={`p-4 rounded-xl border flex flex-col md:flex-row gap-4 ${theme.isDark ? "bg-slate-900/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+          <div className="flex md:flex-col items-center md:items-start gap-2 md:w-40 shrink-0">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={snrhosEnabled}
+              onClick={() => setSnrhosEnabled(!snrhosEnabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${snrhosEnabled ? "bg-emerald-500" : "bg-slate-600"}`}
+            >
+              <span className={`inline-block h-[18px] w-[18px] transform rounded-full bg-white shadow transition-transform ${snrhosEnabled ? "translate-x-6" : "translate-x-1"}`} />
+            </button>
+            <div className="flex items-center gap-1.5 text-xs font-bold">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+              Transmissão ativa
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold">Ambiente</label>
+                <select
+                  value={snrhosEnvironment}
+                  onChange={(e) => setSnrhosEnvironment(e.target.value)}
+                  className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-emerald-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                >
+                  <option value="HOMOLOGACAO">Homologação (testes)</option>
+                  <option value="PRODUCAO">Produção</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold">CPF do responsável (cpf_solicitante)</label>
+                <input
+                  value={snrhosCpfSolicitante}
+                  onChange={(e) => setSnrhosCpfSolicitante(e.target.value)}
+                  placeholder="000.000.000-00"
+                  className={`w-full border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold">Usuário da API (Chave das API's)</label>
+                <input
+                  value={snrhosApiUsername}
+                  onChange={(e) => setSnrhosApiUsername(e.target.value)}
+                  className={`w-full border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold">
+                  Chave de acesso {snrhosApiPasswordConfigured && <span className="text-emerald-500">(já configurada)</span>}
+                </label>
+                <input
+                  type="password"
+                  value={snrhosApiPassword}
+                  onChange={(e) => setSnrhosApiPassword(e.target.value)}
+                  placeholder={snrhosApiPasswordConfigured ? "•••••••• (deixe em branco para manter)" : "Colar a chave gerada no portal FNRH"}
+                  className={`w-full border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                />
+              </div>
+            </div>
+            <p className={`text-[10px] ${theme.textMuted}`}>
+              Gere o Usuário e a Chave em{" "}
+              <span className="font-mono">fnrh.turismo.serpro.gov.br/FNRH_SRH</span> → menu → "Chave das API's" (login
+              gov.br com o CPF vinculado ao Cadastur do hotel). Enquanto "Transmissão ativa" estiver desligado, nenhum
+              dado é enviado ao governo — o pré-check-in continua funcionando normalmente.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 9: Agente de IA (atendimento via WhatsApp + monitoramento) */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-violet-500/15 border border-violet-500/30 flex items-center justify-center text-violet-500">
+            <Bot className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">Agente de IA</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Atendimento automático de dúvidas dos hóspedes pelo WhatsApp e alertas de monitoramento operacional.
+            </p>
+          </div>
+        </div>
+
+        {aiAgentSaveError && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-500 text-xs">{aiAgentSaveError}</div>
+        )}
+
+        <div className={`p-4 rounded-xl border flex flex-col md:flex-row gap-4 ${theme.isDark ? "bg-slate-900/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+          <div className="flex md:flex-col items-center md:items-start gap-2 md:w-40 shrink-0">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={aiAgentEnabled}
+              onClick={() => setAiAgentEnabled(!aiAgentEnabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${aiAgentEnabled ? "bg-violet-500" : "bg-slate-600"}`}
+            >
+              <span className={`inline-block h-[18px] w-[18px] transform rounded-full bg-white shadow transition-transform ${aiAgentEnabled ? "translate-x-6" : "translate-x-1"}`} />
+            </button>
+            <div className="flex items-center gap-1.5 text-xs font-bold">
+              <Sparkles className="w-3.5 h-3.5 text-violet-500" />
+              Atendimento por IA
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-3">
+            <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiAgentAutoConfirm}
+                onChange={(e) => setAiAgentAutoConfirm(e.target.checked)}
+                className="w-4 h-4 accent-violet-500"
+              />
+              Reserva feita pelo agente entra já confirmada (sem isso, entra como pré-reserva pendente de confirmação da recepção)
+            </label>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold">Instruções adicionais / tom de voz (opcional)</label>
+              <textarea
+                value={aiAgentPromptExtra}
+                onChange={(e) => setAiAgentPromptExtra(e.target.value)}
+                rows={3}
+                placeholder="Ex: Trate os hóspedes de forma descontraída. Sempre mencione o café da manhã das 7h às 10h."
+                className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className={`p-4 rounded-xl border flex flex-col md:flex-row gap-4 ${theme.isDark ? "bg-slate-900/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+          <div className="flex md:flex-col items-center md:items-start gap-2 md:w-40 shrink-0">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={aiAgentMonitoringEnabled}
+              onClick={() => setAiAgentMonitoringEnabled(!aiAgentMonitoringEnabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${aiAgentMonitoringEnabled ? "bg-violet-500" : "bg-slate-600"}`}
+            >
+              <span className={`inline-block h-[18px] w-[18px] transform rounded-full bg-white shadow transition-transform ${aiAgentMonitoringEnabled ? "translate-x-6" : "translate-x-1"}`} />
+            </button>
+            <div className="flex items-center gap-1.5 text-xs font-bold">
+              <BellRing className="w-3.5 h-3.5 text-violet-500" />
+              Monitoramento
+            </div>
+          </div>
+          <div className="flex-1 space-y-1">
+            <label className="text-xs font-semibold">Telefone WhatsApp para alertas</label>
+            <input
+              value={aiAgentAlertPhone}
+              onChange={(e) => setAiAgentAlertPhone(e.target.value)}
+              placeholder="(00) 00000-0000"
+              className={`w-full border rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+            />
+            <p className={`text-[10px] ${theme.textMuted}`}>
+              Quando algo precisar de atenção (ex: envio da FNRH travado), o agente manda um resumo para este número.
+            </p>
           </div>
         </div>
       </div>
