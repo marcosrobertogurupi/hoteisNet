@@ -59,19 +59,23 @@ export default function HousekeepingAppPage() {
     }
   }, []);
 
-  const loadRooms = useCallback(async () => {
-    setLoadingRooms(true);
+  // `silent` evita o spinner do botão "Atualizar" nas atualizações automáticas em segundo plano —
+  // só o clique manual mostra o indicador de carregando.
+  const loadRooms = useCallback(async (silent = false) => {
+    if (!silent) setLoadingRooms(true);
     try {
       const res = await fetch("/api/housekeeping/rooms");
       const data = await res.json();
       if (data.success) {
         setAssignmentMode(data.assignmentMode || "RECEPTION");
-        setFloors(data.floors || []);
+        // Só troca a referência do array se o conteúdo realmente mudou, para não re-renderizar
+        // (e não "piscar" a tela) a cada atualização automática sem novidade real.
+        setFloors((prev) => (JSON.stringify(prev) === JSON.stringify(data.floors || []) ? prev : data.floors || []));
       }
     } catch {
-      // silencioso — botão de atualizar permite tentar de novo
+      // silencioso — próxima atualização automática tenta de novo
     } finally {
-      setLoadingRooms(false);
+      if (!silent) setLoadingRooms(false);
     }
   }, []);
 
@@ -80,7 +84,12 @@ export default function HousekeepingAppPage() {
   }, [loadMe]);
 
   useEffect(() => {
-    if (housekeeper) loadRooms();
+    if (!housekeeper) return;
+    loadRooms();
+    // Atualização automática e transparente pelo banco, a cada 4s, enquanto a governanta está
+    // olhando a lista de quartos — sem recarregar a tela nem mostrar indicador de carregamento.
+    const interval = setInterval(() => loadRooms(true), 4000);
+    return () => clearInterval(interval);
   }, [housekeeper, loadRooms]);
 
   const handleLogin = async (e: FormEvent) => {
@@ -235,7 +244,7 @@ export default function HousekeepingAppPage() {
             {totalRooms} quarto{totalRooms !== 1 ? "s" : ""} pendente{totalRooms !== 1 ? "s" : ""}
           </span>
           <button
-            onClick={loadRooms}
+            onClick={() => loadRooms()}
             disabled={loadingRooms}
             className="flex items-center gap-1.5 text-xs font-semibold text-rose-400 hover:text-rose-300 transition"
           >

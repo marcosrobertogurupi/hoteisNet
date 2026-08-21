@@ -115,12 +115,39 @@ incluindo poder bloquear o uso de IA de um assinante específico independente do
   `CadastroApartamentoModal.tsx`). Testado o caminho de erro (categoria sem fotos cadastradas);
   envio real ainda não testado por não haver fotos nos quartos demo atuais.
 
+### Fase I — Interpretação de mídia (áudio/foto/PDF) ✅ implementada, teste real pendente
+
+O agente hoje só processava mensagens de texto. Agora o webhook também dispara o agente para
+mensagens de mídia (`IN`, direção do hóspede): baixa/descriptografa o anexo via
+`downloadUazapiMedia` (mesma chamada `POST {serverUrl}/message/download` já usada pela tela de
+conversa) e monta um content multimodal (`{ type: "file", mediaType, data: urlPública }`) para o
+Gemini interpretar de verdade — imagem, áudio e PDF são suportados nativamente pelo modelo; outros
+tipos (vídeo, sticker) viram um placeholder de texto para o agente não travar. Só a mensagem mais
+recente do turno é baixada; mensagens antigas do histórico reaproveitam o `mediaUrl` já salvo, sem
+re-baixar a cada novo turno. Mídia enviada pelo próprio hotel (`OUT`, ex: PDF de extrato) fica de
+fora do histórico do agente.
+
+Verificado por leitura do código-fonte do `@ai-sdk/google` (`convertToGoogleMessages`): quando o
+`data` de um content part `file` é uma URL, o SDK envia `fileData.fileUri` direto pro Gemini, que
+busca o arquivo — mecanismo documentado e suportado para imagem/áudio/PDF. **Não foi possível
+confirmar com uma chamada real** porque a cota diária gratuita da chave do AI Studio esgotou
+durante os testes desta sessão (erro 429 `RESOURCE_EXHAUSTED`) — decisão do usuário foi deixar
+como está e validar depois, com a cota resetada ou com uma mensagem real de WhatsApp.
+
 ## O que falta
 
-1. Os dois itens pendentes da Fase C (envio de FNRH sob demanda, atalho de salvar conhecimento
+1. **Testar de verdade o suporte a mídia** (Fase I acima) assim que a cota da chave Gemini
+   resetar, ou com uma mensagem real de WhatsApp.
+2. Os dois itens pendentes da Fase C (envio de FNRH sob demanda, atalho de salvar conhecimento
    direto da conversa).
-2. Autonomia do Agente Operacional (`AUTONOMOUS_LIMITED`) — só depois de definir a lista exata de
+3. Autonomia do Agente Operacional (`AUTONOMOUS_LIMITED`) — só depois de definir a lista exata de
    ações permitidas com o usuário.
+
+## Lição operacional desta sessão
+
+Nunca escrever um loop de retry em background sem limite máximo de tentativas/tempo total —
+um erro 429 pode ser cota diária (não reseta em minutos), não só limite por minuto. Preferir 2-3
+tentativas com backoff curto e reportar a falha, em vez de ficar tentando indefinidamente.
 
 ## Riscos e decisões abertas
 

@@ -20,6 +20,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ roo
       return NextResponse.json({ success: false, error: "Quarto não encontrado." }, { status: 404 });
     }
 
+    // Uma governanta só pode ter uma limpeza IN_PROGRESS por vez — impede iniciar um segundo
+    // quarto sem antes concluir (ou ter cancelada) o que já está em andamento.
+    const ongoingElsewhere = await prisma.housekeepingTask.findFirst({
+      where: { tenantId: session.tenantId, housekeeperId: session.housekeeperId, status: "IN_PROGRESS", roomId: { not: roomId } },
+      include: { room: { select: { number: true } } },
+    });
+    if (ongoingElsewhere) {
+      return NextResponse.json(
+        { success: false, error: `Você já está limpando o quarto ${ongoingElsewhere.room.number}. Conclua antes de iniciar outro.` },
+        { status: 409 }
+      );
+    }
+
     const existing = await prisma.housekeepingTask.findFirst({
       where: { tenantId: session.tenantId, roomId, status: { in: ["PENDING", "IN_PROGRESS"] } },
     });

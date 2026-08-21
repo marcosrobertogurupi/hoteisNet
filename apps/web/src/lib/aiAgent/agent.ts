@@ -22,6 +22,7 @@ Regras:
 - Depois de usar create_reservation, informe o resultado exatamente como a tool devolveu — se saiu confirmada ou como pré-reserva aguardando a recepção, o número da reserva, o quarto e o valor total. Nunca prometa uma confirmação que a tool não deu.
 - Para dúvidas sobre regras da casa, políticas ou perguntas recorrentes que não são cobertas pelas outras tools, use search_knowledge_base antes de dizer que não sabe.
 - Se não conseguir responder ou resolver algo mesmo depois de consultar as tools disponíveis, ou o hóspede pedir para falar com uma pessoa, use escalate_to_human e avise que a recepção vai continuar o atendimento — nunca invente uma resposta.
+- Você consegue ver e ouvir fotos, áudios e PDFs que o hóspede mandar diretamente na conversa (não precisa de tool para isso). Se ele mandar um anexo que você não conseguiu abrir, diga isso com naturalidade e peça para reenviar ou descrever o que precisa.
 - Nunca mencione que você é uma IA, um modelo de linguagem, tokens, cota ou qualquer detalhe técnico do sistema.`;
 
 // Textos fixos dos presets de tom — o assinante só escolhe entre eles, nunca edita o texto cru

@@ -18,6 +18,7 @@ import {
   User,
   Power,
   Send,
+  BarChart3,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
@@ -282,12 +283,22 @@ export default function GovernantasPage() {
             </div>
           </div>
 
-          <button
-            onClick={handleOpenAdd}
-            className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-rose-600/20 transition"
-          >
-            <Plus className="w-4 h-4" /> Nova Governanta
-          </button>
+          <div className="flex items-center gap-2.5">
+            <Link
+              href="/app/cadastros/governantas/relatorio"
+              className={`px-5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 border transition ${
+                isDark ? "bg-slate-800 text-slate-200 hover:bg-slate-700 border-slate-700" : "bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300"
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" /> Relatório de Limpezas
+            </Link>
+            <button
+              onClick={handleOpenAdd}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-rose-600/20 transition"
+            >
+              <Plus className="w-4 h-4" /> Nova Governanta
+            </button>
+          </div>
         </div>
 
         {linkFeedback && (

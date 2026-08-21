@@ -1,9 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
-import { sendUazapiText } from "@/lib/uazapi";
+import { sendUazapiText, downloadUazapiMedia } from "@/lib/uazapi";
 import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
 import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
+
+type AgentMessageContent = string | Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: string }>;
+
+// Só esses tipos de mídia o agente consegue de fato interpretar (Gemini aceita imagem, áudio e PDF
+// como input multimodal). Vídeo/sticker/outros viram um placeholder de texto — o agente ainda
+// consegue reagir ("recebi seu anexo, mas não consigo abrir esse tipo de arquivo") sem travar.
+function isInterpretableMimetype(mimetype: string): boolean {
+  return mimetype.startsWith("image/") || mimetype.startsWith("audio/") || mimetype === "application/pdf";
+}
+
+// Monta o conteúdo de uma mensagem IN de mídia para o agente: baixa/descriptografa o anexo (só
+// para a mensagem mais recente do turno — mensagens antigas do histórico reaproveitam o
+// mediaUrl/mimeType já baixado antes, sem baixar de novo a cada novo turno) e devolve o content
+// multimodal aceito pelo Vercel AI SDK, ou null se não for possível interpretar.
+async function buildMediaContent(
+  msg: { id: string; content: string | null; mediaUrl: string | null; mimeType: string | null; externalId: string | null },
+  tenantId: string,
+  shouldDownload: boolean
+): Promise<AgentMessageContent | null> {
+  let mediaUrl = msg.mediaUrl;
+  let mimetype = msg.mimeType;
+
+  if (!mediaUrl && shouldDownload && msg.externalId) {
+    const downloaded = await downloadUazapiMedia(msg.externalId, tenantId);
+    if (downloaded) {
+      mediaUrl = downloaded.mediaUrl;
+      mimetype = downloaded.mimetype;
+      await prisma.whatsappMessage.update({ where: { id: msg.id }, data: { mediaUrl, mimeType: mimetype } });
+    }
+  }
+
+  if (!mediaUrl || !mimetype || !isInterpretableMimetype(mimetype)) return null;
+
+  const parts: AgentMessageContent = [{ type: "file", mediaType: mimetype, data: mediaUrl }];
+  if (msg.content) parts.push({ type: "text", text: msg.content });
+  return parts;
+}
 
 // Roda o agente de atendimento por IA para uma mensagem recebida, se o tenant tiver habilitado.
 // Nunca deixa uma falha do agente derrubar o webhook — a mensagem do hóspede já foi salva antes
@@ -27,16 +64,32 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
     });
     if (recentHumanReply) return;
 
+    // Inclui mídia recebida do hóspede (IN) além de texto — mídia enviada pelo próprio hotel (OUT,
+    // ex: PDF de extrato) fica de fora do histórico, não é conversacional o suficiente para valer
+    // reprocessar. O agente interpreta foto/áudio/PDF de verdade (ver buildMediaContent); outros
+    // tipos de anexo viram um placeholder de texto para o agente não travar nem inventar conteúdo.
     const history = await prisma.whatsappMessage.findMany({
-      where: { tenantId, phone, type: "text" },
+      where: { tenantId, phone, OR: [{ type: "text" }, { direction: "IN", type: "media" }] },
       orderBy: { createdAt: "desc" },
       take: 10,
-      select: { direction: true, content: true },
+      select: { id: true, direction: true, type: true, content: true, mediaUrl: true, mimeType: true, externalId: true },
     });
-    const messages = history
-      .reverse()
-      .filter((m) => m.content)
-      .map((m) => ({ role: m.direction === "IN" ? ("user" as const) : ("assistant" as const), content: m.content! }));
+    const ordered = history.reverse();
+    const latestId = ordered.length > 0 ? ordered[ordered.length - 1].id : null;
+
+    const messages: Array<{ role: "user" | "assistant"; content: AgentMessageContent }> = [];
+    for (const m of ordered) {
+      const role = m.direction === "IN" ? ("user" as const) : ("assistant" as const);
+      if (m.type === "text") {
+        if (m.content) messages.push({ role, content: m.content });
+        continue;
+      }
+      const mediaContent = await buildMediaContent(m, tenantId, m.id === latestId);
+      messages.push({
+        role,
+        content: mediaContent || "[O hóspede enviou um anexo que não foi possível interpretar automaticamente]",
+      });
+    }
     if (messages.length === 0) return;
 
     let escalationReason: string | null = null;
@@ -169,9 +222,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
       },
     });
 
-    if (type === "text") {
-      await runGuestSupportAgent(tenantId, phone);
-    }
+    await runGuestSupportAgent(tenantId, phone);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

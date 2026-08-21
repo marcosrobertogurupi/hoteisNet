@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { BedDouble, Sparkles, CheckCircle2, Power, ShieldAlert, Eye, EyeOff, UserCheck, Timer, X } from "lucide-react";
+import { Sparkles, Timer, X, User, MoveRight } from "lucide-react";
+import { useTheme } from "@/context/ThemeContext";
 import LoadingOverlay from "@/components/LoadingOverlay";
 
 interface Housekeeper {
@@ -18,19 +19,44 @@ interface HousekeepingTask {
   housekeeper: Housekeeper | null;
 }
 
+interface RoomItem {
+  id: string;
+  number: string;
+  category: string;
+  floor: string;
+  status: string;
+  active: boolean;
+}
+
+// Ordena números de quarto/andar numericamente quando possível ("2" antes de "10").
+function naturalCompare(a: string, b: string): number {
+  const numA = Number(a);
+  const numB = Number(b);
+  if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+  return a.localeCompare(b, "pt-BR", { numeric: true });
+}
+
 export default function TenantGovernancePage() {
-  const [rooms, setRooms] = useState<any[]>([]);
-  const [notification, setNotification] = useState<string | null>(null);
+  const { theme } = useTheme();
+  const isDark = theme.isDark;
+
+  const [rooms, setRooms] = useState<RoomItem[]>([]);
+  const [notification, setNotification] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [isLoadingRooms, setIsLoadingRooms] = useState(true);
 
-  // Governança de quartos — modo de atribuição (RECEPTION/QUEUE), lista de governantas ativas e
-  // tarefas de limpeza em aberto (PENDING/IN_PROGRESS), usadas para montar a tela de atribuição
-  // manual quando o assinante está no modo RECEPTION.
   const [assignmentMode, setAssignmentMode] = useState<"RECEPTION" | "QUEUE">("RECEPTION");
   const [housekeepers, setHousekeepers] = useState<Housekeeper[]>([]);
   const [tasksByRoom, setTasksByRoom] = useState<Record<string, HousekeepingTask>>({});
-  const [selectedHousekeeper, setSelectedHousekeeper] = useState<Record<string, string>>({});
   const [assigningRoomId, setAssigningRoomId] = useState<string | null>(null);
+
+  // Id do quarto/governanta que está recebendo o hover do arrasto no momento — usado só para
+  // destacar visualmente o alvo válido durante o drag, não afeta os dados.
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  const notify = (type: "success" | "error", text: string) => {
+    setNotification({ type, text });
+    setTimeout(() => setNotification((prev) => (prev?.text === text ? null : prev)), 4000);
+  };
 
   const loadHousekeepingData = useCallback(() => {
     Promise.all([
@@ -54,22 +80,21 @@ export default function TenantGovernancePage() {
       .catch((e) => console.error("Erro ao carregar dados de governança de limpeza:", e));
   }, []);
 
-  // Sync rooms from database API (o campo "active" já vem persistido no banco)
   useEffect(() => {
     fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`)
       .then((r) => r.json())
       .then((data) => {
         if (data.success && Array.isArray(data.rooms)) {
-          const loaded = data.rooms.map((r: any) => ({
-            id: r.id,
-            number: String(r.number),
-            category: r.category || r.room_categories?.name || "Standard",
-            status: r.status || "VACANT_CLEAN",
-            housekeeper: r.status === "VACANT_CLEAN" ? "Higienizado" : "Governança",
-            lastCleaned: r.status === "VACANT_CLEAN" ? "Higienizado & Vistoriado" : "Pendente higienização",
-            active: r.active !== false,
-          }));
-          setRooms(loaded);
+          setRooms(
+            data.rooms.map((r: any) => ({
+              id: r.id,
+              number: String(r.number),
+              category: r.category || r.room_categories?.name || "Standard",
+              floor: r.floor || "Sem andar",
+              status: r.status || "VACANT_CLEAN",
+              active: r.active !== false,
+            }))
+          );
         }
       })
       .catch((e) => console.error("Erro ao carregar quartos na Governança:", e))
@@ -78,9 +103,12 @@ export default function TenantGovernancePage() {
     loadHousekeepingData();
   }, [loadHousekeepingData]);
 
-  const handleAssignRoom = async (roomId: string, type: "CHECKOUT" | "OCCUPIED") => {
-    const housekeeperId = selectedHousekeeper[roomId];
-    if (!housekeeperId) return;
+  const handleAssign = async (roomId: string, housekeeperId: string) => {
+    const room = rooms.find((r) => r.id === roomId);
+    const housekeeper = housekeepers.find((h) => h.id === housekeeperId);
+    if (!room || !housekeeper) return;
+
+    const type: "CHECKOUT" | "OCCUPIED" = room.status === "OCCUPIED" ? "OCCUPIED" : "CHECKOUT";
 
     setAssigningRoomId(roomId);
     try {
@@ -91,18 +119,16 @@ export default function TenantGovernancePage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setNotification(data.error || "Erro ao atribuir quarto.");
-        setTimeout(() => setNotification(null), 4000);
+        notify("error", data.error || "Erro ao atribuir quarto.");
         return;
       }
       setTasksByRoom((prev) => ({ ...prev, [roomId]: data.task }));
-      setNotification(`Quarto atribuído a ${data.task.housekeeper?.name} com sucesso!`);
-      setTimeout(() => setNotification(null), 4000);
+      notify("success", `Quarto ${room.number} atribuído a ${housekeeper.name}!`);
     } catch (err: any) {
-      setNotification(err.message || "Erro de rede ao atribuir quarto.");
-      setTimeout(() => setNotification(null), 4000);
+      notify("error", err.message || "Erro de rede ao atribuir quarto.");
     } finally {
       setAssigningRoomId(null);
+      setDragOverId(null);
     }
   };
 
@@ -114,8 +140,7 @@ export default function TenantGovernancePage() {
       const res = await fetch(`/api/tenant/housekeeping-tasks/${task.id}`, { method: "DELETE" });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        setNotification(data.error || "Erro ao cancelar atribuição.");
-        setTimeout(() => setNotification(null), 4000);
+        notify("error", data.error || "Erro ao cancelar atribuição.");
         return;
       }
       setTasksByRoom((prev) => {
@@ -124,248 +149,224 @@ export default function TenantGovernancePage() {
         return next;
       });
     } catch (err: any) {
-      setNotification(err.message || "Erro de rede ao cancelar atribuição.");
-      setTimeout(() => setNotification(null), 4000);
+      notify("error", err.message || "Erro de rede ao cancelar atribuição.");
     }
   };
 
-  const handleUpdateStatus = (roomId: string, newStatus: string, statusLabel: string) => {
-    setRooms((prev) =>
-      prev.map((r) => (r.id === roomId ? { ...r, status: newStatus, lastCleaned: `Atualizado às ${new Date().toLocaleTimeString().slice(0, 5)}` } : r))
-    );
+  // Só entram na tela quartos que realmente precisam de alguma ação de limpeza — livres/limpos e
+  // em manutenção não aparecem, conforme pedido.
+  const actionableRooms = rooms
+    .filter((r) => r.active && (r.status === "VACANT_DIRTY" || r.status === "OCCUPIED"))
+    .sort((a, b) => naturalCompare(a.floor, b.floor) || naturalCompare(a.number, b.number));
 
-    setNotification(`Status do Quarto ${roomId} alterado com sucesso para "${statusLabel}"! Recepção notificada em tempo real.`);
-    setTimeout(() => {
-      setNotification(null);
-    }, 4000);
+  const canAssign = (room: RoomItem) => {
+    const task = tasksByRoom[room.id];
+    if (task) return false; // já tem tarefa (pendente ou em andamento) — não é alvo de novo drop
+    if (room.status === "OCCUPIED") return true; // arrumação é sempre manual
+    return assignmentMode === "RECEPTION"; // limpeza pós check-out só é manual nesse modo
   };
 
-  const handleToggleRoomActive = (roomId: string) => {
+  const handleDropOnRoom = (e: React.DragEvent, room: RoomItem) => {
+    e.preventDefault();
+    setDragOverId(null);
+    if (!canAssign(room)) return;
+    const housekeeperId = e.dataTransfer.getData("housekeeperId");
+    if (housekeeperId) handleAssign(room.id, housekeeperId);
+  };
+
+  const handleDropOnHousekeeper = (e: React.DragEvent, housekeeperId: string) => {
+    e.preventDefault();
+    setDragOverId(null);
+    const roomId = e.dataTransfer.getData("roomId");
+    if (!roomId) return;
     const room = rooms.find((r) => r.id === roomId);
-    if (!room) return;
-    const nextActive = !room.active;
-
-    setRooms((prev) => prev.map((r) => (r.id === roomId ? { ...r, active: nextActive } : r)));
-    setNotification(`Quarto ${room.number} ${nextActive ? "REATIVADO" : "DESATIVADO"} com sucesso! ${nextActive ? "Agora ele aparece no Mapa de Quartos." : "Ocultado da relação principal de quartos."}`);
-    setTimeout(() => setNotification(null), 4000);
-
-    // Persistir no banco de dados
-    fetch(`/api/reservations/rooms`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ roomId, active: nextActive }),
-    }).catch((e) => console.error("Erro ao persistir status ativo do quarto:", e));
+    if (room && canAssign(room)) handleAssign(roomId, housekeeperId);
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <LoadingOverlay show={isLoadingRooms} message="Buscando quartos..." submessage="Estamos carregando os dados mais recentes de governança." />
 
-      {/* Banner */}
-      <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4 shadow-lg">
+      <div className={`flex flex-wrap items-center justify-between gap-3 p-5 rounded-2xl border ${theme.bgCard}`}>
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <h2 className={`text-lg font-bold flex items-center gap-2 ${theme.textMain}`}>
             <Sparkles className="w-5 h-5 text-[#F59E0B]" />
-            Cadastro de Acomodações & Governança
+            Atribuição de Limpeza
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Gerencie o estado das acomodações (Vistoria, Higienização) e ative ou desative unidades para ocultá-las da recepção.
+          <p className={`text-xs mt-1 flex items-center gap-1.5 ${theme.textMuted}`}>
+            Arraste um quarto até uma governanta <MoveRight className="w-3 h-3" /> ou uma governanta até um quarto para atribuir.
           </p>
         </div>
-
-        <div className="flex items-center gap-3">
-          <span className="px-3 py-1.5 rounded-lg bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-medium text-xs flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4" /> Realtime Sync com Mapa de Quartos
-          </span>
-        </div>
+        <span className={`text-xs font-mono px-3 py-1.5 rounded-lg border ${
+          isDark ? "bg-slate-800 text-slate-300 border-slate-700" : "bg-slate-100 text-slate-700 border-slate-200"
+        }`}>
+          {actionableRooms.length} quarto{actionableRooms.length !== 1 ? "s" : ""} para tratar
+        </span>
       </div>
 
-      {/* Realtime Notification */}
       {notification && (
-        <div className="p-4 rounded-xl bg-[#10B981]/15 border border-[#10B981]/40 text-[#10B981] text-xs font-semibold flex items-center gap-2 animate-bounce">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{notification}</span>
+        <div className={`p-3.5 rounded-xl border text-xs font-semibold ${
+          notification.type === "success"
+            ? "bg-[#10B981]/15 border-[#10B981]/40 text-[#10B981]"
+            : "bg-red-500/15 border-red-500/40 text-red-400"
+        }`}>
+          {notification.text}
         </div>
       )}
 
-      {/* Governance Cards List */}
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {rooms.map((room) => {
-          let borderStyle = "border-slate-800 bg-[#0F172A]";
-          let badgeText = "Desconhecido";
-          let badgeColor = "bg-slate-800 text-slate-400";
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-5 items-start">
+        {/* Quartos */}
+        <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+          {actionableRooms.map((room) => {
+            const task = tasksByRoom[room.id];
+            const isOccupiedType = room.status === "OCCUPIED";
+            const isDropTarget = canAssign(room);
+            const isDragOver = dragOverId === room.id;
 
-          if (!room.active) {
-            borderStyle = "border-red-900/40 bg-red-950/10 opacity-75";
-            badgeText = "DESATIVADO";
-            badgeColor = "bg-red-500/20 text-red-400 border-red-500/30";
-          } else if (room.status === "VACANT_CLEAN") {
-            borderStyle = "border-[#10B981]/40 bg-[#10B981]/5";
-            badgeText = "Livre / Higienizado";
-            badgeColor = "bg-[#10B981]/15 text-[#10B981] border-[#10B981]/30";
-          } else if (room.status === "OCCUPIED") {
-            borderStyle = "border-[#0284C7]/40 bg-[#0284C7]/5";
-            badgeText = "Ocupado";
-            badgeColor = "bg-[#0284C7]/15 text-[#38BDF8] border-[#0284C7]/30";
-          } else if (room.status === "OCCUPIED_CLEANING") {
-            borderStyle = "border-[#F59E0B]/50 bg-[#F59E0B]/10";
-            badgeText = "Limpeza c/ Hóspede";
-            badgeColor = "bg-[#F59E0B]/20 text-[#F59E0B] border-[#F59E0B]/40";
-          } else if (room.status === "VACANT_DIRTY") {
-            borderStyle = "border-[#EAB308]/50 bg-[#EAB308]/10";
-            badgeText = "Pendente Limpeza";
-            badgeColor = "bg-[#EAB308]/20 text-[#EAB308] border-[#EAB308]/40";
-          } else if (room.status === "MAINTENANCE") {
-            borderStyle = "border-slate-700 bg-slate-900/90";
-            badgeText = "Manutenção";
-            badgeColor = "bg-slate-800 text-slate-400 border-slate-700";
-          }
-
-          return (
-            <div key={room.id} className={`p-5 rounded-2xl border ${borderStyle} space-y-4 shadow-sm`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#0F172A] border border-slate-700 font-mono font-bold text-white flex items-center justify-center text-base">
-                    {room.number}
+            return (
+              <div
+                key={room.id}
+                draggable={isDropTarget}
+                onDragStart={(e) => {
+                  if (!isDropTarget) return;
+                  e.dataTransfer.setData("roomId", room.id);
+                }}
+                onDragOver={(e) => {
+                  if (!isDropTarget) return;
+                  e.preventDefault();
+                  setDragOverId(room.id);
+                }}
+                onDragLeave={() => setDragOverId((prev) => (prev === room.id ? null : prev))}
+                onDrop={(e) => handleDropOnRoom(e, room)}
+                className={`p-4 rounded-2xl border transition-all space-y-3 ${
+                  isDragOver
+                    ? "border-emerald-400 bg-emerald-500/10 scale-[1.02]"
+                    : task?.status === "IN_PROGRESS"
+                    ? isOccupiedType
+                      ? "border-violet-500/40 bg-violet-500/5"
+                      : "border-[#F59E0B]/40 bg-[#F59E0B]/5"
+                    : isDark
+                    ? "border-slate-800 bg-slate-900/60"
+                    : "border-slate-200 bg-white shadow-sm"
+                } ${isDropTarget ? "cursor-grab active:cursor-grabbing" : ""}`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-10 h-10 rounded-xl border font-mono font-bold flex items-center justify-center text-sm shrink-0 ${
+                      isDark ? "bg-slate-950 border-slate-700 text-white" : "bg-slate-100 border-slate-300 text-slate-900"
+                    }`}>
+                      {room.number}
+                    </div>
+                    <div>
+                      <h4 className={`text-xs font-semibold leading-tight ${theme.textMain}`}>{room.category}</h4>
+                      <span className={`text-[10px] ${theme.textMuted}`}>{room.floor}</span>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="text-sm font-semibold text-white">{room.category}</h4>
-                    <span className="text-[11px] text-slate-400 block">{room.lastCleaned}</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${
+                    isOccupiedType
+                      ? "bg-violet-500/15 text-violet-400 border-violet-500/30"
+                      : "bg-[#EAB308]/15 text-[#EAB308] border-[#EAB308]/30"
+                  }`}>
+                    {isOccupiedType ? "Ocupado" : "Pós check-out"}
+                  </span>
+                </div>
+
+                {task?.status === "IN_PROGRESS" ? (
+                  <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold animate-pulse ${
+                    isOccupiedType ? "bg-violet-500/15 text-violet-400" : "bg-[#F59E0B]/15 text-[#F59E0B]"
+                  }`}>
+                    <Timer className="w-3.5 h-3.5 shrink-0" />
+                    Em limpeza — {task.housekeeper?.name}
                   </div>
-                </div>
-
-                <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${badgeColor}`}>
-                  {badgeText}
-                </span>
+                ) : task?.status === "PENDING" ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`flex items-center gap-1.5 text-[11px] ${theme.textMuted}`}>
+                      {task.housekeeper?.photoUrl ? (
+                        <img src={task.housekeeper.photoUrl} alt="" className="w-5 h-5 rounded-full object-cover" />
+                      ) : (
+                        <div className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[9px] font-bold">
+                          {task.housekeeper?.name?.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <strong className={`font-semibold ${theme.textMain}`}>{task.housekeeper?.name}</strong>
+                    </span>
+                    <button
+                      onClick={() => handleCancelAssignment(room.id)}
+                      title="Cancelar atribuição"
+                      className={`p-1 rounded-lg transition shrink-0 ${
+                        isDark ? "bg-slate-800 text-red-400 hover:bg-red-600 hover:text-white" : "bg-slate-100 text-red-600 hover:bg-red-600 hover:text-white"
+                      }`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : isDropTarget ? (
+                  <div className={`text-[11px] text-center py-1.5 rounded-lg border border-dashed transition ${
+                    isDragOver ? "border-emerald-400 text-emerald-400" : isDark ? "border-slate-700 text-slate-500" : "border-slate-300 text-slate-500"
+                  }`}>
+                    Arraste uma governanta aqui
+                  </div>
+                ) : (
+                  <div className={`text-[11px] text-center py-1.5 ${theme.textMuted}`}>
+                    Aguardando fila automática
+                  </div>
+                )}
               </div>
+            );
+          })}
 
-              {/* Sinal visual de limpeza em andamento — muda de cor/texto conforme o tipo */}
-              {tasksByRoom[room.id]?.status === "IN_PROGRESS" && (
-                <div className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold animate-pulse ${
-                  tasksByRoom[room.id]?.type === "OCCUPIED"
-                    ? "bg-violet-500/15 border border-violet-500/40 text-violet-400"
-                    : "bg-[#F59E0B]/15 border border-[#F59E0B]/40 text-[#F59E0B]"
-                }`}>
-                  <Timer className="w-4 h-4" />
-                  {tasksByRoom[room.id]?.type === "OCCUPIED" ? "Arrumação c/ hóspede" : "Limpeza pós check-out"} — {tasksByRoom[room.id]?.housekeeper?.name || "Governanta"}
-                </div>
-              )}
-
-              {/* Atribuição manual de limpeza pós check-out (modo RECEPTION) */}
-              {assignmentMode === "RECEPTION" && room.status === "VACANT_DIRTY" && room.active && (
-                <div className="pt-3 border-t border-slate-800/80 space-y-2">
-                  {tasksByRoom[room.id]?.status === "PENDING" && tasksByRoom[room.id]?.type === "CHECKOUT" ? (
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="flex items-center gap-1.5 text-slate-300">
-                        <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
-                        Atribuído a <strong className="text-white">{tasksByRoom[room.id]?.housekeeper?.name}</strong>
-                      </span>
-                      <button
-                        onClick={() => handleCancelAssignment(room.id)}
-                        title="Cancelar atribuição"
-                        className="p-1.5 rounded-lg bg-slate-800 text-red-400 hover:bg-red-600 hover:text-white transition"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={selectedHousekeeper[room.id] || ""}
-                        onChange={(e) => setSelectedHousekeeper((prev) => ({ ...prev, [room.id]: e.target.value }))}
-                        className="flex-1 bg-slate-950 border border-slate-700 text-white text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500"
-                      >
-                        <option value="">Selecione a governanta...</option>
-                        {housekeepers.map((h) => (
-                          <option key={h.id} value={h.id}>{h.name}</option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={() => handleAssignRoom(room.id, "CHECKOUT")}
-                        disabled={!selectedHousekeeper[room.id] || assigningRoomId === room.id}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition disabled:opacity-40"
-                      >
-                        Atribuir
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Arrumação com hóspede no quarto — sempre manual, independe do modo do assinante */}
-              {room.status === "OCCUPIED" && room.active && (
-                <div className="pt-3 border-t border-slate-800/80 space-y-2">
-                  {tasksByRoom[room.id]?.status === "PENDING" && tasksByRoom[room.id]?.type === "OCCUPIED" ? (
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="flex items-center gap-1.5 text-slate-300">
-                        <UserCheck className="w-3.5 h-3.5 text-violet-400" />
-                        Arrumação atribuída a <strong className="text-white">{tasksByRoom[room.id]?.housekeeper?.name}</strong>
-                      </span>
-                      <button
-                        onClick={() => handleCancelAssignment(room.id)}
-                        title="Cancelar atribuição"
-                        className="p-1.5 rounded-lg bg-slate-800 text-red-400 hover:bg-red-600 hover:text-white transition"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ) : !tasksByRoom[room.id] ? (
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={selectedHousekeeper[room.id] || ""}
-                        onChange={(e) => setSelectedHousekeeper((prev) => ({ ...prev, [room.id]: e.target.value }))}
-                        className="flex-1 bg-slate-950 border border-slate-700 text-white text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-violet-500"
-                      >
-                        <option value="">Arrumar quarto com hóspede...</option>
-                        {housekeepers.map((h) => (
-                          <option key={h.id} value={h.id}>{h.name}</option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={() => handleAssignRoom(room.id, "OCCUPIED")}
-                        disabled={!selectedHousekeeper[room.id] || assigningRoomId === room.id}
-                        className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold transition disabled:opacity-40"
-                      >
-                        Atribuir
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-
-              {/* Action Buttons for Housekeepers & Room Deactivation */}
-              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap gap-2 text-xs">
-                <button
-                  onClick={() => handleUpdateStatus(room.id, "VACANT_CLEAN", "Livre / Higienizado")}
-                  disabled={!room.active}
-                  className="flex-1 py-1.5 bg-[#10B981]/20 hover:bg-[#10B981]/30 text-[#10B981] border border-[#10B981]/30 rounded-lg transition-colors font-medium text-center disabled:opacity-40"
-                >
-                  ✓ Concluir Limpeza
-                </button>
-
-                <button
-                  onClick={() => handleToggleRoomActive(room.id)}
-                  title={room.active ? "Desativar quarto (Ocultar da relação)" : "Reativar quarto no sistema"}
-                  className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors flex items-center gap-1.5 ${
-                    room.active
-                      ? "bg-slate-800 text-slate-300 border-slate-700 hover:bg-red-950/60 hover:text-red-300 hover:border-red-800"
-                      : "bg-emerald-950/60 text-emerald-300 border-emerald-800 hover:bg-emerald-900"
-                  }`}
-                >
-                  {room.active ? (
-                    <>
-                      <EyeOff className="w-3.5 h-3.5 text-slate-400" /> Desativar
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="w-3.5 h-3.5 text-emerald-400" /> Ativar
-                    </>
-                  )}
-                </button>
-              </div>
+          {actionableRooms.length === 0 && !isLoadingRooms && (
+            <div className={`sm:col-span-2 xl:col-span-3 text-center py-16 rounded-2xl border border-dashed text-sm ${
+              isDark ? "border-slate-800 text-slate-500" : "border-slate-300 text-slate-500"
+            }`}>
+              Nenhum quarto precisa de atenção agora — tudo limpo ou ocupado sem pendência.
             </div>
-          );
-        })}
+          )}
+        </div>
+
+        {/* Governantas */}
+        <div className={`lg:sticky lg:top-4 space-y-2.5 p-4 rounded-2xl border ${theme.bgCard}`}>
+          <h3 className={`text-[10px] font-mono uppercase tracking-wider px-1 ${theme.textMuted}`}>Governantas</h3>
+          {housekeepers.map((h) => {
+            const isDragOver = dragOverId === h.id;
+            return (
+              <div
+                key={h.id}
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("housekeeperId", h.id)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverId(h.id);
+                }}
+                onDragLeave={() => setDragOverId((prev) => (prev === h.id ? null : prev))}
+                onDrop={(e) => handleDropOnHousekeeper(e, h.id)}
+                className={`flex items-center gap-2.5 p-2.5 rounded-xl border cursor-grab active:cursor-grabbing transition ${
+                  isDragOver
+                    ? "border-emerald-400 bg-emerald-500/10 scale-[1.02]"
+                    : isDark
+                    ? "border-slate-800 bg-slate-900/60 hover:border-slate-700"
+                    : "border-slate-200 bg-slate-50 hover:border-slate-300"
+                }`}
+              >
+                {h.photoUrl ? (
+                  <img src={h.photoUrl} alt="" className="w-8 h-8 rounded-full object-cover border border-slate-700 shrink-0" />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 font-bold text-xs shrink-0">
+                    {h.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <span className={`text-xs font-semibold truncate ${theme.textMain}`}>{h.name}</span>
+              </div>
+            );
+          })}
+
+          {housekeepers.length === 0 && (
+            <div className={`flex flex-col items-center gap-2 py-6 text-center ${theme.textMuted}`}>
+              <User className="w-6 h-6" />
+              <p className="text-[11px]">Nenhuma governanta ativa cadastrada.</p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

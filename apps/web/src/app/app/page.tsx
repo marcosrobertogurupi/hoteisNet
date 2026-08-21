@@ -1189,7 +1189,10 @@ export default function TenantDashboardPage() {
                     {room.dates && !room.dates.includes("Disponível") && !room.dates.toLowerCase().includes("checkout") && !room.dates.toLowerCase().includes("check-out") && !room.dates.toLowerCase().includes("bloqueado") && !room.dates.toLowerCase().includes("manutenção") && (
                       <div className={`flex items-center justify-between ${theme.textMuted}`}>
                         <span>Período / Status:</span>
-                        <span className={`font-mono ${theme.isDark ? "text-slate-200" : "text-slate-800"}`}>{room.dates}</span>
+                        <span className={`font-mono ${theme.isDark ? "text-slate-200" : "text-slate-800"}`}>
+                          {/* Evita contradição com o selo "Em limpeza" acima quando já existe governanta atuando */}
+                          {housekeepingByRoomId[room.id] ? "Em limpeza" : room.dates}
+                        </span>
                       </div>
                     )}
 

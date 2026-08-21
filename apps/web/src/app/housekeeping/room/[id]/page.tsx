@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Play, CheckCircle2, Clock, RefreshCw, Save } from "lucide-react";
+import { ArrowLeft, Play, CheckCircle2, Clock, Sparkles, RefreshCw, Save } from "lucide-react";
 
 interface RoomEntry {
   id: string;
@@ -14,12 +14,6 @@ interface RoomEntry {
   notes: string | null;
   startedAt: string | null;
   floor: string;
-}
-
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 export default function HousekeepingRoomPage() {
@@ -39,45 +33,50 @@ export default function HousekeepingRoomPage() {
   const [finishing, setFinishing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const notesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Garante que a observação só é preenchida a partir do servidor uma vez, no carregamento
+  // inicial — atualizações automáticas em segundo plano nunca sobrescrevem o que a governanta
+  // está digitando no campo de observação.
+  const notesInitializedRef = useRef(false);
 
-  const loadRoom = useCallback(async () => {
-    try {
-      const res = await fetch("/api/housekeeping/rooms");
-      const data = await res.json();
-      if (!data.success) {
-        setNotFound(true);
-        return;
+  const loadRoom = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const res = await fetch("/api/housekeeping/rooms");
+        const data = await res.json();
+        if (!data.success) {
+          if (!silent) setNotFound(true);
+          return;
+        }
+        const found = data.floors
+          .flatMap((f: any) => f.rooms.map((r: any) => ({ ...r, floor: f.floor })))
+          .find((r: any) => r.id === roomId);
+        if (!found) {
+          setNotFound(true);
+          return;
+        }
+        setRoom(found);
+        if (!notesInitializedRef.current) {
+          setNotes(found.notes || "");
+          notesInitializedRef.current = true;
+        }
+      } catch {
+        if (!silent) setNotFound(true);
+      } finally {
+        if (!silent) setLoading(false);
       }
-      const found = data.floors
-        .flatMap((f: any) => f.rooms.map((r: any) => ({ ...r, floor: f.floor })))
-        .find((r: any) => r.id === roomId);
-      if (!found) {
-        setNotFound(true);
-        return;
-      }
-      setRoom(found);
-      setNotes(found.notes || "");
-    } catch {
-      setNotFound(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [roomId]);
+    },
+    [roomId]
+  );
 
   useEffect(() => {
     loadRoom();
-  }, [loadRoom]);
-
-  useEffect(() => {
-    if (room?.status !== "IN_PROGRESS" || !room.startedAt) return;
-    const start = new Date(room.startedAt).getTime();
-    const tick = () => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
-    tick();
-    const interval = setInterval(tick, 1000);
+    // Atualização automática e transparente pelo banco — pega, por exemplo, um cancelamento feito
+    // pela recepção sem precisar recarregar a página nem interromper o preenchimento da observação.
+    const interval = setInterval(() => loadRoom(true), 4000);
     return () => clearInterval(interval);
-  }, [room?.status, room?.startedAt]);
+  }, [loadRoom]);
 
   const handleStart = async () => {
     setActionError(null);
@@ -215,9 +214,9 @@ export default function HousekeepingRoomPage() {
 
         {room.status === "IN_PROGRESS" && (
           <div className="space-y-6">
-            <div className="text-center space-y-2 py-4">
-              <p className="text-xs font-mono uppercase tracking-wider text-sky-400">Limpeza em andamento</p>
-              <p className="text-4xl font-mono font-bold tabular-nums">{formatElapsed(elapsedSeconds)}</p>
+            <div className="flex items-center justify-center gap-2 py-2">
+              <Sparkles className="w-4 h-4 text-sky-400 animate-pulse" />
+              <p className="text-sm font-bold text-sky-400">Limpeza em andamento</p>
             </div>
 
             <div>

@@ -155,6 +155,7 @@ export default function SubscriberSettingsPage() {
   const [aiAgentAutoConfirm, setAiAgentAutoConfirm] = useState(false);
   const [aiAgentDisplayName, setAiAgentDisplayName] = useState("");
   const [aiAgentAvatarUrl, setAiAgentAvatarUrl] = useState("");
+  const [aiAgentAvatarUploadError, setAiAgentAvatarUploadError] = useState<string | null>(null);
   const [aiAgentTonePreset, setAiAgentTonePreset] = useState("PROFISSIONAL");
   const [aiAgentMonitoringEnabled, setAiAgentMonitoringEnabled] = useState(false);
   const [aiAgentAlertPhone, setAiAgentAlertPhone] = useState("");
@@ -666,6 +667,34 @@ export default function SubscriberSettingsPage() {
     };
     reader.onerror = () => {
       setLogoUploadError("Não foi possível ler o arquivo selecionado.");
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAiAgentAvatarFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setAiAgentAvatarUploadError(null);
+
+    if (!ACCEPTED_LOGO_TYPES.includes(file.type) && file.type !== "image/webp") {
+      setAiAgentAvatarUploadError("Formato inválido. Envie uma imagem PNG, JPEG, WEBP ou BMP.");
+      return;
+    }
+    if (file.size > MAX_LOGO_SIZE_BYTES) {
+      setAiAgentAvatarUploadError("Arquivo muito grande. O tamanho máximo é 2MB.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setAiAgentAvatarUrl(reader.result);
+      }
+    };
+    reader.onerror = () => {
+      setAiAgentAvatarUploadError("Não foi possível ler o arquivo selecionado.");
     };
     reader.readAsDataURL(file);
   };
@@ -2175,13 +2204,37 @@ export default function SubscriberSettingsPage() {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-semibold">URL da foto de perfil do agente</label>
-                <input
-                  value={aiAgentAvatarUrl}
-                  onChange={(e) => setAiAgentAvatarUrl(e.target.value)}
-                  placeholder="https://..."
-                  className={`w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
-                />
+                <label className="text-xs font-semibold">Foto de perfil do agente</label>
+                <div className="flex items-center gap-2">
+                  {aiAgentAvatarUrl ? (
+                    <img src={aiAgentAvatarUrl} alt="" className="w-9 h-9 rounded-full object-cover border border-slate-700 shrink-0" onError={(e) => { (e.target as HTMLElement).style.display = "none"; }} />
+                  ) : (
+                    <div className="w-9 h-9 rounded-full bg-violet-500/15 border border-violet-500/30 flex items-center justify-center text-violet-500 text-xs font-bold shrink-0">
+                      {aiAgentDisplayName ? aiAgentDisplayName.charAt(0).toUpperCase() : "A"}
+                    </div>
+                  )}
+                  <input
+                    value={aiAgentAvatarUrl}
+                    onChange={(e) => setAiAgentAvatarUrl(e.target.value)}
+                    placeholder="https://... ou envie do computador"
+                    className={`flex-1 border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                  />
+                  <label className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors shrink-0 ${
+                    theme.isDark ? "bg-slate-800 text-slate-200 hover:bg-slate-700 border-slate-700" : "bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300"
+                  }`}>
+                    <Upload className="w-3.5 h-3.5" />
+                    Enviar
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                      onChange={handleAiAgentAvatarFileChange}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                {aiAgentAvatarUploadError && (
+                  <p className="text-[11px] text-red-500 font-medium">{aiAgentAvatarUploadError}</p>
+                )}
               </div>
             </div>
 
