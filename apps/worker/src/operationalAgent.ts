@@ -1,8 +1,31 @@
 import { PrismaClient } from "@prisma/client";
-import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
 
 const prisma = new PrismaClient();
+
+// Chamada direta à API REST do Gemini (sem o pacote "ai"/"@ai-sdk/google") — esses pacotes são
+// ESM-only e o worker compila para CommonJS puro via tsc (sem bundler), o que quebra em runtime
+// com ERR_REQUIRE_ESM. O agente de atendimento em apps/web usa o SDK normalmente porque o bundler
+// do Next.js resolve ESM sem problema; aqui, para uma única chamada simples de geração de texto,
+// é mais robusto falar direto com a API do que lutar contra o CJS/ESM.
+async function generateSummaryText(prompt: string): Promise<string> {
+  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY não configurada.");
+
+  const response = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }),
+    }
+  );
+  if (!response.ok) throw new Error(`Gemini respondeu ${response.status}: ${await response.text()}`);
+
+  const json: any = await response.json();
+  const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
+  if (!text) throw new Error("Gemini não retornou texto.");
+  return text;
+}
 
 // Credenciais legadas — usadas apenas para tenants que ainda não configuraram sua própria
 // instância uazapi em Configurações > API Whatsapp (tabela UazapiSetting). Mesmo padrão duplicado
@@ -124,11 +147,9 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
 async function composeAlertMessage(hotelName: string, issues: DetectedIssue[]): Promise<string> {
   const bulletList = issues.map((i) => `- ${i.description}`).join("\n");
   try {
-    const result = await generateText({
-      model: google("gemini-3.7-flash"),
-      prompt: `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Não use markdown. Não mencione que você é uma IA.`,
-    });
-    return result.text.trim();
+    const prompt = `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Não use markdown. Não mencione que você é uma IA.`;
+    const text = await generateSummaryText(prompt);
+    return text.trim();
   } catch {
     // Se a chamada de IA falhar, ainda assim manda o alerta — só sem a redação natural.
     return `Alertas operacionais em ${hotelName}:\n\n${bulletList}`;
