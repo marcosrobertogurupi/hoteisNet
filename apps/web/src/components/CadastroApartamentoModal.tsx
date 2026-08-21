@@ -96,7 +96,7 @@ export default function CadastroApartamentoModal({
 
   useEffect(() => {
     if (initialData) {
-      setFormData({ fotos: [], ...initialData });
+      setFormData({ ...initialData });
     } else {
       setFormData({
         numero: "",
