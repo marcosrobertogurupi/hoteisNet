@@ -115,32 +115,30 @@ incluindo poder bloquear o uso de IA de um assinante específico independente do
   `CadastroApartamentoModal.tsx`). Testado o caminho de erro (categoria sem fotos cadastradas);
   envio real ainda não testado por não haver fotos nos quartos demo atuais.
 
-### Fase I — Interpretação de mídia (áudio/foto/PDF) ✅ implementada, teste real pendente
+### Fase I — Interpretação de mídia (áudio/foto/PDF) ✅ concluída e testada
 
 O agente hoje só processava mensagens de texto. Agora o webhook também dispara o agente para
 mensagens de mídia (`IN`, direção do hóspede): baixa/descriptografa o anexo via
 `downloadUazapiMedia` (mesma chamada `POST {serverUrl}/message/download` já usada pela tela de
-conversa) e monta um content multimodal (`{ type: "file", mediaType, data: urlPública }`) para o
-Gemini interpretar de verdade — imagem, áudio e PDF são suportados nativamente pelo modelo; outros
-tipos (vídeo, sticker) viram um placeholder de texto para o agente não travar. Só a mensagem mais
-recente do turno é baixada; mensagens antigas do histórico reaproveitam o `mediaUrl` já salvo, sem
-re-baixar a cada novo turno. Mídia enviada pelo próprio hotel (`OUT`, ex: PDF de extrato) fica de
-fora do histórico do agente.
+conversa) e monta um content multimodal para o Gemini interpretar de verdade — imagem, áudio e PDF
+são suportados nativamente pelo modelo; outros tipos (vídeo, sticker) viram um placeholder de texto
+para o agente não travar. Só a mensagem mais recente do turno é processada; mensagens antigas do
+histórico viram placeholder, sem reprocessar anexo a cada novo turno. Mídia enviada pelo próprio
+hotel (`OUT`, ex: PDF de extrato) fica de fora do histórico do agente.
 
-Verificado por leitura do código-fonte do `@ai-sdk/google` (`convertToGoogleMessages`): quando o
-`data` de um content part `file` é uma URL, o SDK envia `fileData.fileUri` direto pro Gemini, que
-busca o arquivo — mecanismo documentado e suportado para imagem/áudio/PDF. **Não foi possível
-confirmar com uma chamada real** porque a cota diária gratuita da chave do AI Studio esgotou
-durante os testes desta sessão (erro 429 `RESOURCE_EXHAUSTED`) — decisão do usuário foi deixar
-como está e validar depois, com a cota resetada ou com uma mensagem real de WhatsApp.
+**Achado importante:** a primeira versão passava a URL do anexo direto (`fileData.fileUri`) — o SDK
+suporta isso e o mecanismo está documentado, mas na prática a API do Gemini **bloqueia esse
+caminho com 429 (`RESOURCE_EXHAUSTED`) no tier gratuito**, mesmo com cota de texto disponível
+(confirmado testando os dois lado a lado: texto simples = 200 OK, mesmo request com `fileUri` =
+429, `inlineData` em base64 = 200 OK). Corrigido: `fetchAsBase64` (`apps/web/src/lib/uazapi.ts`)
+baixa os bytes do anexo e envia como dado inline em vez de URL. Testado de ponta a ponta com o
+agente completo (tools + histórico) para imagem e PDF — ambos interpretados corretamente.
 
 ## O que falta
 
-1. **Testar de verdade o suporte a mídia** (Fase I acima) assim que a cota da chave Gemini
-   resetar, ou com uma mensagem real de WhatsApp.
-2. Os dois itens pendentes da Fase C (envio de FNRH sob demanda, atalho de salvar conhecimento
+1. Os dois itens pendentes da Fase C (envio de FNRH sob demanda, atalho de salvar conhecimento
    direto da conversa).
-3. Autonomia do Agente Operacional (`AUTONOMOUS_LIMITED`) — só depois de definir a lista exata de
+2. Autonomia do Agente Operacional (`AUTONOMOUS_LIMITED`) — só depois de definir a lista exata de
    ações permitidas com o usuário.
 
 ## Lição operacional desta sessão

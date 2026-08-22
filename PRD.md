@@ -154,14 +154,15 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
   `sendUazapiImage`) e `list_services`. Ligado ao webhook da uazapi
   (`api/uazapi/webhook/[tenantId]`), com guarda para não responder por cima de um humano que
   respondeu a mesma conversa nos últimos 30min e checagem de cota/bloqueio antes de gastar tokens.
-  **Interpretação de mídia ✅ (implementada, teste real pendente):** o agente também é acionado para
-  mensagens de imagem/áudio/PDF recebidas do hóspede — baixa/descriptografa o anexo
-  (`downloadUazapiMedia`) e envia como content multimodal para o Gemini interpretar de verdade;
-  outros tipos de anexo viram um placeholder de texto. Mecanismo verificado por leitura do código-
-  fonte do `@ai-sdk/google`, mas não confirmado com chamada real ainda — a cota diária gratuita da
-  chave Gemini esgotou durante os testes desta sessão (429 `RESOURCE_EXHAUSTED`).
-  **Pendente:** confirmar interpretação de mídia com teste real, envio de FNRH sob demanda pelo
-  próprio agente, atalho de salvar conhecimento direto da conversa.
+  **Interpretação de mídia ✅:** o agente também é acionado para mensagens de imagem/áudio/PDF
+  recebidas do hóspede — baixa/descriptografa o anexo (`downloadUazapiMedia`) e envia os bytes como
+  dado inline (base64) para o Gemini interpretar de verdade; outros tipos de anexo viram um
+  placeholder de texto. **Achado importante:** passar a URL do anexo direto
+  (`fileData.fileUri`, caminho documentado pelo SDK) é bloqueado pela API do Gemini com 429 no tier
+  gratuito mesmo com cota de texto disponível — corrigido baixando os bytes e enviando inline
+  (`fetchAsBase64`). Testado de ponta a ponta (imagem e PDF, com o agente completo).
+  **Pendente:** envio de FNRH sob demanda pelo próprio agente, atalho de salvar conhecimento direto
+  da conversa.
 * **`HotelService` ✅:** model real substituindo a tela mock de `cadastros/servicos` — CRUD completo
   (`api/tenant/services`, restrito a administradores), consultado pelo agente via `list_services`.
 * **`Tenant.breakfastHours` ✅:** campo simples em Configurações ("Hotel (Dados)"), consultado pelo

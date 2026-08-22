@@ -52,6 +52,7 @@ import LancarConsumoQuartoModal from "@/components/LancarConsumoQuartoModal";
 import LancarPagamentoHospedagemModal from "@/components/LancarPagamentoHospedagemModal";
 import LancarReservaModal from "@/components/LancarReservaModal";
 import TransferenciaDebitoModal from "@/components/TransferenciaDebitoModal";
+import HistoricoLimpezaModal from "@/components/HistoricoLimpezaModal";
 import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/SelecaoReservaQuartoModal";
 import LoadingOverlay from "@/components/LoadingOverlay";
 
@@ -159,6 +160,7 @@ export default function TenantDashboardPage() {
   const [showLancarPagamentoModal, setShowLancarPagamentoModal] = useState(false);
   const [lancarPagamentoCheckoutIntent, setLancarPagamentoCheckoutIntent] = useState(false);
   const [showTransferDebitoModal, setShowTransferDebitoModal] = useState(false);
+  const [showHistoricoLimpezaModal, setShowHistoricoLimpezaModal] = useState(false);
   const [showLancarReservaModal, setShowLancarReservaModal] = useState(false);
   // Check-in via reserva
   const [showSelecaoReservaModal, setShowSelecaoReservaModal] = useState(false);
@@ -1557,6 +1559,23 @@ export default function TenantDashboardPage() {
                   setContextMenu(prev => ({ ...prev, visible: false }));
                   if (contextMenu.room) {
                     setActiveRoom(contextMenu.room);
+                    setShowHistoricoLimpezaModal(true);
+                  }
+                }}
+                className={`w-full px-3.5 py-2 text-left hover:bg-[#0284C7] hover:text-white flex items-center gap-2.5 transition-colors ${
+                  theme.isDark ? "text-slate-200" : "text-slate-800 font-medium"
+                } disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed`}
+              >
+                <Sparkles className="w-4 h-4 text-violet-500" />
+                Histórico de Limpeza
+              </button>
+
+              <button
+                disabled={contextMenu.room.status !== "OCCUPIED" && contextMenu.room.status !== "OCCUPIED_CLEANING"}
+                onClick={() => {
+                  setContextMenu(prev => ({ ...prev, visible: false }));
+                  if (contextMenu.room) {
+                    setActiveRoom(contextMenu.room);
                     setShowResumoModal(true);
                   }
                 }}
@@ -2462,6 +2481,17 @@ export default function TenantDashboardPage() {
 
             toast.success(`Check-out do Quarto ${room.number} efetuado com sucesso! Quarto encaminhado para Governança (Limpeza).`, "Check-out Concluído");
           }}
+        />
+      )}
+
+      {/* HISTÓRICO DE LIMPEZA DURANTE A HOSPEDAGEM ATUAL */}
+      {activeRoom && (
+        <HistoricoLimpezaModal
+          isOpen={showHistoricoLimpezaModal}
+          onClose={() => setShowHistoricoLimpezaModal(false)}
+          tenantId="tenant-hoteisnet-demo"
+          roomId={activeRoom.id}
+          roomNumber={activeRoom.number}
         />
       )}
 

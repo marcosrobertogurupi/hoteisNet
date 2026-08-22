@@ -43,6 +43,22 @@ export async function downloadUazapiMedia(messageId: string, tenantId?: string):
   }
 }
 
+// Baixa os bytes de uma URL pública (ex: mediaUrl já descriptografado pela uazapi) e converte para
+// base64 — necessário para alimentar o Gemini com anexos: passar a URL direto como fileData.fileUri
+// funciona tecnicamente, mas na prática o Gateway/API do Google bloqueia "busca de URL externa"
+// com 429 (RESOURCE_EXHAUSTED) no tier gratuito, mesmo com cota de texto disponível — confirmado
+// testando os dois caminhos lado a lado. Envio inline (base64) não tem essa restrição.
+export async function fetchAsBase64(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return buffer.toString("base64");
+  } catch {
+    return null;
+  }
+}
+
 // Envia uma imagem já salva como data URI base64 (mesmo formato em que `Room.photos` é gravado
 // pelo upload do cadastro de apartamentos — ver CadastroApartamentoModal.tsx) via
 // POST {serverUrl}/send/media, type "image". Mesmo endpoint já usado para PDF em send-reserva.

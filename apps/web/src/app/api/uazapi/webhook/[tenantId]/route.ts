@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
-import { sendUazapiText, downloadUazapiMedia } from "@/lib/uazapi";
+import { sendUazapiText, downloadUazapiMedia, fetchAsBase64 } from "@/lib/uazapi";
 import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
 import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
 
@@ -14,30 +14,34 @@ function isInterpretableMimetype(mimetype: string): boolean {
   return mimetype.startsWith("image/") || mimetype.startsWith("audio/") || mimetype === "application/pdf";
 }
 
-// Monta o conteúdo de uma mensagem IN de mídia para o agente: baixa/descriptografa o anexo (só
-// para a mensagem mais recente do turno — mensagens antigas do histórico reaproveitam o
-// mediaUrl/mimeType já baixado antes, sem baixar de novo a cada novo turno) e devolve o content
-// multimodal aceito pelo Vercel AI SDK, ou null se não for possível interpretar.
+// Monta o conteúdo de uma mensagem IN de mídia para o agente — só para a mensagem mais recente do
+// turno (mensagens antigas do histórico viram placeholder de texto, ver chamador). Baixa/
+// descriptografa o anexo e envia os bytes como dado inline (base64), não como URL: passar a URL
+// direto (fileData.fileUri) tecnicamente funciona, mas a API do Gemini bloqueia com 429
+// (RESOURCE_EXHAUSTED) esse caminho no tier gratuito, mesmo com cota de texto disponível —
+// confirmado testando os dois lado a lado. Devolve null se não for possível interpretar.
 async function buildMediaContent(
-  msg: { id: string; content: string | null; mediaUrl: string | null; mimeType: string | null; externalId: string | null },
-  tenantId: string,
-  shouldDownload: boolean
+  msg: { id: string; content: string | null; externalId: string | null },
+  tenantId: string
 ): Promise<AgentMessageContent | null> {
-  let mediaUrl = msg.mediaUrl;
-  let mimetype = msg.mimeType;
+  if (!msg.externalId) return null;
 
-  if (!mediaUrl && shouldDownload && msg.externalId) {
-    const downloaded = await downloadUazapiMedia(msg.externalId, tenantId);
-    if (downloaded) {
-      mediaUrl = downloaded.mediaUrl;
-      mimetype = downloaded.mimetype;
-      await prisma.whatsappMessage.update({ where: { id: msg.id }, data: { mediaUrl, mimeType: mimetype } });
-    }
-  }
+  const downloaded = await downloadUazapiMedia(msg.externalId, tenantId);
+  if (!downloaded) return null;
 
-  if (!mediaUrl || !mimetype || !isInterpretableMimetype(mimetype)) return null;
+  // Aproveita o download para já cachear mediaUrl/mimeType em WhatsappMessage — a tela de
+  // conversa (MensagensWhatsAppModal) não precisa rebaixar o mesmo anexo quando o operador abrir.
+  await prisma.whatsappMessage.update({
+    where: { id: msg.id },
+    data: { mediaUrl: downloaded.mediaUrl, mimeType: downloaded.mimetype },
+  });
 
-  const parts: AgentMessageContent = [{ type: "file", mediaType: mimetype, data: mediaUrl }];
+  if (!isInterpretableMimetype(downloaded.mimetype)) return null;
+
+  const base64 = await fetchAsBase64(downloaded.mediaUrl);
+  if (!base64) return null;
+
+  const parts: AgentMessageContent = [{ type: "file", mediaType: downloaded.mimetype, data: base64 }];
   if (msg.content) parts.push({ type: "text", text: msg.content });
   return parts;
 }
@@ -84,7 +88,9 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
         if (m.content) messages.push({ role, content: m.content });
         continue;
       }
-      const mediaContent = await buildMediaContent(m, tenantId, m.id === latestId);
+      // Só a mensagem mais recente é baixada/interpretada de verdade — mídia antiga do histórico
+      // vira placeholder de texto, para não reprocessar anexos a cada novo turno da conversa.
+      const mediaContent = m.id === latestId ? await buildMediaContent(m, tenantId) : null;
       messages.push({
         role,
         content: mediaContent || "[O hóspede enviou um anexo que não foi possível interpretar automaticamente]",

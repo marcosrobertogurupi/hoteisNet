@@ -74,34 +74,50 @@ export default function TenantGovernancePage() {
         if (tasksData.success && Array.isArray(tasksData.tasks)) {
           const map: Record<string, HousekeepingTask> = {};
           for (const t of tasksData.tasks) map[t.roomId] = t;
-          setTasksByRoom(map);
+          setTasksByRoom((prev) => (JSON.stringify(prev) === JSON.stringify(map) ? prev : map));
         }
       })
       .catch((e) => console.error("Erro ao carregar dados de governança de limpeza:", e));
   }, []);
 
-  useEffect(() => {
-    fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`)
+  // `silent` evita o overlay de carregamento nas atualizações automáticas em segundo plano.
+  const loadRooms = useCallback((silent = false) => {
+    if (!silent) setIsLoadingRooms(true);
+    return fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`)
       .then((r) => r.json())
       .then((data) => {
         if (data.success && Array.isArray(data.rooms)) {
-          setRooms(
-            data.rooms.map((r: any) => ({
-              id: r.id,
-              number: String(r.number),
-              category: r.category || r.room_categories?.name || "Standard",
-              floor: r.floor || "Sem andar",
-              status: r.status || "VACANT_CLEAN",
-              active: r.active !== false,
-            }))
-          );
+          const mapped = data.rooms.map((r: any) => ({
+            id: r.id,
+            number: String(r.number),
+            category: r.category || r.room_categories?.name || "Standard",
+            floor: r.floor || "Sem andar",
+            status: r.status || "VACANT_CLEAN",
+            active: r.active !== false,
+          }));
+          // Só troca a referência se o conteúdo mudou de verdade — evita re-render/piscar a cada
+          // atualização automática sem novidade, e garante que a tela nunca fique com um status
+          // de quarto desatualizado em relação ao banco (o que gerava erro ao tentar atribuir).
+          setRooms((prev) => (JSON.stringify(prev) === JSON.stringify(mapped) ? prev : mapped));
         }
       })
       .catch((e) => console.error("Erro ao carregar quartos na Governança:", e))
-      .finally(() => setIsLoadingRooms(false));
+      .finally(() => {
+        if (!silent) setIsLoadingRooms(false);
+      });
+  }, []);
 
+  useEffect(() => {
+    loadRooms();
     loadHousekeepingData();
-  }, [loadHousekeepingData]);
+    // Atualização automática e transparente pelo banco a cada 4s, para a tela nunca ficar
+    // desatualizada em relação a check-outs, check-ins ou atribuições feitas em outra tela/tablet.
+    const interval = setInterval(() => {
+      loadRooms(true);
+      loadHousekeepingData();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [loadRooms, loadHousekeepingData]);
 
   const handleAssign = async (roomId: string, housekeeperId: string) => {
     const room = rooms.find((r) => r.id === roomId);
@@ -159,6 +175,16 @@ export default function TenantGovernancePage() {
     .filter((r) => r.active && (r.status === "VACANT_DIRTY" || r.status === "OCCUPIED"))
     .sort((a, b) => naturalCompare(a.floor, b.floor) || naturalCompare(a.number, b.number));
 
+  const roomsByFloor = actionableRooms.reduce<{ floor: string; rooms: RoomItem[] }[]>((groups, room) => {
+    const last = groups[groups.length - 1];
+    if (last && last.floor === room.floor) {
+      last.rooms.push(room);
+    } else {
+      groups.push({ floor: room.floor, rooms: [room] });
+    }
+    return groups;
+  }, []);
+
   const canAssign = (room: RoomItem) => {
     const task = tasksByRoom[room.id];
     if (task) return false; // já tem tarefa (pendente ou em andamento) — não é alvo de novo drop
@@ -215,9 +241,15 @@ export default function TenantGovernancePage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-5 items-start">
-        {/* Quartos */}
-        <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
-          {actionableRooms.map((room) => {
+        {/* Quartos, separados por andar */}
+        <div className="space-y-5">
+          {roomsByFloor.map(({ floor, rooms: floorRooms }) => (
+            <div key={floor} className="space-y-2.5">
+              <h3 className={`text-xs font-mono uppercase tracking-wider px-1 ${theme.textMuted}`}>
+                {floor} <span className="opacity-60">({floorRooms.length})</span>
+              </h3>
+              <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                {floorRooms.map((room) => {
             const task = tasksByRoom[room.id];
             const isOccupiedType = room.status === "OCCUPIED";
             const isDropTarget = canAssign(room);
@@ -257,10 +289,7 @@ export default function TenantGovernancePage() {
                     }`}>
                       {room.number}
                     </div>
-                    <div>
-                      <h4 className={`text-xs font-semibold leading-tight ${theme.textMain}`}>{room.category}</h4>
-                      <span className={`text-[10px] ${theme.textMuted}`}>{room.floor}</span>
-                    </div>
+                    <h4 className={`text-xs font-semibold leading-tight ${theme.textMain}`}>{room.category}</h4>
                   </div>
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${
                     isOccupiedType
@@ -312,11 +341,14 @@ export default function TenantGovernancePage() {
                   </div>
                 )}
               </div>
-            );
-          })}
+                  );
+                })}
+              </div>
+            </div>
+          ))}
 
           {actionableRooms.length === 0 && !isLoadingRooms && (
-            <div className={`sm:col-span-2 xl:col-span-3 text-center py-16 rounded-2xl border border-dashed text-sm ${
+            <div className={`text-center py-16 rounded-2xl border border-dashed text-sm ${
               isDark ? "border-slate-800 text-slate-500" : "border-slate-300 text-slate-500"
             }`}>
               Nenhum quarto precisa de atenção agora — tudo limpo ou ocupado sem pendência.

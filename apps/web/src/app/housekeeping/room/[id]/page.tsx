@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, Play, CheckCircle2, Clock, Sparkles, RefreshCw, Save } from "lucide-react";
+import { ArrowLeft, Play, CheckCircle2, SprayCan, Sparkles, RefreshCw, Save } from "lucide-react";
 
 interface RoomEntry {
   id: string;
@@ -195,7 +195,7 @@ export default function HousekeepingRoomPage() {
         {room.status === "PENDING" && (
           <div className="text-center space-y-5 py-8">
             <div className="w-20 h-20 rounded-3xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto">
-              <Clock className="w-9 h-9 text-amber-400" />
+              <SprayCan className="w-9 h-9 text-amber-400" />
             </div>
             <div>
               <p className="text-base font-bold">Quarto aguardando limpeza</p>
