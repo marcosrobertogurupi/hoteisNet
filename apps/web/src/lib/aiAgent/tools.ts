@@ -15,7 +15,29 @@ function startOfToday(): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
-async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date) {
+// O modelo já recebe a data de hoje no prompt (ver agent.ts), mas confirmado com um caso real que
+// ele ainda pode errar o ano ao montar a chamada da tool (ex: "23/08" virou "2025-08-23" mesmo com
+// o prompt dizendo que hoje é 22/08/2026) — validação de defesa aqui, independente do que o modelo
+// calculou, nunca aceitar reserva com check-in anterior a hoje. Compara só a data (AAAA-MM-DD) em
+// Brasília, não o timestamp exato, para não rejeitar um check-in marcado para o próprio dia.
+function isPastDateStr(checkInIso: string): boolean {
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  return checkInIso.slice(0, 10) < todayStr;
+}
+
+// Tarifa é por número de adultos, independente da categoria do apartamento (Tariff não tem
+// categoryId — mesma regra do sistema legado WinDev). Usada tanto na cotação (checkAvailability)
+// quanto na criação real (createReservationForAgent) para as duas nunca divergirem — confirmado
+// com um caso real em que a cotação usava RoomCategory.dailyPrice (preço de referência) e a
+// reserva criada cobrava um valor diferente, vindo da Tariff.
+async function resolveTariff(client: { tariff: typeof prisma.tariff }, tenantId: string, adults: number) {
+  return (
+    (await client.tariff.findFirst({ where: { tenantId, active: true, adults: { gte: adults } }, orderBy: { adults: "asc" } })) ||
+    (await client.tariff.findFirst({ where: { tenantId, active: true }, orderBy: { price: "asc" } }))
+  );
+}
+
+async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date, adults: number) {
   const rooms = await prisma.room.findMany({
     where: { tenantId, active: true },
     include: { category: true },
@@ -23,7 +45,7 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
   const roomIds = rooms.map((r) => r.id);
   if (roomIds.length === 0) return [];
 
-  const [overlappingReservations, openStays] = await Promise.all([
+  const [overlappingReservations, openStays, tariff] = await Promise.all([
     prisma.reservation.findMany({
       where: {
         roomId: { in: roomIds },
@@ -37,6 +59,7 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
       where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut }, expectedCheckOut: { gt: checkIn } },
       select: { roomId: true },
     }),
+    resolveTariff(prisma, tenantId, adults),
   ]);
 
   const busyRoomIds = new Set<string>([
@@ -44,14 +67,14 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
     ...openStays.map((s) => s.roomId),
   ]);
 
-  const byCategory = new Map<string, { categoria: string; capacidade: number; precoDiariaReferencia: number; quartosDisponiveis: number }>();
+  const byCategory = new Map<string, { categoria: string; capacidade: number; precoDiaria: number; quartosDisponiveis: number }>();
   for (const room of rooms) {
     if (busyRoomIds.has(room.id)) continue;
     const key = room.categoryId;
     const entry = byCategory.get(key) ?? {
       categoria: room.category.name,
       capacidade: room.category.capacity,
-      precoDiariaReferencia: Number(room.category.dailyPrice),
+      precoDiaria: tariff ? Number(tariff.price) : Number(room.category.dailyPrice),
       quartosDisponiveis: 0,
     };
     entry.quartosDisponiveis += 1;
@@ -206,9 +229,7 @@ async function createReservationForAgent(
     }
     if (!freeRoom) return { sucesso: false, erro: "Não há mais quartos livres nessa categoria para o período pedido." };
 
-    const tariff =
-      (await tx.tariff.findFirst({ where: { tenantId, active: true, adults: { gte: params.adults } }, orderBy: { adults: "asc" } })) ||
-      (await tx.tariff.findFirst({ where: { tenantId, active: true }, orderBy: { price: "asc" } }));
+    const tariff = await resolveTariff(tx, tenantId, params.adults);
     if (!tariff) {
       return { sucesso: false, erro: "Hotel ainda não tem tarifa cadastrada — encaminhe para a recepção fechar a reserva manualmente." };
     }
@@ -317,18 +338,22 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
   return {
     check_availability: tool({
       description:
-        "Verifica quartos disponíveis por período. Use sempre que o hóspede perguntar sobre disponibilidade, preço de diária ou quiser reservar.",
+        "Verifica quartos disponíveis por período e o preço real da diária para a quantidade de adultos informada. Use sempre que o hóspede perguntar sobre disponibilidade, preço de diária ou quiser reservar.",
       inputSchema: z.object({
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
         checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
+        adults: z.number().int().min(1).default(1).describe("Quantidade de adultos — o preço da diária depende disso"),
       }),
-      execute: async ({ checkIn, checkOut }) => {
+      execute: async ({ checkIn, checkOut, adults }) => {
         const inDate = new Date(checkIn);
         const outDate = new Date(checkOut);
         if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
           return { erro: "Datas inválidas. checkOut deve ser depois de checkIn." };
         }
-        const disponibilidade = await checkAvailability(tenantId, inDate, outDate);
+        if (isPastDateStr(checkIn)) {
+          return { erro: `Data de check-in (${checkIn}) já passou. Confira o ano — a data de hoje está no início destas instruções.` };
+        }
+        const disponibilidade = await checkAvailability(tenantId, inDate, outDate, adults);
         return { disponibilidade };
       },
     }),
@@ -396,6 +421,9 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
         const outDate = new Date(checkOut);
         if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
           return { sucesso: false, erro: "Datas inválidas. checkOut deve ser depois de checkIn." };
+        }
+        if (isPastDateStr(checkIn)) {
+          return { sucesso: false, erro: `Data de check-in (${checkIn}) já passou. Confira o ano — a data de hoje está no início destas instruções.` };
         }
         return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, guestName, guestCpf, adults });
       },

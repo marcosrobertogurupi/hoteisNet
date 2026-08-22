@@ -91,9 +91,18 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
       // Só a mensagem mais recente é baixada/interpretada de verdade — mídia antiga do histórico
       // vira placeholder de texto, para não reprocessar anexos a cada novo turno da conversa.
       const mediaContent = m.id === latestId ? await buildMediaContent(m, tenantId) : null;
+      // Placeholder neutro: nunca soar como uma falha do turno atual. Mídia antiga (não é a última
+      // mensagem) sempre cai aqui mesmo que pudesse ter sido interpretada na hora — é só contexto
+      // de conversas passadas, não algo que precise de reação agora. Confirmado com um caso real:
+      // o texto anterior ("não foi possível interpretar automaticamente") fez o agente achar que
+      // havia um anexo travado no turno atual e escalar para humano sem necessidade.
+      const placeholder =
+        m.id === latestId
+          ? "[O hóspede enviou um anexo que não foi possível interpretar automaticamente]"
+          : "[Anexo enviado pelo hóspede em conversa anterior — sem relação com a mensagem atual]";
       messages.push({
         role,
-        content: mediaContent || "[O hóspede enviou um anexo que não foi possível interpretar automaticamente]",
+        content: mediaContent || placeholder,
       });
     }
     if (messages.length === 0) return;

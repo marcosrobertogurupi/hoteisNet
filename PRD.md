@@ -193,6 +193,14 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
 * **Não existe usuário `SUPER_ADMIN` real no banco ainda** (só `TENANT_ADMIN`) — o painel admin foi
   testado com uma sessão JWT sintética; criar um usuário `SUPER_ADMIN` de verdade antes de usar em
   produção.
+* **Correções de robustez do fluxo de reserva pelo agente ✅** (achadas em teste real via WhatsApp):
+  o prompt agora injeta a data/hora atual de Brasília a cada chamada para o agente resolver datas
+  relativas ("amanhã", "sexta que vem") sem precisar que o hóspede as digite por extenso;
+  `check_availability` e `create_reservation` rejeitam qualquer check-in anterior a hoje (defesa
+  contra o modelo errar o ano ao calcular a data relativa); identificação do hóspede passou a pedir
+  só o CPF (nunca o nome completo digitado — `get_guest_by_cpf` já devolve o nome pra confirmação);
+  e a cotação de preço (`check_availability`) passou a usar a mesma `Tariff` (por nº de adultos) da
+  criação real da reserva (`resolveTariff` compartilhado), evitando cotar um valor e cobrar outro.
 
 ### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡 (parcialmente — ver ressalva)
 * `admin/tenants` (tela separada, não usada) e `admin/support` são **mocks de UI**: dados fixos em React state, nenhuma chamada de API. `admin/ai-telemetry` também é mock (não confundir com a seção real de IA dentro de `admin/page.tsx`, ver abaixo).
