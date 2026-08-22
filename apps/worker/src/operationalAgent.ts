@@ -272,6 +272,19 @@ export async function runOperationalAgent(): Promise<void> {
       const newIssues = issues.filter((i) => !existingByKey.has(`${i.issueType}:${i.entityId}`));
       if (newIssues.length === 0) continue;
 
+      // Alimenta o sino de alerta visual/sonoro do Mapa de Quartos/Reservas (ver
+      // apps/web/src/app/app/layout.tsx). Sem dedupe adicional aqui: newIssues já é o resultado
+      // filtrado pelo OperationalAlertLog acima, então nunca repete um problema já alertado.
+      await prisma.humanEscalation.createMany({
+        data: newIssues.map((i) => ({
+          tenantId: setting.tenantId,
+          source: "OPERATIONAL_AGENT" as const,
+          reason: i.description,
+          entityType: i.issueType,
+          entityId: i.entityId,
+        })),
+      });
+
       const autoActionNotes =
         setting.operationalAutonomyMode === "AUTONOMOUS_LIMITED" ? await runAutonomousActions(setting.tenantId, newIssues) : [];
 

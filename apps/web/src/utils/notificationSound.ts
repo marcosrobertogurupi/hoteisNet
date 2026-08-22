@@ -34,3 +34,29 @@ export function playWhatsappNotificationSound() {
   playBeep(0, 880);
   playBeep(0.22, 1046.5);
 }
+
+// Alerta de "precisa de um humano agora" (escalação do Agente de Atendimento ou Operacional) —
+// timbre deliberadamente diferente do som de mensagem WhatsApp acima (onda quadrada, três beeps
+// graves) para o ouvido distinguir os dois sem olhar pra tela.
+export function playHumanInterventionSound() {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  const playBeep = (startOffset: number, frequency: number) => {
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = "square";
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0, ctx.currentTime + startOffset);
+    gain.gain.linearRampToValueAtTime(0.12, ctx.currentTime + startOffset + 0.02);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + startOffset + 0.16);
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.start(ctx.currentTime + startOffset);
+    oscillator.stop(ctx.currentTime + startOffset + 0.18);
+  };
+
+  playBeep(0, 523.25);
+  playBeep(0.2, 523.25);
+  playBeep(0.4, 392.0);
+}

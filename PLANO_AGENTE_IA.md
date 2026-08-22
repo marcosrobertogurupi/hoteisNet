@@ -161,9 +161,32 @@ Agente Operacional (assíncrono, no ciclo de monitoramento).
 - Tela **"Ações do Agente"** ✅ (`app/relatorios/agente-acoes`) — histórico de tudo que os dois
   agentes já fizeram sozinhos, reaproveitando o `AuditLog` (sem tabela nova).
 
+## Fase K — Alerta visual + sonoro de intervenção humana ✅ concluída
+
+Testando a Fase J via WhatsApp real, ficou claro que `escalate_to_human` não avisava ninguém (só um
+`console.log` no servidor) — e pior, um hóspede que só tem reserva (sem check-in) não tem
+`StayCheckin` aberto, então a conversa dele é invisível em qualquer tela do sistema hoje (o badge de
+"não lidas" do Mapa de Quartos vem de `StayCheckin._count.whatsappMessages`).
+
+- Novo model `HumanEscalation` (`packages/database/prisma/schema.prisma`) — diferente do `AuditLog`
+  (append-only), tem estado mutável `resolved` pra alimentar um badge. Criada pelo Agente de
+  Atendimento (`escalate_to_human`, com dedupe por telefone — não repica a cada nova mensagem do
+  mesmo hóspede esperando) e pelo Agente Operacional (uma por issue nova detectada no worker).
+- Sino funcional em `apps/web/src/app/app/layout.tsx` (`HumanEscalationBell`) — polling a cada 5s,
+  badge com contagem, som configurável (`playHumanInterventionSound`, timbre diferente do som de
+  WhatsApp existente), dropdown com "Marcar como resolvido" (sempre manual, sem detecção automática
+  nesta v1). Só aparece no Mapa de Quartos (`/app`) e Mapa de Reservas (`/app/reservations`) — por
+  allowlist explícita, nunca em telas financeiras.
+- **Fora de escopo, documentado como pendência maior:** reconstruir uma "caixa de entrada" de
+  WhatsApp que liste toda conversa independente de `StayCheckin` — é a causa raiz de por que
+  reservas/prospects ficam invisíveis hoje, mas é uma feature bem maior que o alerta sonoro/visual
+  já resolve a urgência imediata.
+
 ## O que falta
 
 1. Atalho de salvar conhecimento direto da conversa (único item ainda pendente da Fase C).
+2. Caixa de entrada de WhatsApp independente de stay (ver Fase K acima) — feature maior, ainda não
+   planejada em detalhe.
 
 ## Lição operacional desta sessão
 

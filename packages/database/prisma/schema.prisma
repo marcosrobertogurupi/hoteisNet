@@ -96,6 +96,7 @@ model Tenant {
   supportTickets          SupportTicket[]
   supportKnowledgeBase    SupportKnowledgeBase[]
   operationalAlertLogs    OperationalAlertLog[]
+  humanEscalations        HumanEscalation[]
   hotelServices           HotelService[]
   tariffs                 Tariff[]
   activityLogs            AuditLog[]
@@ -1063,6 +1064,33 @@ model OperationalAlertLog {
 
   @@unique([tenantId, issueType, entityId])
   @@map("operational_alert_logs")
+}
+
+enum EscalationSource {
+  SUPPORT_AGENT
+  OPERATIONAL_AGENT
+}
+
+// Fila de "precisa de um humano agora" alimentada pelos dois agentes de IA — diferente do
+// AuditLog (que só registra fatos imutáveis do que o agente já fez), aqui existe um estado mutável
+// (pendente → resolvida) que alimenta o sino de alerta visual/sonoro no Mapa de Quartos e Mapa de
+// Reservas (ver apps/web/src/app/app/layout.tsx). Resolução é sempre manual (staff clica "resolver"),
+// sem detecção automática nesta v1.
+model HumanEscalation {
+  id         String           @id @default(uuid())
+  tenantId   String
+  source     EscalationSource
+  reason     String
+  guestPhone String?
+  entityType String?
+  entityId   String?
+  resolved   Boolean          @default(false)
+  resolvedAt DateTime?
+  createdAt  DateTime         @default(now())
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, resolved])
+  @@map("human_escalations")
 }
 
 // Histórico de mensagens WhatsApp da tela "Mensagens WhatsApp" do quarto ocupado — tanto o que o

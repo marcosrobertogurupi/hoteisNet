@@ -124,6 +124,16 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
 
     if (escalationReason) {
       console.log(`[runGuestSupportAgent] escalado para humano — tenant=${tenantId} phone=${phone} motivo=${escalationReason}`);
+      // Dedupe por telefone: se já existe uma escalação não resolvida desta conversa, não cria outra
+      // a cada nova mensagem do hóspede enquanto ele espera — evita repicar o alerta sonoro à toa.
+      const alreadyPending = await prisma.humanEscalation.findFirst({
+        where: { tenantId, source: "SUPPORT_AGENT", guestPhone: phone, resolved: false },
+      });
+      if (!alreadyPending) {
+        await prisma.humanEscalation.create({
+          data: { tenantId, source: "SUPPORT_AGENT", reason: escalationReason, guestPhone: phone },
+        });
+      }
     }
 
     await logAiUsage({

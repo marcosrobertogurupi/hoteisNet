@@ -207,6 +207,18 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
 * **Não existe usuário `SUPER_ADMIN` real no banco ainda** (só `TENANT_ADMIN`) — o painel admin foi
   testado com uma sessão JWT sintética; criar um usuário `SUPER_ADMIN` de verdade antes de usar em
   produção.
+* **Alerta de intervenção humana ✅** (`HumanEscalation`, `api/tenant/human-escalations`): fila
+  separada do `AuditLog` (precisa de estado mutável pendente→resolvida) alimentada pelos dois
+  agentes — `escalate_to_human` do Agente de Atendimento (com dedupe por telefone, pra não repicar
+  a cada mensagem nova do hóspede enquanto espera) e cada alerta novo do Agente Operacional. Um sino
+  funcional em `app/app/layout.tsx` (`HumanEscalationBell`) faz polling a cada 5s e mostra badge +
+  som configurável (`playHumanInterventionSound`, timbre diferente do som de WhatsApp) — só nas
+  telas Mapa de Quartos (`/app`) e Mapa de Reservas (`/app/reservations`), por allowlist explícita
+  (nunca aparece em telas financeiras). Resolução é sempre manual (botão no dropdown do sino).
+  **Achado que motivou a feature:** um hóspede que só tem reserva (sem check-in) não tem
+  `StayCheckin` aberto, então a conversa dele é invisível em qualquer outra tela do sistema hoje —
+  reconstruir uma "caixa de entrada" de WhatsApp independente de stay ficou documentado como
+  pendência maior, fora de escopo desta rodada.
 * **Correções de robustez do fluxo de reserva pelo agente ✅** (achadas em teste real via WhatsApp):
   o prompt agora injeta a data/hora atual de Brasília a cada chamada para o agente resolver datas
   relativas ("amanhã", "sexta que vem") sem precisar que o hóspede as digite por extenso;

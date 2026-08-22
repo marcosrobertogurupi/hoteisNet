@@ -3,7 +3,7 @@
 import { useState, useEffect, ChangeEvent } from "react";
 import { useTheme, THEMES, ThemeId } from "@/context/ThemeContext";
 import { getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
-import { playWhatsappNotificationSound } from "@/utils/notificationSound";
+import { playWhatsappNotificationSound, playHumanInterventionSound } from "@/utils/notificationSound";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import {
   Palette, 
@@ -88,6 +88,8 @@ export default function SubscriberSettingsPage() {
     setSendPaymentConfirmEmailEnabled,
     whatsappSoundEnabled,
     setWhatsappSoundEnabled,
+    humanInterventionSoundEnabled,
+    setHumanInterventionSoundEnabled,
   } = useTheme();
 
   const [inputName, setInputName] = useState(hotelName);
@@ -1995,6 +1997,33 @@ export default function SubscriberSettingsPage() {
                 }`}
               >
                 Testar som
+              </button>
+
+              <label className="flex items-center justify-between gap-3 cursor-pointer p-3 mt-2 rounded-xl border border-slate-800 hover:bg-slate-800/40 transition-colors">
+                <div className="flex items-center gap-2">
+                  <BellRing className="w-4 h-4 text-amber-500" />
+                  <div>
+                    <span className="text-xs font-bold block">Som de intervenção humana (agentes de IA)</span>
+                    <span className={`text-[10px] ${theme.textMuted}`}>Toca um alerta sonoro diferente quando o Agente de Atendimento ou o Agente Operacional precisar de um humano — aparece no Mapa de Quartos e Mapa de Reservas.</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={humanInterventionSoundEnabled}
+                  onClick={() => setHumanInterventionSoundEnabled(!humanInterventionSoundEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${humanInterventionSoundEnabled ? "bg-amber-500" : "bg-slate-600"}`}
+                >
+                  <span className={`inline-block h-[18px] w-[18px] transform rounded-full bg-white shadow transition-transform ${humanInterventionSoundEnabled ? "translate-x-6" : "translate-x-1"}`} />
+                </button>
+              </label>
+              <button
+                onClick={() => playHumanInterventionSound()}
+                className={`mt-2 w-full px-4 py-2 rounded-xl text-xs font-bold transition-colors ${
+                  theme.isDark ? "bg-slate-800 hover:bg-slate-700 text-white" : "bg-slate-200 hover:bg-slate-300 text-slate-800"
+                }`}
+              >
+                Testar som de intervenção
               </button>
             </div>
           </div>
