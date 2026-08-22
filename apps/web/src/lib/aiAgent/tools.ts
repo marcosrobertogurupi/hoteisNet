@@ -196,6 +196,13 @@ async function searchKnowledgeBase(tenantId: string, query: string) {
   return entries.map((e) => ({ titulo: e.title, categoria: e.category, pergunta: e.question, resposta: e.resolution }));
 }
 
+// Horário padrão de check-in/check-out do hotel. A tela de Configurações ("Horários Padrão de
+// Check-in e Check-out") só persiste esse valor no localStorage do navegador — o agente roda no
+// servidor e não tem acesso a isso, então usa o mesmo padrão já assumido em todo o resto do
+// sistema quando o hóspede não define um horário (LancarReservaModal.tsx, CheckinHospedagemModal.tsx).
+const DEFAULT_CHECK_IN_TIME = "14:00";
+const DEFAULT_CHECK_OUT_TIME = "12:00";
+
 // Cria a reserva de verdade, dentro de uma transação (mesmo princípio de atomic-checkout-balance-guard
 // já aplicado no resto do sistema: a checagem de conflito acontece dentro da própria transação, não
 // só antes dela). O status (CONFIRMED vs PRE_RESERVATION) nunca é decidido pelo modelo — vem de
@@ -274,6 +281,8 @@ async function createReservationForAgent(
       diarias: nights,
       valorTotal: totalAmount,
       confirmadaAutomaticamente: status === "CONFIRMED",
+      horarioCheckIn: DEFAULT_CHECK_IN_TIME,
+      horarioCheckOut: DEFAULT_CHECK_OUT_TIME,
     };
   });
 }
@@ -407,7 +416,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     create_reservation: tool({
       description:
-        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando confirmação da recepção — informe o resultado exato que a tool devolver, não invente.",
+        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando confirmação da recepção — informe o resultado exato que a tool devolver, não invente. O retorno inclui horarioCheckIn/horarioCheckOut — sempre informe os dois horários na confirmação, junto com as datas.",
       inputSchema: z.object({
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
         checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),

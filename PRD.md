@@ -201,6 +201,10 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
   só o CPF (nunca o nome completo digitado — `get_guest_by_cpf` já devolve o nome pra confirmação);
   e a cotação de preço (`check_availability`) passou a usar a mesma `Tariff` (por nº de adultos) da
   criação real da reserva (`resolveTariff` compartilhado), evitando cotar um valor e cobrar outro.
+  A confirmação de `create_reservation` também passou a sempre informar horário de check-in/
+  check-out (14:00/12:00, mesmo padrão já assumido no resto do sistema — a tela de Configurações só
+  persiste esse horário no localStorage do navegador, não em campo do banco, então o agente
+  server-side usa o mesmo fallback fixo).
 
 ### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡 (parcialmente — ver ressalva)
 * `admin/tenants` (tela separada, não usada) e `admin/support` são **mocks de UI**: dados fixos em React state, nenhuma chamada de API. `admin/ai-telemetry` também é mock (não confundir com a seção real de IA dentro de `admin/page.tsx`, ver abaixo).
