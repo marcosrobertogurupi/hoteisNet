@@ -134,12 +134,36 @@ caminho com 429 (`RESOURCE_EXHAUSTED`) no tier gratuito**, mesmo com cota de tex
 baixa os bytes do anexo e envia como dado inline em vez de URL. Testado de ponta a ponta com o
 agente completo (tools + histórico) para imagem e PDF — ambos interpretados corretamente.
 
+## Fase J — Agente 2 executa ações (cancelamento, FNRH sob demanda, autonomia limitada) ✅ concluída
+
+O Agente de Atendimento e o Agente Operacional rodam em processos/deploys diferentes (Vercel/web e
+Railway/worker), sem chamada de rede entre si — só compartilham o banco. Por isso a "delegação" de
+uma ação do Agente 1 para o Agente 2 não é uma 2ª chamada de IA por ação (dobraria custo/latência
+sem ganho de segurança real, e adicionaria um novo jeito da IA errar num dado já correto) — é um
+**núcleo determinístico de execução compartilhado**, com auditoria própria (`AuditLog`, convenção
+`action` prefixado `AGENT_`), chamado tanto pelo Agente 1 (síncrono, durante a conversa) quanto pelo
+Agente Operacional (assíncrono, no ciclo de monitoramento).
+
+- `cancel_reservation` ✅ — soft-cancel de verdade (`status=CANCELLED`, nunca apaga a linha; a
+  exclusão física continua existindo só para o admin, via `DELETE /api/reservations`). Gated por
+  `AIAgentSetting.allowAgentCancelReservation` (novo campo, desligado por padrão); nunca cancela
+  reserva com `CHECKED_IN` (escala para a recepção); sempre exige confirmação explícita do hóspede
+  antes de executar (mesmo padrão de dois turnos que `create_reservation` já usava).
+- `resend_fnrh_link` ✅ — reaproveita `sendPreCheckinLink` (mesma função do cron automático e do
+  botão manual), sem lógica nova de envio.
+- Agente Operacional em modo `AUTONOMOUS_LIMITED` ✅ — implementado com escopo bem restrito, sem
+  nenhuma ação física/irreversível: avisa a governanta responsável direto no WhatsApp dela (via
+  `HousekeepingTask` aberta com `housekeeperId`) em vez de só o alerta genérico quando um quarto
+  fica preso; e dá **uma única chance extra** de reenvio automático a uma FNRH travada no SNRHos
+  (reseta `snrhosAttempts`, nunca mais que uma vez por registro — checado via `AuditLog` antes de
+  agir, respeitando a lição de nunca ter retry sem teto). Em `ALERT_ONLY` (padrão) segue só
+  alertando, como antes.
+- Tela **"Ações do Agente"** ✅ (`app/relatorios/agente-acoes`) — histórico de tudo que os dois
+  agentes já fizeram sozinhos, reaproveitando o `AuditLog` (sem tabela nova).
+
 ## O que falta
 
-1. Os dois itens pendentes da Fase C (envio de FNRH sob demanda, atalho de salvar conhecimento
-   direto da conversa).
-2. Autonomia do Agente Operacional (`AUTONOMOUS_LIMITED`) — só depois de definir a lista exata de
-   ações permitidas com o usuário.
+1. Atalho de salvar conhecimento direto da conversa (único item ainda pendente da Fase C).
 
 ## Lição operacional desta sessão
 
@@ -149,11 +173,12 @@ tentativas com backoff curto e reportar a falha, em vez de ficar tentando indefi
 
 ## Riscos e decisões abertas
 
-- **Lista exata de ações que o Agente Operacional pode tomar sozinho em modo
-  `AUTONOMOUS_LIMITED`** — não implementar nenhuma ação de escrita autônoma sem essa lista aprovada
-  explicitamente. Hoje o toggle existe na UI do assinante mas não faz nada (aviso explícito no
-  texto de ajuda da tela).
-- Pagamento/sinal de reserva feita pelo bot: ainda fora do escopo.
+- **Lista de ações do modo `AUTONOMOUS_LIMITED`** — resolvido na Fase J: escopo aprovado
+  explicitamente com o usuário antes de codar (avisar governanta + uma chance extra de FNRH), toggle
+  agora funcional. Qualquer ação nova de escrita autônoma continua exigindo aprovação explícita
+  antes de implementar.
+- Pagamento/sinal de reserva feita pelo bot: ainda fora do escopo (cancelamento também não mexe em
+  estorno/pagamento).
 - AI Gateway (Vercel) segue bloqueado por falta de cartão — revisitar se quiser voltar a usá-lo no
   lugar do provider direto do Google.
 - Não existe usuário `SUPER_ADMIN` real no banco ainda (só `TENANT_ADMIN`) — o painel `/admin` foi

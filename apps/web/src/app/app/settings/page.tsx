@@ -153,6 +153,7 @@ export default function SubscriberSettingsPage() {
 
   const [aiAgentEnabled, setAiAgentEnabled] = useState(false);
   const [aiAgentAutoConfirm, setAiAgentAutoConfirm] = useState(false);
+  const [aiAgentAllowCancel, setAiAgentAllowCancel] = useState(false);
   const [aiAgentDisplayName, setAiAgentDisplayName] = useState("");
   const [aiAgentAvatarUrl, setAiAgentAvatarUrl] = useState("");
   const [aiAgentAvatarUploadError, setAiAgentAvatarUploadError] = useState<string | null>(null);
@@ -431,6 +432,7 @@ export default function SubscriberSettingsPage() {
         const s = data.settings;
         setAiAgentEnabled(!!s.enabled);
         setAiAgentAutoConfirm(!!s.autoConfirmReservations);
+        setAiAgentAllowCancel(!!s.allowAgentCancelReservation);
         setAiAgentDisplayName(s.agentDisplayName || "");
         setAiAgentAvatarUrl(s.agentAvatarUrl || "");
         setAiAgentTonePreset(s.tonePreset || "PROFISSIONAL");
@@ -546,6 +548,7 @@ export default function SubscriberSettingsPage() {
         body: JSON.stringify({
           enabled: aiAgentEnabled,
           autoConfirmReservations: aiAgentAutoConfirm,
+          allowAgentCancelReservation: aiAgentAllowCancel,
           agentDisplayName: aiAgentDisplayName,
           agentAvatarUrl: aiAgentAvatarUrl,
           tonePreset: aiAgentTonePreset,
@@ -2191,6 +2194,16 @@ export default function SubscriberSettingsPage() {
                 className="w-4 h-4 accent-violet-500"
               />
               Reserva feita pelo agente entra já confirmada (sem isso, entra como pré-reserva pendente de confirmação da recepção)
+            </label>
+
+            <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiAgentAllowCancel}
+                onChange={(e) => setAiAgentAllowCancel(e.target.checked)}
+                className="w-4 h-4 accent-violet-500"
+              />
+              Permitir que o agente cancele reservas a pedido do hóspede (cancelamento reversível — nunca de hospedagem com check-in já feito, isso sempre vai para a recepção)
             </label>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

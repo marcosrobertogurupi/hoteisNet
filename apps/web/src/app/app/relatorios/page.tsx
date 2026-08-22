@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart } from "lucide-react";
+import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart, ListChecks } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 const REPORTS = [
@@ -25,6 +25,13 @@ const REPORTS = [
     description: "Relação de quartos ocupados com hóspede, entrada e previsão de saída, somando a quantidade de pessoas no hotel (café da manhã).",
     icon: BedDouble,
     color: "#10B981",
+  },
+  {
+    href: "/app/relatorios/agente-acoes",
+    title: "Ações do Agente",
+    description: "Histórico do que os agentes de IA já fizeram sozinhos — reservas criadas/canceladas, links reenviados, avisos à governança.",
+    icon: ListChecks,
+    color: "#8B5CF6",
   },
 ];
 

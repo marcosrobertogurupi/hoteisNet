@@ -9,6 +9,8 @@ import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
 import { findConflictingReservation } from "@/lib/reservationHelpers";
 import { sendUazapiImage } from "@/lib/uazapi";
+import { sendPreCheckinLink } from "@/lib/preCheckinSender";
+import { logActivity } from "@/lib/audit";
 
 function startOfToday(): Date {
   const now = new Date();
@@ -219,7 +221,7 @@ async function createReservationForAgent(
   ]);
   if (!category) return { sucesso: false, erro: "Categoria de apartamento não encontrada." };
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const rooms = await tx.room.findMany({ where: { tenantId, categoryId: category.id, active: true } });
     let freeRoom: (typeof rooms)[number] | null = null;
     for (const room of rooms) {
@@ -234,11 +236,11 @@ async function createReservationForAgent(
         break;
       }
     }
-    if (!freeRoom) return { sucesso: false, erro: "Não há mais quartos livres nessa categoria para o período pedido." };
+    if (!freeRoom) return { sucesso: false as const, erro: "Não há mais quartos livres nessa categoria para o período pedido." };
 
     const tariff = await resolveTariff(tx, tenantId, params.adults);
     if (!tariff) {
-      return { sucesso: false, erro: "Hotel ainda não tem tarifa cadastrada — encaminhe para a recepção fechar a reserva manualmente." };
+      return { sucesso: false as const, erro: "Hotel ainda não tem tarifa cadastrada — encaminhe para a recepção fechar a reserva manualmente." };
     }
 
     const nights = Math.max(1, Math.round((params.checkOut.getTime() - params.checkIn.getTime()) / (24 * 60 * 60 * 1000)));
@@ -246,7 +248,7 @@ async function createReservationForAgent(
     const status = agentSetting?.autoConfirmReservations ? "CONFIRMED" : "PRE_RESERVATION";
     const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
 
-    await tx.reservation.create({
+    const created = await tx.reservation.create({
       data: {
         tenantId: "TNT-01",
         roomId: freeRoom.id,
@@ -273,7 +275,8 @@ async function createReservationForAgent(
     });
 
     return {
-      sucesso: true,
+      sucesso: true as const,
+      reservationId: created.id,
       numeroReserva: reservationNumber,
       status,
       quarto: freeRoom.number,
@@ -285,6 +288,90 @@ async function createReservationForAgent(
       horarioCheckOut: DEFAULT_CHECK_OUT_TIME,
     };
   });
+
+  if (result.sucesso) {
+    await logActivity({
+      tenantId,
+      userName: "Agente de IA",
+      action: "AGENT_RESERVATION_CREATE",
+      entityType: "RESERVATION",
+      entityId: result.reservationId,
+      description: `Reserva ${result.numeroReserva} criada pelo agente de atendimento (${result.quarto}, ${params.guestName}).`,
+    });
+  }
+
+  return result;
+}
+
+// Cancela (soft-cancel, status = CANCELLED) uma reserva a pedido do hóspede via WhatsApp — nunca
+// apaga a linha do banco (diferente da exclusão física que a tela de admin usa). Só permite
+// cancelar PRE_RESERVATION/CONFIRMED; nunca CHECKED_IN (hospedagem em andamento sempre vai para a
+// recepção). Gated por AIAgentSetting.allowAgentCancelReservation — desligado por padrão.
+async function cancelReservationForAgent(tenantId: string, guestPhone: string, reservationNumber: string) {
+  const setting = await prisma.aIAgentSetting.findUnique({ where: { tenantId }, select: { allowAgentCancelReservation: true } });
+  if (!setting?.allowAgentCancelReservation) {
+    return { sucesso: false, precisaEscalar: true, erro: "Cancelamento pelo agente não está habilitado neste hotel." };
+  }
+
+  const variants = brazilPhoneVariants(guestPhone.replace(/\D/g, ""));
+  const reservation = await prisma.reservation.findFirst({
+    where: { reservationNumber, room: { tenantId } },
+    include: { room: { select: { number: true, tenantId: true } } },
+  });
+
+  if (!reservation || !variants.some((v) => brazilPhoneVariants(reservation.guestPhone || "").includes(v))) {
+    return { sucesso: false, erro: "Reserva não encontrada para este telefone." };
+  }
+  if (reservation.status === "CHECKED_IN") {
+    return { sucesso: false, precisaEscalar: true, erro: "Esta hospedagem já teve check-in — cancelamento precisa passar pela recepção." };
+  }
+  if (reservation.status !== "PRE_RESERVATION" && reservation.status !== "CONFIRMED") {
+    return { sucesso: false, erro: `Reserva já está com status ${reservation.status}, não é possível cancelar.` };
+  }
+
+  await prisma.reservation.update({ where: { id: reservation.id }, data: { status: "CANCELLED" } });
+
+  await logActivity({
+    tenantId,
+    userName: "Agente de IA",
+    action: "AGENT_RESERVATION_CANCEL",
+    entityType: "RESERVATION",
+    entityId: reservation.id,
+    description: `Reserva ${reservationNumber} (quarto ${reservation.room.number}, ${reservation.guestName}) cancelada pelo agente de atendimento a pedido do hóspede.`,
+  });
+
+  return { sucesso: true, numeroReserva: reservationNumber, quarto: reservation.room.number };
+}
+
+// Reenvia o link de pré-check-in/FNRH a pedido do hóspede — reaproveita sendPreCheckinLink
+// (mesma função usada pelo cron automático e pelo botão manual da recepção), só acrescenta um
+// segundo registro de auditoria prefixado AGENT_ para aparecer na tela "Ações do Agente".
+async function resendFnrhForAgent(tenantId: string, guestPhone: string, reservationNumber: string) {
+  const variants = brazilPhoneVariants(guestPhone.replace(/\D/g, ""));
+  const reservation = await prisma.reservation.findFirst({
+    where: { reservationNumber, room: { tenantId } },
+    select: { id: true, guestPhone: true, guestName: true },
+  });
+
+  if (!reservation || !variants.some((v) => brazilPhoneVariants(reservation.guestPhone || "").includes(v))) {
+    return { sucesso: false, erro: "Reserva não encontrada para este telefone." };
+  }
+
+  const result = await sendPreCheckinLink(reservation.id);
+  if (!result.success) {
+    return { sucesso: false, erro: result.error };
+  }
+
+  await logActivity({
+    tenantId,
+    userName: "Agente de IA",
+    action: "AGENT_FNRH_RESEND",
+    entityType: "RESERVATION",
+    entityId: reservation.id,
+    description: `Link de pré-check-in/FNRH reenviado pelo agente de atendimento a pedido de ${reservation.guestName}.`,
+  });
+
+  return { sucesso: true };
 }
 
 // Envia até 3 fotos de um quarto da categoria pedida. Fotos ficam em Room.photos (não em
@@ -436,6 +523,23 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
         }
         return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, guestName, guestCpf, adults });
       },
+    }),
+
+    cancel_reservation: tool({
+      description:
+        "Cancela (soft-cancel, reversível) uma reserva do hóspede. Só use depois que o hóspede confirmar explicitamente que quer cancelar (ex: respondeu CONFIRMAR). Se o retorno tiver precisaEscalar:true, use escalate_to_human em seguida — significa que o cancelamento pelo agente está desligado nas configurações do hotel, ou que a hospedagem já teve check-in.",
+      inputSchema: z.object({
+        reservationNumber: z.string().describe("Número da reserva (ex: RES-1234), já visto pelo hóspede via get_reservation_by_phone ou na confirmação da reserva"),
+      }),
+      execute: async ({ reservationNumber }) => await cancelReservationForAgent(tenantId, guestPhone, reservationNumber),
+    }),
+
+    resend_fnrh_link: tool({
+      description: "Reenvia o link de pré-check-in/FNRH da reserva do hóspede via WhatsApp. Use quando ele pedir o link de novo, disser que perdeu ou não recebeu.",
+      inputSchema: z.object({
+        reservationNumber: z.string().describe("Número da reserva (ex: RES-1234), já visto pelo hóspede via get_reservation_by_phone ou na confirmação da reserva"),
+      }),
+      execute: async ({ reservationNumber }) => await resendFnrhForAgent(tenantId, guestPhone, reservationNumber),
     }),
 
     send_photo: tool({

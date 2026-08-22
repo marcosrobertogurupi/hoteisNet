@@ -1011,11 +1011,12 @@ model AIAgentSetting {
   tenantId String @unique
 
   // --- Agente de Atendimento (assinante) ---
-  enabled                 Boolean         @default(false) // atendimento via WhatsApp ligado/desligado
-  autoConfirmReservations Boolean         @default(false) // false = reserva feita pelo bot entra como PRE_RESERVATION
-  agentDisplayName        String? // nome com que o agente se apresenta no WhatsApp
-  agentAvatarUrl          String? // foto de perfil do agente
-  tonePreset              AgentTonePreset @default(PROFISSIONAL)
+  enabled                      Boolean         @default(false) // atendimento via WhatsApp ligado/desligado
+  autoConfirmReservations      Boolean         @default(false) // false = reserva feita pelo bot entra como PRE_RESERVATION
+  allowAgentCancelReservation  Boolean         @default(false) // permite o agente cancelar (soft-cancel) reserva a pedido do hóspede
+  agentDisplayName             String? // nome com que o agente se apresenta no WhatsApp
+  agentAvatarUrl               String? // foto de perfil do agente
+  tonePreset                   AgentTonePreset @default(PROFISSIONAL)
 
   // --- Agente de Atendimento (admin master) ---
   systemPromptExtra  String? // prompt cru de personalidade/forma de atendimento, só o admin edita

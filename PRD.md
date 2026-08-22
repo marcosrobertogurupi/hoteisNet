@@ -150,8 +150,11 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
   `get_reservation_by_phone`, `get_guest_by_cpf` (cadastro do hotel → fallback Hub do
   Desenvolvedor), `list_room_categories`, `get_hotel_info`, `search_knowledge_base`,
   `create_reservation` (transação atômica, guardrail `autoConfirmReservations` decidido em código,
-  nunca pelo modelo), `escalate_to_human`, `send_photo` (envia fotos reais de `Room.photos` via
-  `sendUazapiImage`) e `list_services`. Ligado ao webhook da uazapi
+  nunca pelo modelo), `cancel_reservation` (soft-cancel, `status=CANCELLED`, nunca apaga a linha;
+  gated por `AIAgentSetting.allowAgentCancelReservation`, default desligado; nunca cancela
+  `CHECKED_IN` — escala pra recepção), `resend_fnrh_link` (reenvia o link de pré-check-in sob
+  demanda, reaproveitando `sendPreCheckinLink`), `escalate_to_human`, `send_photo` (envia fotos
+  reais de `Room.photos` via `sendUazapiImage`) e `list_services`. Ligado ao webhook da uazapi
   (`api/uazapi/webhook/[tenantId]`), com guarda para não responder por cima de um humano que
   respondeu a mesma conversa nos últimos 30min e checagem de cota/bloqueio antes de gastar tokens.
   **Interpretação de mídia ✅:** o agente também é acionado para mensagens de imagem/áudio/PDF
@@ -161,20 +164,31 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
   (`fileData.fileUri`, caminho documentado pelo SDK) é bloqueado pela API do Gemini com 429 no tier
   gratuito mesmo com cota de texto disponível — corrigido baixando os bytes e enviando inline
   (`fetchAsBase64`). Testado de ponta a ponta (imagem e PDF, com o agente completo).
-  **Pendente:** envio de FNRH sob demanda pelo próprio agente, atalho de salvar conhecimento direto
-  da conversa.
+  **Pendente:** atalho de salvar conhecimento direto da conversa.
 * **`HotelService` ✅:** model real substituindo a tela mock de `cadastros/servicos` — CRUD completo
   (`api/tenant/services`, restrito a administradores), consultado pelo agente via `list_services`.
 * **`Tenant.breakfastHours` ✅:** campo simples em Configurações ("Hotel (Dados)"), consultado pelo
   agente via `get_hotel_info`.
-* **Agente Operacional v1 ✅** (`apps/worker/src/operationalAgent.ts`, cron a cada 15min): detecção
+* **Agente Operacional ✅** (`apps/worker/src/operationalAgent.ts`, cron a cada 15min): detecção
   100% determinística (FNRH travada no SNRHos, pré-check-in pendente com check-in próximo, quarto
   em manutenção/sujo parado por tempo demais, WhatsApp do hotel desconectado); quando há problema
   novo, o LLM só compõe o resumo em linguagem natural e o alerta é enviado por WhatsApp
   (`OperationalAlertLog` evita repetir o mesmo alerta). Roda só para tenants com
-  `monitoringEnabled=true`. **Pendente:** modo de autonomia (`AUTONOMOUS_LIMITED`) — o toggle existe
-  na UI mas nenhuma ação automática foi implementada; requer lista explícita de ações permitidas
-  aprovada pelo usuário antes de codar.
+  `monitoringEnabled=true`. **Modo `AUTONOMOUS_LIMITED` ✅ implementado** (lista de ações fechada,
+  aprovada com o usuário antes de codar — nenhuma ação física/irreversível): (1) avisa a governanta
+  responsável diretamente no WhatsApp dela (via `HousekeepingTask` aberta com `housekeeperId`) em
+  vez de só o alerta genérico, quando um quarto fica preso em limpeza/manutenção; (2) dá uma única
+  chance extra de reenvio automático a uma FNRH travada no SNRHos, resetando `snrhosAttempts` — só
+  uma vez por registro, para sempre (checado via `AuditLog`), nunca um retry sem teto. Em
+  `ALERT_ONLY` (padrão) o comportamento continua sendo só alertar, como antes.
+* **Núcleo determinístico de execução + auditoria ✅:** toda ação de escrita que um agente executa
+  (criar/cancelar reserva, reenviar FNRH, avisar governanta, resetar tentativa de FNRH) grava no
+  `AuditLog` já existente do sistema, com `action` prefixado `AGENT_` e `userName: "Agente de IA"` —
+  visível na nova tela **"Ações do Agente"** (`app/relatorios/agente-acoes`, `api/tenant/agent-actions`,
+  card no hub de Relatórios). Os dois agentes rodam em processos/deploys separados (Vercel/web e
+  Railway/worker, sem chamada de rede entre si) — por isso a "delegação" do Agente de Atendimento
+  para o Operacional não é uma 2ª chamada de IA por ação (custaria latência/tokens em dobro sem
+  ganho de segurança real), e sim esse núcleo de código compartilhado, auditável e determinístico.
 * **Base de conhecimento (aprendizado) ✅:** `SupportKnowledgeBase` (por tenant, `agentType`
   SUPPORT/OPERATIONAL) — tela `app/cadastros/base-conhecimento` para o operador salvar
   pergunta+resposta manualmente; busca por palavras-chave (sem embeddings/vetores — suficiente para
@@ -278,4 +292,4 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * [x] **Fase 13 (nova):** Caixa obrigatório para operar o sistema (`CashRegisterGate`), Caixa Geral consolidado para Admin (`app/cash-register-geral` + `api/caixa/geral`), sangria vinculada a plano de contas e gestão de usuários multi-hotel para `SUPER_ADMIN` — implementados e conectados ao banco.
 * [x] **Fase 14 (nova):** Validação de placa de veículo única no cadastro de hóspede, cota mensal de consulta de CPF persistida no banco e editável por assinante no Painel SuperAdmin (`api/admin/tenants`), e resiliência da integração uazapi a instância fora do ar (`fetchUazapi`/`UazapiUnreachableError`) — implementados e conectados ao banco.
 * [x] **Fase 15 (nova):** Formas de Pagamento com regras de negócio (Parcelamento, Debitar Saldo Hóspede, Transf.Débito, Soma Caixa x Conta Corrente) centralizadas em `paymentProcessing.ts`, Saldo do Hóspede/Conta Corrente (`Guest.balance` + `GuestBalanceEntry`) e Contas a Pagar/Contas a Receber avulsas com baixa (total/parcial, juros/desconto) — implementados e conectados ao banco. Correção do loop infinito e adoção do tema claro/escuro no modal de Alterar Período, com a regra de data mínima de saída (nunca antes de hoje, travada na última diária lançada após o horário de virada). Overlays de celebração de check-in e despedida de check-out no Mapa de Quartos.
-* [~] **Fase 16 (nova):** Agentes de IA (Atendimento WhatsApp + Operacional) — ver detalhamento completo na seção 3.9 e em `PLANO_AGENTE_IA.md`. Agente de atendimento completo: disponibilidade, criação de reserva real (guardrail de auto-confirmação por tenant), identificação de hóspede por CPF, envio de fotos de quarto, lista de serviços/café da manhã, base de conhecimento (RAG leve) e escalonamento para humano; agente operacional v1 detectando inconsistências e alertando por WhatsApp; separação de controle assinante/admin master; painel admin real de prompt/cota/bloqueio por assinante. Pendente: envio de FNRH sob demanda pelo agente, atalho de salvar conhecimento direto da conversa, e autonomia de ação do agente operacional (aguardando lista de ações aprovada pelo usuário).
+* [~] **Fase 16 (nova):** Agentes de IA (Atendimento WhatsApp + Operacional) — ver detalhamento completo na seção 3.9 e em `PLANO_AGENTE_IA.md`. Agente de atendimento completo: disponibilidade, criação/cancelamento de reserva real (guardrails de auto-confirmação e de permissão de cancelamento, ambos por tenant), reenvio de FNRH sob demanda, identificação de hóspede por CPF, envio de fotos de quarto, lista de serviços/café da manhã, base de conhecimento (RAG leve) e escalonamento para humano; agente operacional com modo `AUTONOMOUS_LIMITED` implementado (avisa governanta responsável, dá uma chance extra de reenvio de FNRH travada) além do alerta padrão; núcleo de execução determinístico + tela "Ações do Agente" para auditoria; separação de controle assinante/admin master; painel admin real de prompt/cota/bloqueio por assinante. Pendente: atalho de salvar conhecimento direto da conversa.

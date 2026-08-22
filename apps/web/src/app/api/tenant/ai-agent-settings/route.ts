@@ -7,6 +7,7 @@ const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 const DEFAULTS = {
   enabled: false,
   autoConfirmReservations: false,
+  allowAgentCancelReservation: false,
   agentDisplayName: null as string | null,
   agentAvatarUrl: null as string | null,
   tonePreset: "PROFISSIONAL" as AgentTonePreset,
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
         ? {
             enabled: settings.enabled,
             autoConfirmReservations: settings.autoConfirmReservations,
+            allowAgentCancelReservation: settings.allowAgentCancelReservation,
             agentDisplayName: settings.agentDisplayName,
             agentAvatarUrl: settings.agentAvatarUrl,
             tonePreset: settings.tonePreset,
@@ -75,6 +77,7 @@ export async function PATCH(req: NextRequest) {
     const data: Record<string, any> = {};
     if (fields.enabled !== undefined) data.enabled = !!fields.enabled;
     if (fields.autoConfirmReservations !== undefined) data.autoConfirmReservations = !!fields.autoConfirmReservations;
+    if (fields.allowAgentCancelReservation !== undefined) data.allowAgentCancelReservation = !!fields.allowAgentCancelReservation;
     if (fields.agentDisplayName !== undefined) data.agentDisplayName = fields.agentDisplayName || null;
     if (fields.agentAvatarUrl !== undefined) data.agentAvatarUrl = fields.agentAvatarUrl || null;
     if (fields.tonePreset !== undefined && ["FORMAL", "PROFISSIONAL", "DESCONTRAIDO", "DIRETO"].includes(fields.tonePreset)) {

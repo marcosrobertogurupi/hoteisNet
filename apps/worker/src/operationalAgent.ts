@@ -144,16 +144,101 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
 
 // Compõe um resumo legível em linguagem natural só quando há algo novo a reportar — a detecção em
 // si é sempre determinística (queries acima), o LLM entra só para redigir a mensagem final.
-async function composeAlertMessage(hotelName: string, issues: DetectedIssue[]): Promise<string> {
+// autoActionNotes: ações que o próprio agente já tomou (modo AUTONOMOUS_LIMITED, ver
+// runAutonomousActions) — o resumo deve mencioná-las para a equipe saber o que já foi feito.
+async function composeAlertMessage(hotelName: string, issues: DetectedIssue[], autoActionNotes: string[] = []): Promise<string> {
   const bulletList = issues.map((i) => `- ${i.description}`).join("\n");
+  const actionsList = autoActionNotes.length > 0 ? `\n\nAções que o agente já tomou automaticamente:\n${autoActionNotes.map((n) => `- ${n}`).join("\n")}` : "";
   try {
-    const prompt = `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Não use markdown. Não mencione que você é uma IA.`;
+    const prompt = `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}${actionsList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Se houver ações já tomadas automaticamente, mencione isso brevemente. Não use markdown. Não mencione que você é uma IA.`;
     const text = await generateSummaryText(prompt);
     return text.trim();
   } catch {
     // Se a chamada de IA falhar, ainda assim manda o alerta — só sem a redação natural.
-    return `Alertas operacionais em ${hotelName}:\n\n${bulletList}`;
+    return `Alertas operacionais em ${hotelName}:\n\n${bulletList}${actionsList}`;
   }
+}
+
+// Avisa diretamente a governanta responsável pelo quarto travado, em vez de só o alerta genérico —
+// só age quando há uma HousekeepingTask aberta com governanta já atribuída (senão não há quem
+// avisar de forma específica, mantém só o alerta padrão). Nunca muda o status do quarto sozinho:
+// quem decide que a limpeza acabou continua sendo a governanta, via o próprio app dela.
+async function nudgeHousekeeperForRoom(tenantId: string, roomId: string): Promise<string | null> {
+  const task = await prisma.housekeepingTask.findFirst({
+    where: { tenantId, roomId, status: { in: ["PENDING", "IN_PROGRESS"] }, housekeeperId: { not: null } },
+    include: { housekeeper: { select: { name: true, whatsapp: true } }, room: { select: { number: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!task?.housekeeper) return null;
+
+  const message = `Oi ${task.housekeeper.name}! O quarto ${task.room.number} está pendente de limpeza há um bom tempo. Pode dar uma prioridade nele?`;
+  const sent = await sendUazapiText(task.housekeeper.whatsapp, message, tenantId);
+  if (!sent) return null;
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId,
+      userName: "Agente de IA",
+      action: "AGENT_HOUSEKEEPING_NUDGE",
+      entityType: "ROOM",
+      entityId: roomId,
+      description: `Governanta ${task.housekeeper.name} avisada diretamente sobre o quarto ${task.room.number} parado.`,
+    },
+  });
+
+  return `Avisei ${task.housekeeper.name} (governanta responsável) diretamente sobre o quarto ${task.room.number}.`;
+}
+
+// Dá uma ÚNICA chance extra de reenvio automático para uma FNRH travada no SNRHos — nunca repete
+// mais que isso para o mesmo registro (verifica se já existe um AuditLog dessa ação para este
+// FNRHRecord antes de agir). O pipeline automático (snrhosTransmit.ts, roda a cada 5min) já tenta
+// MAX_ATTEMPTS=5 vezes por conta própria antes de um registro ser considerado "travado" — ou seja,
+// quando chega até aqui o problema quase sempre é um dado inválido (CEP/documento), não uma falha
+// transitória, então repetir a transmissão de novo tende a falhar pelo mesmo motivo. A ação segura
+// é só resetar o contador de tentativas para o pipeline automático pegar o registro de novo no
+// próximo ciclo dele — nunca chamar a transmissão diretamente daqui.
+async function maybeResetSnrhosAttempts(tenantId: string, fnrhRecordId: string): Promise<string | null> {
+  const alreadyTried = await prisma.auditLog.findFirst({
+    where: { tenantId, action: "AGENT_FNRH_RETRY_RESET", entityId: fnrhRecordId },
+  });
+  if (alreadyTried) return null;
+
+  await prisma.fNRHRecord.update({ where: { id: fnrhRecordId }, data: { snrhosAttempts: 0 } });
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId,
+      userName: "Agente de IA",
+      action: "AGENT_FNRH_RETRY_RESET",
+      entityType: "FNRH_RECORD",
+      entityId: fnrhRecordId,
+      description: "Contador de tentativas de transmissão SNRHos resetado — mais uma chance automática de envio, única vez para este registro.",
+    },
+  });
+
+  return "Dei mais uma chance de reenvio automático para a FNRH travada no SNRHos.";
+}
+
+// Executa as ações autônomas seguras (modo AUTONOMOUS_LIMITED) para os problemas novos detectados,
+// devolvendo notas em linguagem natural do que já foi feito, para compor o alerta. Nunca age sobre
+// problemas que não têm uma ação segura definida (PRECHECKIN_PENDING, WHATSAPP_DISCONNECTED, ou
+// quarto sem governanta atribuída) — esses continuam só alertando, como no modo ALERT_ONLY.
+async function runAutonomousActions(tenantId: string, issues: DetectedIssue[]): Promise<string[]> {
+  const notes: string[] = [];
+  for (const issue of issues) {
+    try {
+      if (issue.issueType === "ROOM_MAINTENANCE_STUCK" || issue.issueType === "ROOM_DIRTY_STUCK") {
+        const note = await nudgeHousekeeperForRoom(tenantId, issue.entityId);
+        if (note) notes.push(note);
+      } else if (issue.issueType === "SNRHOS_STUCK") {
+        const note = await maybeResetSnrhosAttempts(tenantId, issue.entityId);
+        if (note) notes.push(note);
+      }
+    } catch (err: any) {
+      console.error(`[operational-agent] falha na ação autônoma (${issue.issueType}, ${issue.entityId}):`, err?.message || err);
+    }
+  }
+  return notes;
 }
 
 /**
@@ -187,8 +272,11 @@ export async function runOperationalAgent(): Promise<void> {
       const newIssues = issues.filter((i) => !existingByKey.has(`${i.issueType}:${i.entityId}`));
       if (newIssues.length === 0) continue;
 
+      const autoActionNotes =
+        setting.operationalAutonomyMode === "AUTONOMOUS_LIMITED" ? await runAutonomousActions(setting.tenantId, newIssues) : [];
+
       const hotelName = setting.tenant.tradeName || setting.tenant.name;
-      const message = await composeAlertMessage(hotelName, newIssues);
+      const message = await composeAlertMessage(hotelName, newIssues, autoActionNotes);
       const sent = await sendUazapiText(setting.alertPhone!, message, setting.tenantId);
 
       if (sent) {
