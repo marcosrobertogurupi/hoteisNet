@@ -81,6 +81,7 @@ export default function SuperAdminDashboardPage() {
     planName: string | null;
     cpfQueryQuotaMonthly: number;
     cpfQueryUsed: number;
+    cpfQueryEnabled: boolean;
     planAiTokenQuota: number | null;
     aiSystemPromptExtra: string;
     aiTokenQuotaOverride: number | null;
@@ -155,6 +156,28 @@ export default function SuperAdminDashboardPage() {
       toast.error("Erro ao salvar configuração de IA do assinante.");
     } finally {
       setSavingAiSettingsId(null);
+    }
+  };
+
+  const handleToggleCpfEnabled = async (tenantId: string, enabled: boolean) => {
+    setSavingTenantQuotaId(tenantId);
+    try {
+      const res = await fetch(`/api/admin/tenants/${tenantId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cpfQueryEnabled: enabled }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(enabled ? "Consulta de CPF habilitada para este assinante." : "Consulta de CPF desabilitada para este assinante.");
+        setTenantQuotas((prev) => prev.map((t) => (t.id === tenantId ? { ...t, cpfQueryEnabled: enabled } : t)));
+      } else {
+        toast.error(data.error || "Erro ao atualizar habilitação da consulta de CPF.");
+      }
+    } catch {
+      toast.error("Erro ao atualizar habilitação da consulta de CPF.");
+    } finally {
+      setSavingTenantQuotaId(null);
     }
   };
 
@@ -849,19 +872,20 @@ export default function SuperAdminDashboardPage() {
                           <th className="text-left px-3 py-2">Plano</th>
                           <th className="text-left px-3 py-2">Uso no Mês</th>
                           <th className="text-left px-3 py-2">Cota Mensal</th>
+                          <th className="text-left px-3 py-2">Recurso</th>
                           <th className="text-left px-3 py-2">Ação</th>
                         </tr>
                       </thead>
                       <tbody>
                         {isLoadingTenantQuotas ? (
                           <tr>
-                            <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
+                            <td colSpan={6} className="px-3 py-4 text-center text-slate-500">
                               Carregando assinantes...
                             </td>
                           </tr>
                         ) : tenantQuotas.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
+                            <td colSpan={6} className="px-3 py-4 text-center text-slate-500">
                               Nenhum assinante cadastrado.
                             </td>
                           </tr>
@@ -888,6 +912,20 @@ export default function SuperAdminDashboardPage() {
                                   }
                                   className="w-24 bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-white font-mono font-bold"
                                 />
+                              </td>
+                              <td className="px-3 py-2">
+                                <button
+                                  type="button"
+                                  disabled={savingTenantQuotaId === t.id}
+                                  onClick={() => handleToggleCpfEnabled(t.id, !t.cpfQueryEnabled)}
+                                  className={`px-2.5 py-1 rounded-lg font-bold uppercase text-[10px] transition disabled:opacity-50 ${
+                                    t.cpfQueryEnabled
+                                      ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
+                                      : "bg-rose-500/20 text-rose-400 border border-rose-500/40 hover:bg-rose-500/30"
+                                  }`}
+                                >
+                                  {t.cpfQueryEnabled ? "Habilitado" : "Desabilitado"}
+                                </button>
                               </td>
                               <td className="px-3 py-2">
                                 <button

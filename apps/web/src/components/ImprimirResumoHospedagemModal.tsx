@@ -84,6 +84,8 @@ export const ImprimirResumoHospedagemModal: React.FC<ImprimirResumoHospedagemMod
   const descontos = roomData.descontos ?? 0.0;
   const saldoAPagar = roomData.saldoAPagar ?? totalDespesas - pagamentos - descontos;
 
+  const paymentItems = roomData.paymentItems ?? [];
+
   const consumptions = roomData.consumptionItems ?? [
     { dateTime: "31/01/2026 12:31:35", description: "REFRIG LATA", unitPrice: 6.0, quantity: 1.0, totalPrice: 6.0 },
     { dateTime: "31/01/2026 12:31:35", description: "LAV PEÇA GRANDE", unitPrice: 7.0, quantity: 8.0, totalPrice: 56.0 },
@@ -313,6 +315,20 @@ export const ImprimirResumoHospedagemModal: React.FC<ImprimirResumoHospedagemMod
               <div>Forma pagamento</div>
             </div>
 
+            {paymentItems.length === 0 ? (
+              <div className="text-[11px] text-slate-500 italic pb-1">Nenhum pagamento lançado.</div>
+            ) : (
+              <div className="divide-y divide-slate-200">
+                {paymentItems.map((p, idx) => (
+                  <div key={idx} className="grid grid-cols-3 text-[11px] py-0.5">
+                    <div>{p.dateTime}</div>
+                    <div>R$ {p.amount.toFixed(2).replace(".", ",")}</div>
+                    <div className="uppercase">{p.paymentMethod}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="pt-1 space-y-1 text-xs w-80">
               <div className="flex justify-between">
                 <span>Pagamentos(R$)..:</span>
@@ -326,10 +342,22 @@ export const ImprimirResumoHospedagemModal: React.FC<ImprimirResumoHospedagemMod
                 <span>Descontos......:</span>
                 <span className="font-semibold">R$ {descontos.toFixed(2).replace(".", ",")}</span>
               </div>
-              <div className="flex justify-between pt-1 border-t border-slate-400 font-bold text-slate-900">
-                <span>Saldo a pagar..:</span>
-                <span>R$ {saldoAPagar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
-              </div>
+              {/* Faturamento (a prazo, para a empresa conveniada) e saldo a pagar (do próprio
+                  hóspede, no ato) são dívidas de naturezas diferentes — exibir as duas linhas
+                  sempre que ambas existirem, para o documento assinado não esconder um saldo
+                  residual que o hóspede ainda deve além do que foi faturado. */}
+              {totalAFaturar > 0 && (
+                <div className="flex justify-between pt-1 border-t border-slate-400 font-bold text-slate-900">
+                  <span>Total a Faturar:</span>
+                  <span>R$ {totalAFaturar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                </div>
+              )}
+              {(saldoAPagar > 0 || totalAFaturar <= 0) && (
+                <div className={`flex justify-between font-bold text-slate-900 ${totalAFaturar > 0 ? "" : "pt-1 border-t border-slate-400"}`}>
+                  <span>Saldo a pagar..:</span>
+                  <span>R$ {saldoAPagar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                </div>
+              )}
             </div>
           </div>
 

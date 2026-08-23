@@ -42,6 +42,7 @@ import {
   Bot,
   ListChecks,
   UserCheck,
+  Percent,
 } from "lucide-react";
 
 export default function SubscriberSettingsPage() {
@@ -127,6 +128,10 @@ export default function SubscriberSettingsPage() {
   // quando o saldo disponível é insuficiente, em vez de bloquear o lançamento.
   const [allowNegativeStockInput, setAllowNegativeStockInput] = useState(false);
   const [breakfastHoursInput, setBreakfastHoursInput] = useState("");
+
+  // Percentual máximo de desconto que um operador comum pode aplicar no check-in sem
+  // autorização de administrador — acima disso, o modal de check-in exige senha de admin.
+  const [maxDiscountPercentInput, setMaxDiscountPercentInput] = useState(20);
 
   // Mensagens automáticas de WhatsApp para o hóspede (confirmação de reserva, boas-vindas no
   // check-in, previsão de check-out e check-out) — persistidas no Tenant e lidas pelo worker
@@ -391,6 +396,9 @@ export default function SubscriberSettingsPage() {
         if (data.success) {
           setBreakfastHoursInput(data.settings?.breakfastHours || "");
         }
+        if (data.success && typeof data.settings?.maxDiscountPercent === "number") {
+          setMaxDiscountPercentInput(data.settings.maxDiscountPercent);
+        }
       })
       .catch(() => {});
 
@@ -480,6 +488,7 @@ export default function SubscriberSettingsPage() {
           dailyRolloverTime: dailyRolloverTimeInput,
           allowNegativeStock: allowNegativeStockInput,
           breakfastHours: breakfastHoursInput,
+          maxDiscountPercent: maxDiscountPercentInput,
         }),
       });
       const data = await res.json();
@@ -1169,6 +1178,54 @@ export default function SubscriberSettingsPage() {
             </span>
           </div>
         </label>
+      </div>
+
+      {/* SECTION 3.6.5: Desconto Máximo sem Autorização (Check-in) */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-500">
+            <Percent className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">Desconto Máximo sem Autorização</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Acima deste percentual do valor da hospedagem, o check-in exige senha de administrador
+              para aplicar o desconto — igual à cortesia de chegada de madrugada.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold block">
+              Desconto máximo sem autorização (%)
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step="0.5"
+                value={maxDiscountPercentInput}
+                onChange={(e) => setMaxDiscountPercentInput(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                className={`w-full border rounded-xl px-4 py-2.5 pr-10 text-sm focus:outline-none focus:border-amber-500 ${
+                  theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+                }`}
+              />
+              <span className={`absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold ${theme.textMuted}`}>%</span>
+            </div>
+          </div>
+
+          <div className={`p-4 rounded-xl border text-xs font-mono space-y-1 ${
+            theme.isDark ? "bg-slate-950 border-slate-800 text-slate-300" : "bg-slate-50 border-slate-200 text-slate-700"
+          }`}>
+            <p className="text-[11px] font-semibold text-amber-500 uppercase tracking-wider flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5" /> Exemplo
+            </p>
+            <p>Diária R$ 200,00, desconto até {(200 * maxDiscountPercentInput / 100).toFixed(2).replace(".", ",")} → recepcionista aplica direto.</p>
+            <p>Desconto maior que isso → exige senha de administrador.</p>
+          </div>
+        </div>
       </div>
 
       {/* SECTION 3.7: Governança de Quartos — Modo de Atribuição de Limpeza */}

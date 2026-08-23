@@ -88,10 +88,13 @@ export interface LancarPagamentoHospedagemModalProps {
   onOpenExtrato?: () => void;
   // Chamado ao clicar em "Imprimir resumo de hospedagem" — abre o Resumo de Hospedagem real por cima deste modal.
   onOpenResumo?: () => void;
-  // Quando o modal é aberto a partir do item "Encerrar Hospedagem (Checkout)" do menu de contexto,
-  // o botão principal já deve exibir "Check-out" (em vez de "Salvar Crédito") para não confundir o usuário,
-  // mesmo que ainda haja saldo a pagar.
-  checkoutIntent?: boolean;
+  // "payment" (padrão): lança pagamentos/adiantamentos na hospedagem sem nunca encerrá-la — botão
+  // fixo em "Salvar Crédito", mesmo que o saldo chegue a zero ou os pagamentos ultrapassem o débito
+  // (o excedente vira crédito no saldo do hóspede automaticamente via processPaymentLine).
+  // "checkout": único modo que efetivamente encerra a hospedagem (chama onCheckoutConfirmed) — só
+  // permitido quando o débito está zerado; aberto pelo item "Encerrar Hospedagem" do menu de
+  // contexto ou por duplo-clique no quarto ocupado, as duas únicas portas de entrada do check-out.
+  mode?: "payment" | "checkout";
 }
 
 interface PaymentMethodOption {
@@ -112,8 +115,9 @@ export default function LancarPagamentoHospedagemModal({
   onOpenConsumo,
   onOpenExtrato,
   onOpenResumo,
-  checkoutIntent = false,
+  mode = "payment",
 }: LancarPagamentoHospedagemModalProps) {
+  const isCheckoutMode = mode === "checkout";
   const {
     theme,
     hotelName,
@@ -163,6 +167,16 @@ export default function LancarPagamentoHospedagemModal({
   useEffect(() => {
     setPayments(stayData.initialPayments || []);
   }, [stayData.initialPayments]);
+
+  // Faturas (formas de pagamento com Parcelamento) só são aceitas pela empresa faturada se o
+  // hóspede assinar o Resumo de Hospedagem no ato do check-out. Fica true assim que o operador
+  // opta por imprimir o resumo a partir do aviso obrigatório abaixo, liberando o check-out na
+  // próxima tentativa. Reseta ao trocar de hospedagem, para não "vazar" a confirmação de uma
+  // hospedagem para a próxima que o modal exibir.
+  const [resumoAcknowledgedForSignature, setResumoAcknowledgedForSignature] = useState(false);
+  useEffect(() => {
+    setResumoAcknowledgedForSignature(false);
+  }, [stayData.idHospedagem]);
 
   // Observations State
   const [observations, setObservations] = useState<ObservationLog[]>(
@@ -638,9 +652,48 @@ export default function LancarPagamentoHospedagemModal({
     toast.info("Observação adicionada com sucesso.", "Observação");
   };
 
-  // Save Credit Button Handler — grava no caixa, em uma única transação, todos os lançamentos
-  // ainda pendentes (adicionados com "+" mas sem caixaMovimentoId), igual ao BTN_FinalizarHospedagem
-  // do sistema WinDev original. Só depois disso decide se pergunta o check-out.
+  // Verifica se alguma forma de pagamento lançada nesta hospedagem (já persistida ou recém
+  // adicionada) é de Parcelamento (ex.: FATURA) — cobrança que só a empresa faturada aceita se o
+  // hóspede tiver assinado o Resumo de Hospedagem impresso no check-out.
+  const hasInstallmentPayment = () =>
+    payments.some((p) => {
+      const pm = paymentMethods.find(
+        (m) => m.description.toLowerCase() === p.methodDescription.toLowerCase()
+      );
+      return !!pm?.installment;
+    });
+
+  // Efetiva o check-out, mas antes bloqueia e exige a impressão do Resumo de Hospedagem se houver
+  // pagamento por Parcelamento (fatura) — sem a assinatura do hóspede nesse resumo, a empresa
+  // faturada não aceita a cobrança.
+  const proceedToCheckout = async () => {
+    if (hasInstallmentPayment() && !resumoAcknowledgedForSignature) {
+      const wantsPrint = await confirmDialog({
+        title: "Impressão Obrigatória — Pagamento por Fatura",
+        message:
+          `Esta hospedagem tem pagamento por FATURA (parcelamento), que a empresa só aceita com a assinatura do hóspede no Resumo de Hospedagem.\n\n` +
+          `Imprima o resumo, colha a assinatura do hóspede e clique em "Check-out" novamente para concluir.`,
+        confirmLabel: "Imprimir Resumo Agora",
+        cancelLabel: "Cancelar",
+      });
+      if (wantsPrint) {
+        setResumoAcknowledgedForSignature(true);
+        onOpenResumo?.();
+      }
+      return;
+    }
+    onCheckoutConfirmed?.();
+    onClose();
+  };
+
+  // Save Credit / Check-out Button Handler — grava no caixa, em uma única transação, todos os
+  // lançamentos ainda pendentes (adicionados com "+" mas sem caixaMovimentoId), igual ao
+  // BTN_FinalizarHospedagem do sistema WinDev original. O que acontece depois de gravar depende
+  // do modo: em "payment" a hospedagem NUNCA é encerrada por aqui, mesmo com saldo zerado — esse
+  // botão só existe para lançar adiantamentos/pagamentos. Em "checkout" o check-out é efetivado
+  // direto (sem perguntar de novo — o usuário já expressou essa intenção ao abrir esta tela pelo
+  // duplo-clique no quarto ou pelo item "Encerrar Hospedagem"), e só é bloqueado se ainda houver
+  // débito pendente.
   const handleSaveCredit = async () => {
     if (isSaving) return; // evita duplo envio por cliques repetidos enquanto a gravação está em andamento
 
@@ -649,20 +702,15 @@ export default function LancarPagamentoHospedagemModal({
 
     // Nada foi incluído, excluído ou alterado nesta sessão: não há o que gravar no caixa.
     if (pendingPayments.length === 0 && pendingDeletions.length === 0 && !discountChanged) {
-      // Mas se a conta já está quitada (ex.: zerada por uma Transferência de Débito antes de abrir
-      // esta tela), não há pagamento novo a lançar — pula direto para a pergunta de check-out, em
-      // vez de só informar "Nada a Salvar" e fechar sem dar chance de encerrar a hospedagem.
-      if (saldoAPagar <= 0.001) {
-        const wantsCheckout = await confirmDialog({
-          title: "Conta Quitada",
-          message: `O débito da hospedagem do Quarto ${stayData.roomNumber} está quitado.\n\nDeseja efetuar o check-out do hóspede agora?`,
-          confirmLabel: "Fazer Check-out",
-          cancelLabel: "Agora Não",
-        });
-        if (wantsCheckout) {
-          onCheckoutConfirmed?.();
+      if (isCheckoutMode) {
+        if (saldoAPagar <= 0.001) {
+          await proceedToCheckout();
+        } else {
+          toast.warning(
+            `Ainda há saldo devedor de ${fmtCurrency(saldoAPagar)} no Quarto ${stayData.roomNumber}. Quite o débito para concluir o check-out.`,
+            "Check-out Não Concluído"
+          );
         }
-        onClose();
         return;
       }
 
@@ -741,35 +789,34 @@ export default function LancarPagamentoHospedagemModal({
       });
     }
 
-    // Débito quitado (saldo zerado ou negativo): pergunta se deseja efetuar o check-out.
-    // Débito ainda pendente: o lançamento fica registrado como haver/crédito e a hospedagem permanece aberta.
     const isQuitado = saldoAPagar <= 0.001;
 
-    if (isQuitado) {
-      toast.success(
-        `Débito da hospedagem do Quarto ${stayData.roomNumber} totalmente quitado!\n\n` +
-        `Total Pagamentos: ${fmtCurrency(totalPagamentos)}`,
-        "Conta Quitada"
-      );
-      const wantsCheckout = await confirmDialog({
-        title: "Conta Quitada",
-        message: `O débito da hospedagem do Quarto ${stayData.roomNumber} foi totalmente quitado.\n\nDeseja efetuar o check-out do hóspede agora?`,
-        confirmLabel: "Fazer Check-out",
-        cancelLabel: "Agora Não",
-      });
-      if (wantsCheckout) {
-        onCheckoutConfirmed?.();
-      }
-    } else {
+    if (!isCheckoutMode) {
+      // Modo "Lançar Pagamento na Hospedagem": só grava o crédito e nunca oferece/faz check-out,
+      // mesmo que o saldo tenha zerado — a hospedagem permanece aberta até o operador encerrá-la
+      // explicitamente pelo duplo-clique no quarto ou pelo item "Encerrar Hospedagem".
       toast.success(
         `Crédito de ${fmtCurrency(totalPagamentos)} lançado com sucesso para o Quarto ${stayData.roomNumber}.\n\n` +
-        `Saldo Restante a Pagar: ${fmtCurrency(saldoAPagar)}\n` +
-        `A hospedagem permanece em aberto (lançado como haver/crédito).`,
+        (isQuitado
+          ? "Débito da hospedagem quitado. A hospedagem permanece em aberto."
+          : `Saldo Restante a Pagar: ${fmtCurrency(saldoAPagar)}\nA hospedagem permanece em aberto (lançado como haver/crédito).`),
         "Crédito Lançado"
       );
+      onClose();
+      return;
     }
 
-    onClose();
+    // Modo "Check-out": débito quitado -> encerra a hospedagem direto (a intenção já foi
+    // confirmada ao abrir esta tela). Débito pendente -> salva o pagamento mas NÃO encerra.
+    if (isQuitado) {
+      await proceedToCheckout();
+    } else {
+      toast.warning(
+        `Pagamento de ${fmtCurrency(totalPagamentos)} registrado, mas ainda há saldo devedor de ${fmtCurrency(saldoAPagar)} no Quarto ${stayData.roomNumber}.\n\n` +
+        `Quite o débito para concluir o check-out.`,
+        "Check-out Não Concluído"
+      );
+    }
   };
 
 
@@ -788,7 +835,7 @@ export default function LancarPagamentoHospedagemModal({
           <div className="flex items-center gap-2">
             <Building2 className="w-5 h-5 text-sky-200" />
             <h2 className="font-bold text-sm tracking-wide">
-              Check-out/lançamento de crédito
+              {isCheckoutMode ? "Check-out / Encerramento de Hospedagem" : "Lançar Pagamento na Hospedagem"}
             </h2>
           </div>
           <button
@@ -1274,17 +1321,17 @@ export default function LancarPagamentoHospedagemModal({
                 <button
                   onClick={handleSaveCredit}
                   disabled={isSaving}
-                  title={isSaving ? "Gravando no caixa... Aguarde" : saldoAPagar <= 0.001 || checkoutIntent ? "Fazer Check-out" : "Salvar Crédito"}
+                  title={isSaving ? "Gravando no caixa... Aguarde" : isCheckoutMode ? "Fazer Check-out" : "Salvar Crédito"}
                   className="w-full py-3 px-4 rounded-xl bg-[#00BCD4] hover:bg-cyan-600 text-white font-extrabold text-base flex items-center justify-center gap-2 shadow-lg transition-all transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isSaving ? (
                     <Loader2 className="w-6 h-6 animate-spin" />
-                  ) : saldoAPagar <= 0.001 || checkoutIntent ? (
+                  ) : isCheckoutMode ? (
                     <LogOut className="w-6 h-6 stroke-[3]" />
                   ) : (
                     <Check className="w-6 h-6 stroke-[3]" />
                   )}
-                  {isSaving ? "Gravando... Aguarde" : saldoAPagar <= 0.001 || checkoutIntent ? "Check-out" : "Salvar Crédito"}
+                  {isSaving ? "Gravando... Aguarde" : isCheckoutMode ? "Check-out" : "Salvar Crédito"}
                 </button>
               </div>
             </div>

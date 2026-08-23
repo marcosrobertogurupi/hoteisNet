@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
         cpfQueryQuotaMonthly: true,
         cpfQueryUsed: true,
         cpfQueryCycleStart: true,
+        cpfQueryEnabled: true,
         subscriptions: {
           where: { active: true },
           orderBy: { startDate: "desc" },
@@ -51,6 +52,7 @@ export async function GET(req: NextRequest) {
         cpfQueryQuotaMonthly: t.cpfQueryQuotaMonthly,
         cpfQueryUsed: t.cpfQueryUsed,
         cpfQueryCycleStart: t.cpfQueryCycleStart,
+        cpfQueryEnabled: t.cpfQueryEnabled,
         aiSystemPromptExtra: t.aiAgentSettings?.systemPromptExtra || "",
         aiTokenQuotaOverride: t.aiAgentSettings?.tokenQuotaOverride ?? null,
         aiBlocked: t.aiAgentSettings?.blocked || false,

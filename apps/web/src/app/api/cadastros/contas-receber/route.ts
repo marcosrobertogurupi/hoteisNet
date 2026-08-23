@@ -21,7 +21,11 @@ export async function GET(req: NextRequest) {
     const receivables = await prisma.accountsReceivable.findMany({
       where,
       orderBy: { dueDate: "asc" },
-      include: { settlements: { orderBy: { paidAt: "desc" } } },
+      include: {
+        settlements: { orderBy: { paidAt: "desc" } },
+        guest: { select: { id: true, fullName: true } },
+        company: { select: { id: true, name: true } },
+      },
     });
 
     return NextResponse.json({ success: true, receivables });

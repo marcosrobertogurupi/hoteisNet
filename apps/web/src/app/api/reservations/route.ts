@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
-import { resolveRoomId } from "@/lib/reservationHelpers";
+import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
+
+// Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
+// de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
+class ReservationConflictError extends Error {}
 
 // Calcula até quando o quarto está efetivamente ocupado, com base nas diárias já lançadas na
 // hospedagem (StayCheckin.dailiesCount, incrementado pelo rollover automático de diária). Retorna
@@ -161,6 +165,18 @@ export async function POST(req: NextRequest) {
 
     const result = await prisma.$transaction(async (tx) => {
       const realRoomId = await resolveRoomId(tx as any, String(roomId), tenantId);
+      const checkIn = new Date(checkInDate);
+      const checkOut = new Date(checkOutDate);
+
+      // Bloqueia overbooking: mesmo padrão já usado em /api/reservations/batch e /api/stay/period —
+      // a checagem roda dentro da própria transação para ser atômica (nunca só uma validação de UI).
+      const conflict = await findConflictingReservation(tx as any, realRoomId, checkIn, checkOut);
+      if (conflict) {
+        throw new ReservationConflictError(
+          `Já existe uma reserva confirmada para este quarto neste período (reserva de "${conflict.guestName}").`
+        );
+      }
+
       const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
       const finalTotal = totalAmount || totalDiarias || 0;
 
@@ -172,8 +188,8 @@ export async function POST(req: NextRequest) {
           guestCpf: guestCpf || null,
           guestPhone: guestPhone || null,
           guestId: guestId || null,
-          checkInDate: new Date(checkInDate),
-          checkOutDate: new Date(checkOutDate),
+          checkInDate: checkIn,
+          checkOutDate: checkOut,
           tariffId,
           tariffName: tariffName || null,
           dailyRate: dailyRate || 0,
@@ -251,7 +267,11 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("[POST /api/reservations] Erro:", error);
-    return NextResponse.json({ success: false, error: error.message || "Erro interno ao salvar reserva." });
+    const status = error instanceof ReservationConflictError ? 409 : undefined;
+    return NextResponse.json(
+      { success: false, error: error.message || "Erro interno ao salvar reserva." },
+      status ? { status } : undefined
+    );
   }
 }
 
@@ -280,12 +300,38 @@ export async function PATCH(req: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
+      const existing = await tx.reservation.findFirst({ where: { id, tenantId } });
+      if (!existing) {
+        throw new Error(`Reserva ${id} não encontrada.`);
+      }
+
       const realRoomId = roomId ? await resolveRoomId(tx as any, String(roomId), tenantId) : undefined;
+      const effectiveCheckIn = checkInDate ? new Date(checkInDate) : existing.checkInDate;
+      const effectiveCheckOut = checkOutDate ? new Date(checkOutDate) : existing.checkOutDate;
+
+      // Bloqueia overbooking na edição/movimentação (inclui o drag-and-drop no Mapa de Reservas) —
+      // mesmo padrão de findConflictingReservation usado em batch/route.ts e stay/period/route.ts.
+      // Só precisa checar quando quarto e/ou datas realmente mudam; edições de outros campos
+      // (nome, notas, etc.) não afetam ocupação e não precisam revalidar o período.
+      if (realRoomId !== undefined || checkInDate || checkOutDate) {
+        const conflict = await findConflictingReservation(
+          tx as any,
+          realRoomId ?? existing.roomId,
+          effectiveCheckIn,
+          effectiveCheckOut,
+          id
+        );
+        if (conflict) {
+          throw new ReservationConflictError(
+            `Já existe uma reserva confirmada para este quarto neste período (reserva de "${conflict.guestName}").`
+          );
+        }
+      }
 
       const data: Record<string, unknown> = {};
       if (realRoomId !== undefined) data.roomId = realRoomId;
-      if (checkInDate) data.checkInDate = new Date(checkInDate);
-      if (checkOutDate) data.checkOutDate = new Date(checkOutDate);
+      if (checkInDate) data.checkInDate = effectiveCheckIn;
+      if (checkOutDate) data.checkOutDate = effectiveCheckOut;
       if (guestName) data.guestName = guestName;
       if (guestCpf !== undefined) data.guestCpf = guestCpf;
       if (guestPhone !== undefined) data.guestPhone = guestPhone;
@@ -328,11 +374,18 @@ export async function PATCH(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("[PATCH /api/reservations] Erro:", error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    const status = error instanceof ReservationConflictError ? 409 : 500;
+    return NextResponse.json({ success: false, error: error.message }, { status });
   }
 }
 
-// DELETE /api/reservations — exclui/cancela uma reserva (restrito a administradores)
+// DELETE /api/reservations — cancela uma reserva (restrito a administradores). Nunca apaga a
+// linha do banco (soft-cancel, status = CANCELLED) — mesmo padrão do cancelamento feito pelo
+// agente de IA (ver cancelReservationForAgent em apps/web/src/lib/aiAgent/tools.ts). Uma vez
+// CANCELLED, a reserva já é tratada como "não bloqueia mais o quarto": findConflictingReservation
+// (apps/web/src/lib/reservationHelpers.ts) filtra status CANCELLED/CHECKED_OUT ao checar
+// overbooking, e o Mapa de Reservas (ReservationGridMap.tsx) já ignora CANCELLED tanto na exibição
+// quanto na checagem local de sobreposição.
 export async function DELETE(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
@@ -347,14 +400,21 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "ID da reserva é obrigatório." }, { status: 400 });
     }
 
-    await prisma.reservation.deleteMany({ where: { id, tenantId } });
+    const updated = await prisma.reservation.updateMany({
+      where: { id, tenantId },
+      data: { status: "CANCELLED" },
+    });
+
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: `Reserva ${id} não encontrada.` }, { status: 404 });
+    }
 
     await logActivity({
       tenantId,
       userId: session!.userId,
       userName: session!.name,
-      action: "RESERVATION_DELETE",
-      description: `${session!.name} excluiu a reserva ${id}.`,
+      action: "RESERVATION_CANCEL",
+      description: `${session!.name} cancelou a reserva ${id}.`,
       entityType: "RESERVATION",
       entityId: id,
       terminal: getTerminalName(req),
@@ -363,7 +423,7 @@ export async function DELETE(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Reserva ${id} removida com sucesso!`,
+      message: `Reserva ${id} cancelada com sucesso!`,
     });
   } catch (error: any) {
     console.error("[DELETE /api/reservations] Erro:", error);

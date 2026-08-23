@@ -7,8 +7,8 @@ const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 // Master Token da Hub do Desenvolvedor: HoteisNet compra o crédito e revende aos
 // assinantes através da cota mensal configurada por assinante (Tenant.cpfQueryQuotaMonthly).
 // Só é configurável no Painel SuperAdmin / variáveis de ambiente — nunca pelo assinante.
-const DEFAULT_HUB_TOKEN = "183262310hxRtwiDQAo330874544";
-const DEFAULT_HUB_CONTRACT = "c2NqUUo0bFBLYzhuRmhrUWtvMXhUcjg4ZHFiTitCK1hBT3M4TDlRenllVT0=";
+// Sem fallback literal no código: se as variáveis de ambiente não existirem, a consulta
+// simplesmente não funciona (branch "Nenhuma chave configurada" no fim deste arquivo).
 
 export async function GET(req: NextRequest) {
   try {
@@ -28,11 +28,22 @@ export async function GET(req: NextRequest) {
 
     let tenant = await prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { id: true, cpfQueryQuotaMonthly: true, cpfQueryUsed: true, cpfQueryCycleStart: true },
+      select: { id: true, cpfQueryQuotaMonthly: true, cpfQueryUsed: true, cpfQueryCycleStart: true, cpfQueryEnabled: true },
     });
 
     if (!tenant) {
       return NextResponse.json({ success: false, message: "Assinante não encontrado." }, { status: 404 });
+    }
+
+    if (!tenant.cpfQueryEnabled) {
+      return NextResponse.json(
+        {
+          success: false,
+          serviceDisabled: true,
+          message: "A consulta de CPF não está habilitada para o seu plano. Entre em contato com o suporte para ativar.",
+        },
+        { status: 403 }
+      );
     }
 
     // Reinicia a cota mensal automaticamente quando o ciclo atual é de um mês anterior.
@@ -45,7 +56,7 @@ export async function GET(req: NextRequest) {
       tenant = await prisma.tenant.update({
         where: { id: tenant.id },
         data: { cpfQueryUsed: 0, cpfQueryCycleStart: now },
-        select: { id: true, cpfQueryQuotaMonthly: true, cpfQueryUsed: true, cpfQueryCycleStart: true },
+        select: { id: true, cpfQueryQuotaMonthly: true, cpfQueryUsed: true, cpfQueryCycleStart: true, cpfQueryEnabled: true },
       });
     }
 
@@ -66,12 +77,12 @@ export async function GET(req: NextRequest) {
       process.env.HUB_DEV_TOKEN ||
       process.env.HUB_DEV_CLIENT_ID ||
       process.env.HUB_DEV_API_KEY ||
-      DEFAULT_HUB_TOKEN;
+      "";
 
     const hubContract =
       process.env.HUB_DESENVOLVEDOR_CONTRACT ||
       process.env.HUB_DEV_CONTRACT ||
-      DEFAULT_HUB_CONTRACT;
+      "";
 
     if (hubToken && hubToken.trim() !== "" && !hubToken.includes("your-")) {
       try {

@@ -261,11 +261,24 @@ export async function runOperationalAgent(): Promise<void> {
       const currentKeys = new Set(issues.map((i) => `${i.issueType}:${i.entityId}`));
 
       // Problemas resolvidos desde o último ciclo — remove o log para poder alertar de novo se
-      // a mesma entidade voltar a apresentar o mesmo problema no futuro.
+      // a mesma entidade voltar a apresentar o mesmo problema no futuro, e fecha sozinho o sino de
+      // alerta correspondente (ex.: quarto sujo há +6h que a governanta já limpou) — sem isso o
+      // alerta ficava pendente pra sempre esperando alguém clicar em "marcar como resolvido" mesmo
+      // depois do problema já ter sumido.
       const resolvedKeys = [...existingByKey.keys()].filter((k) => !currentKeys.has(k));
       if (resolvedKeys.length > 0) {
+        const resolvedIssues = resolvedKeys.map((k) => existingByKey.get(k)!);
         await prisma.operationalAlertLog.deleteMany({
-          where: { tenantId: setting.tenantId, id: { in: resolvedKeys.map((k) => existingByKey.get(k)!.id) } },
+          where: { tenantId: setting.tenantId, id: { in: resolvedIssues.map((l) => l.id) } },
+        });
+        await prisma.humanEscalation.updateMany({
+          where: {
+            tenantId: setting.tenantId,
+            source: "OPERATIONAL_AGENT",
+            resolved: false,
+            OR: resolvedIssues.map((l) => ({ entityType: l.issueType, entityId: l.entityId })),
+          },
+          data: { resolved: true, resolvedAt: new Date() },
         });
       }
 

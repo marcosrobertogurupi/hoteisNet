@@ -36,6 +36,11 @@ function HumanEscalationBell() {
   const [open, setOpen] = useState(false);
   const [pulsing, setPulsing] = useState(false);
 
+  // Alertas do Agente Operacional só existem quando algo já ultrapassou o limite (ex.: quarto
+  // aguardando limpeza há mais de 6h) — por isso são sempre tratados como prioridade e piscam
+  // até serem resolvidos, em vez do pulso de 4s usado para qualquer chegada nova.
+  const hasPriorityAlert = escalations.some((e) => e.source === "OPERATIONAL_AGENT");
+
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/tenant/human-escalations?resolved=false");
@@ -73,7 +78,11 @@ function HumanEscalationBell() {
       >
         <Bell className="w-4 h-4" />
         {escalations.length > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+          <span
+            className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-white text-[10px] font-bold flex items-center justify-center ${
+              hasPriorityAlert ? "animate-human-escalation-blink" : "bg-red-500"
+            }`}
+          >
             {escalations.length}
           </span>
         )}
@@ -89,7 +98,10 @@ function HumanEscalationBell() {
             ) : (
               <div className="divide-y divide-slate-800/30">
                 {escalations.map((e) => (
-                  <div key={e.id} className="p-3 space-y-1.5">
+                  <div
+                    key={e.id}
+                    className={`p-3 space-y-1.5 ${e.source === "OPERATIONAL_AGENT" ? "border-l-2 border-red-500 bg-red-500/5" : ""}`}
+                  >
                     <div className="flex items-center gap-1.5 text-[11px] font-semibold">
                       {e.source === "SUPPORT_AGENT" ? <Bot className="w-3.5 h-3.5 text-violet-500" /> : <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />}
                       {e.source === "SUPPORT_AGENT" ? "Agente de Atendimento" : "Agente Operacional"}

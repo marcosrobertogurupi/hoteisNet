@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
+import { useToast } from "@/context/ToastContext";
 import CadastroEmpresaModal, { EmpresaFormData } from "@/components/CadastroEmpresaModal";
 import LoadingOverlay from "@/components/LoadingOverlay";
 
@@ -21,6 +22,7 @@ export default function EmpresasPage() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
   const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [empresas, setEmpresas] = useState<EmpresaFormData[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -35,46 +37,34 @@ export default function EmpresasPage() {
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.companies)) return;
 
-      setEmpresas((prevList) => {
-        const prevMap = new Map(prevList.map((e) => [e.id, e]));
+      const updatedList: EmpresaFormData[] = data.companies.map((c: any) => ({
+        id: c.id,
+        cnpj: c.cnpj || "",
+        razao: c.name,
+        fantasia: c.tradeName || "",
+        ie: c.ie || "",
+        cep: c.zipCode || "",
+        logradouro: c.address || "",
+        numero: c.number || "",
+        complEnder: c.complement || "",
+        bairro: c.neighborhood || "",
+        cidade: c.city || "",
+        uf: c.state || "",
+        cepCobr: c.billingZipCode || "",
+        logradouroCobr: c.billingAddress || "",
+        numeroCobr: c.billingNumber || "",
+        complEnderCobr: c.billingComplement || "",
+        bairroCobr: c.billingNeighborhood || "",
+        cidadeCobr: c.billingCity || "",
+        ufCobr: c.billingState || "",
+        telefones: Array.isArray(c.phones) ? c.phones : [],
+        emails: Array.isArray(c.emails) ? c.emails : [],
+        observacao: c.notes || "",
+      }));
 
-        const updatedList: EmpresaFormData[] = data.companies.map((c: any) => {
-          const existing = prevMap.get(c.id);
-          const rName = c.name;
-          const tName = c.tradeName || c.name;
-          const cnpjStr = c.cnpj || "Sem CNPJ";
-          const ph = c.phone || "";
-          const em = c.email || "";
-
-          if (existing) {
-            if (existing.razao === rName && existing.cnpj === cnpjStr) {
-              return existing;
-            }
-            return { ...existing, razao: rName, fantasia: tName, cnpj: cnpjStr };
-          }
-
-          return {
-            id: c.id,
-            cnpj: cnpjStr,
-            razao: rName,
-            fantasia: tName,
-            ie: "ISENTO",
-            cep: "77400-000",
-            logradouro: c.address || "Centro",
-            numero: "100",
-            bairro: "Centro",
-            cidade: c.city || "Gurupi",
-            uf: c.state || "TO",
-            telefones: ph ? [{ telefone: ph, descricao: "Comercial", telPrincipal: true }] : [],
-            emails: em ? [{ email: em, emailPrincipal: true }] : [],
-            observacao: `Prazo de Pagamento: ${c.paymentTerms || 15} dias.`,
-          };
-        });
-
-        return updatedList;
-      });
+      setEmpresas(updatedList);
     } catch (err) {
-      console.warn("[CadastroEmpresas] Erro na sincronização transparente:", err);
+      console.warn("[CadastroEmpresas] Erro ao buscar empresas:", err);
     } finally {
       setIsLoadingEmpresas(false);
     }
@@ -82,8 +72,6 @@ export default function EmpresasPage() {
 
   useEffect(() => {
     syncEmpresasFromDatabase();
-    const interval = setInterval(syncEmpresasFromDatabase, 3000);
-    return () => clearInterval(interval);
   }, [syncEmpresasFromDatabase]);
 
   const filteredEmpresas = empresas.filter((emp) =>
@@ -111,22 +99,40 @@ export default function EmpresasPage() {
       confirmLabel: "Excluir",
       variant: "danger",
     });
-    if (ok) {
-      setEmpresas((prev) => prev.filter((e) => e.id !== id));
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/cadastros/empresas?id=${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!data.success) {
+        toast.error(data.error || "Não foi possível excluir a empresa.");
+        return;
+      }
+      toast.success("Empresa excluída com sucesso.");
+      await syncEmpresasFromDatabase();
+    } catch (err: any) {
+      toast.error("Erro de conexão ao excluir a empresa.");
     }
   };
 
-  const handleSaveEmpresa = (data: EmpresaFormData) => {
-    if (data.id) {
-      setEmpresas((prev) => prev.map((e) => (e.id === data.id ? data : e)));
-    } else {
-      const newEmp: EmpresaFormData = {
-        ...data,
-        id: `EMP-${Math.floor(100 + Math.random() * 900)}`,
-      };
-      setEmpresas((prev) => [newEmp, ...prev]);
+  const handleSaveEmpresa = async (data: EmpresaFormData) => {
+    try {
+      const res = await fetch(`/api/cadastros/empresas`, {
+        method: data.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const result = await res.json();
+      if (!result.success) {
+        toast.error(result.error || "Não foi possível salvar a empresa.");
+        return;
+      }
+      toast.success(data.id ? "Empresa atualizada com sucesso." : "Empresa cadastrada com sucesso.");
+      await syncEmpresasFromDatabase();
+      setIsModalOpen(false);
+    } catch (err: any) {
+      toast.error("Erro de conexão ao salvar a empresa.");
     }
-    setIsModalOpen(false);
   };
 
   return (

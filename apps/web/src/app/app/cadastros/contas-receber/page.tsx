@@ -29,6 +29,10 @@ interface Receivable {
   paymentMethodDescription: string;
   notes: string | null;
   settlements: Settlement[];
+  companyId: string | null;
+  guestId: string | null;
+  guest: { id: string; fullName: string } | null;
+  company: { id: string; name: string } | null;
 }
 
 const fmtCurrency = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -195,7 +199,14 @@ export default function ContasReceberPage() {
             <tbody className={`divide-y ${isDark ? "divide-slate-800/60" : "divide-slate-200"}`}>
               {filtered.map((r) => (
                 <tr key={r.id} className={`transition ${isDark ? "hover:bg-slate-800/40" : "hover:bg-slate-50"}`}>
-                  <td className="px-5 py-4 font-bold">{r.billedToName}</td>
+                  <td className="px-5 py-4">
+                    <p className="font-bold">{r.billedToName}</p>
+                    {r.companyId && r.guest && (
+                      <p className={`text-[10px] mt-0.5 ${isDark ? "text-slate-500" : "text-slate-400"}`}>
+                        Origem: hóspede {r.guest.fullName}
+                      </p>
+                    )}
+                  </td>
                   <td className={`px-5 py-4 font-mono ${isDark ? "text-slate-400" : "text-slate-500"}`}>{r.documentNumber}</td>
                   <td className="px-5 py-4">{fmtDate(r.issueDate)}</td>
                   <td className="px-5 py-4">{fmtDate(r.dueDate)}</td>

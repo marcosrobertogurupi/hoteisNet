@@ -63,15 +63,29 @@ model Tenant {
   updatedAt               DateTime                @updatedAt
   dailyRolloverTime       String                  @default("14:30")
   allowNegativeStock      Boolean                 @default(false)
-  breakfastHours          String?                 // ex: "07:00 às 10:00" — usado pelo agente de atendimento (get_hotel_info)
+  breakfastHours          String? // ex: "07:00 às 10:00" — usado pelo agente de atendimento (get_hotel_info)
   cpfQueryQuotaMonthly    Int                     @default(100)
   cpfQueryUsed            Int                     @default(0)
   cpfQueryCycleStart      DateTime                @default(now())
+  // Liga/desliga o serviço de consulta de CPF (Hub do Desenvolvedor) por assinante — controle
+  // exclusivo do Painel SuperAdmin, distinto da cota mensal: um assinante pode ter cota > 0 e
+  // ainda assim estar com o recurso desabilitado no plano contratado.
+  cpfQueryEnabled         Boolean                 @default(true)
+  // Percentual máximo de desconto que um operador comum pode aplicar no check-in sem autorização
+  // de administrador (ShieldCheck/AdminAuthorizationModal). Configurável pelo próprio assinante em
+  // Configurações — acima desse percentual, exige senha de admin, igual à cortesia de madrugada.
+  maxDiscountPercent      Decimal                 @default(20) @db.Decimal(5, 2)
   accountPlans            AccountPlan[]
   aiAgentSettings         AIAgentSetting?
   aiUsageLogs             AIUsageLog[]
   cashRegisters           CashRegister[]          @relation("TenantCashRegisters")
   companies               Company[]
+  banks                   Bank[]
+  employees               Employee[]
+  productGroups           ProductGroup[]
+  salesPoints             SalesPoint[]
+  dishes                  Dish[]
+  hotelTables             HotelTable[]
   emailSettings           EmailSetting?
   floors                  Floor[]
   guests                  Guest[]
@@ -517,22 +531,37 @@ model RoomOccupancySnapshot {
 }
 
 model Company {
-  id           String               @id @default(uuid())
-  tenantId     String
-  name         String
-  tradeName    String?
-  cnpj         String
-  email        String?
-  phone        String?
-  address      String?
-  city         String?
-  state        String?
-  creditLimit  Decimal?             @db.Decimal(10, 2)
-  paymentTerms Int                  @default(15)
-  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoices     CorporateInvoice[]
-  guests       Guest[]              @relation("GuestCompanyLink")
-  receivables  AccountsReceivable[]
+  id                  String               @id @default(uuid())
+  tenantId            String
+  name                String
+  tradeName           String?
+  cnpj                String
+  ie                  String?
+  email               String?
+  phone               String?
+  address             String?
+  number              String?
+  complement          String?
+  neighborhood        String?
+  city                String?
+  state               String?
+  zipCode             String?
+  billingZipCode      String?
+  billingAddress      String?
+  billingNumber       String?
+  billingComplement   String?
+  billingNeighborhood String?
+  billingCity         String?
+  billingState        String?
+  phones              Json?
+  emails              Json?
+  notes               String?              @db.Text
+  creditLimit         Decimal?             @db.Decimal(10, 2)
+  paymentTerms        Int                  @default(15)
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices            CorporateInvoice[]
+  guests              Guest[]              @relation("GuestCompanyLink")
+  receivables         AccountsReceivable[]
 
   @@map("companies")
 }
@@ -559,6 +588,14 @@ model Guest {
   city           String?
   state          String?
   country        String               @default("Brasil")
+  // Nome completo dos pais e endereço já formatado, obtidos na consulta de CPF ao Hub do
+  // Desenvolvedor (ou digitados manualmente) e gravados no check-in — antes eram exibidos na
+  // tela e descartados ao confirmar a hospedagem. fullAddress é redundante com os campos
+  // estruturados acima de propósito: é o texto pronto retornado pelo Hub, sem risco de um
+  // parser quebrar o endereço estruturado de um cadastro já existente.
+  motherName     String?
+  fatherName     String?
+  fullAddress    String?
   // Campos exigidos pela FNRH (Ficha Nacional de Registro de Hóspedes / SNRHos) além do
   // cadastro comercial básico já existente acima. `country` continua sendo o país do endereço
   // (nome livre, ex: "Brasil"); `nationality` é a nacionalidade do hóspede em si (podem
@@ -639,41 +676,47 @@ model FNRHRecord {
 }
 
 model Reservation {
-  id                String            @id @default(uuid())
-  tenantId          String
-  roomId            String
-  guestName         String
-  guestPhone        String?
-  checkInDate       DateTime
-  checkOutDate      DateTime
-  totalAmount       Decimal           @db.Decimal(10, 2)
-  depositPaid       Decimal           @default(0) @db.Decimal(10, 2)
-  status            ReservationStatus @default(PRE_RESERVATION)
-  preCheckinSent    Boolean           @default(false)
-  createdAt         DateTime          @default(now())
-  guestId           String?
-  tariffId          String?
-  tariffName        String?
-  guestCpf          String?
-  dailyRate         Decimal?          @default(0) @db.Decimal
-  totalDiarias      Decimal?          @default(0) @db.Decimal
-  discountAmount    Decimal?          @default(0) @db.Decimal
-  cashRegisterId    String?
-  operatorName      String?
-  notes             String?
-  adults            Int?              @default(1)
-  children          Int?              @default(0)
-  hasWhatsapp       Boolean?          @default(false)
-  wppSent           Boolean?          @default(false)
-  reservationNumber String?
-  roomDescription   String?
-  roomCategory      String?
-  roomFloor         String?
-  room              Room              @relation(fields: [roomId], references: [id])
-  tenant            Tenant            @relation("TenantReservations", fields: [tenantId], references: [id], onDelete: Cascade)
-  stayCheckin       StayCheckin?
-  fnrhRecords       FNRHRecord[]
-  preCheckinLinks   PreCheckinLink[]
+  id                     String            @id @default(uuid())
+  tenantId               String
+  roomId                 String
+  guestName              String
+  guestPhone             String?
+  checkInDate            DateTime
+  checkOutDate           DateTime
+  totalAmount            Decimal           @db.Decimal(10, 2)
+  depositPaid            Decimal           @default(0) @db.Decimal(10, 2)
+  status                 ReservationStatus @default(PRE_RESERVATION)
+  preCheckinSent         Boolean           @default(false)
+  createdAt              DateTime          @default(now())
+  guestId                String?
+  tariffId               String?
+  tariffName             String?
+  guestCpf               String?
+  dailyRate              Decimal?          @default(0) @db.Decimal
+  totalDiarias           Decimal?          @default(0) @db.Decimal
+  discountAmount         Decimal?          @default(0) @db.Decimal
+  cashRegisterId         String?
+  operatorName           String?
+  notes                  String?
+  adults                 Int?              @default(1)
+  children               Int?              @default(0)
+  hasWhatsapp            Boolean?          @default(false)
+  wppSent                Boolean?          @default(false)
+  reservationNumber      String?
+  roomDescription        String?
+  roomCategory           String?
+  roomFloor              String?
+  // Marca quando o agente de IA (WhatsApp) registrou um pedido de cancelamento ainda não
+  // confirmado pelo hóspede — ver cancelReservationForAgent em apps/web/src/lib/aiAgent/tools.ts.
+  // A primeira chamada da tool cancel_reservation só grava este timestamp e pede confirmação; o
+  // cancelamento de fato só ocorre numa segunda chamada, dentro da janela de expiração, para a
+  // mesma reserva. Nulo fora desse fluxo (nunca usado pelo cancelamento manual da tela de admin).
+  agentCancelRequestedAt DateTime?
+  room                   Room              @relation(fields: [roomId], references: [id])
+  tenant                 Tenant            @relation("TenantReservations", fields: [tenantId], references: [id], onDelete: Cascade)
+  stayCheckin            StayCheckin?
+  fnrhRecords            FNRHRecord[]
+  preCheckinLinks        PreCheckinLink[]
 
   @@map("reservations")
 }
@@ -1012,12 +1055,12 @@ model AIAgentSetting {
   tenantId String @unique
 
   // --- Agente de Atendimento (assinante) ---
-  enabled                      Boolean         @default(false) // atendimento via WhatsApp ligado/desligado
-  autoConfirmReservations      Boolean         @default(false) // false = reserva feita pelo bot entra como PRE_RESERVATION
-  allowAgentCancelReservation  Boolean         @default(false) // permite o agente cancelar (soft-cancel) reserva a pedido do hóspede
-  agentDisplayName             String? // nome com que o agente se apresenta no WhatsApp
-  agentAvatarUrl               String? // foto de perfil do agente
-  tonePreset                   AgentTonePreset @default(PROFISSIONAL)
+  enabled                     Boolean         @default(false) // atendimento via WhatsApp ligado/desligado
+  autoConfirmReservations     Boolean         @default(false) // false = reserva feita pelo bot entra como PRE_RESERVATION
+  allowAgentCancelReservation Boolean         @default(false) // permite o agente cancelar (soft-cancel) reserva a pedido do hóspede
+  agentDisplayName            String? // nome com que o agente se apresenta no WhatsApp
+  agentAvatarUrl              String? // foto de perfil do agente
+  tonePreset                  AgentTonePreset @default(PROFISSIONAL)
 
   // --- Agente de Atendimento (admin master) ---
   systemPromptExtra  String? // prompt cru de personalidade/forma de atendimento, só o admin edita
@@ -1203,12 +1246,19 @@ model Supplier {
   name            String
   tradeName       String?
   cnpj            String?
+  ie              String?
   email           String?
   phone           String?
+  contactName     String?
   category        String?
+  zipCode         String?
+  address         String?
+  number          String?
+  complement      String?
+  neighborhood    String?
   city            String?
   state           String?
-  address         String?
+  notes           String?           @db.Text
   active          Boolean           @default(true)
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
@@ -1216,6 +1266,98 @@ model Supplier {
   accountsPayable AccountsPayable[]
 
   @@map("suppliers")
+}
+
+model Bank {
+  id        String   @id @default(uuid())
+  tenantId  String
+  bankCode  String?
+  name      String
+  agency    String?
+  account   String?
+  pixKey    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("banks")
+}
+
+model Employee {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  role      String?
+  cpf       String?
+  phone     String?
+  email     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("employees")
+}
+
+model ProductGroup {
+  id        String   @id @default(uuid())
+  tenantId  String
+  code      String?
+  name      String
+  type      String   @default("PRODUTO")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dishes    Dish[]
+
+  @@map("product_groups")
+}
+
+model SalesPoint {
+  id        String   @id @default(uuid())
+  tenantId  String
+  code      String?
+  name      String
+  location  String?
+  operator  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("sales_points")
+}
+
+model Dish {
+  id          String        @id @default(uuid())
+  tenantId    String
+  code        String?
+  name        String
+  category    String?
+  groupId     String?
+  price       Decimal       @default(0) @db.Decimal(10, 2)
+  description String?       @db.Text
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  group       ProductGroup? @relation(fields: [groupId], references: [id])
+
+  @@map("dishes")
+}
+
+model HotelTable {
+  id          String   @id @default(uuid())
+  tenantId    String
+  number      String
+  description String?
+  type        String   @default("MESA")
+  status      String   @default("LIVRE")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("hotel_tables")
 }
 
 model reservation_payments {

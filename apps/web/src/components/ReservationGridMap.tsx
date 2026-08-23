@@ -962,7 +962,10 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
 
 
   // Action: Delete Selected Reservation
-  const handleConfirmDelete = () => {
+  // Aguarda a confirmação do backend antes de remover da tela / mostrar sucesso — evitar que o
+  // operador veja "excluída com sucesso" enquanto a reserva continua ativa no banco (ex.: recusa
+  // por falta de permissão de admin, exigida pela rota DELETE).
+  const handleConfirmDelete = async () => {
     if (!selectedReservationId) return;
 
     const target = reservations.find(r => r.id === selectedReservationId);
@@ -973,24 +976,24 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
     }
 
     const resIdToDelete = selectedReservationId;
-
-    setReservations(prev => prev.filter(r => r.id !== selectedReservationId));
-    setSelectedReservationId(null);
     setShowDeleteModal(false);
 
-    toast.success(`Reserva de ${target ? target.guestName : "Hóspede"} foi excluída com sucesso.`);
-
-    // Persistir remoção no banco de dados via DELETE
-    fetch(`/api/reservations?id=${encodeURIComponent(resIdToDelete)}&tenantId=TNT-01`, {
-      method: "DELETE",
-    })
-      .then(async (r) => {
-        const data = await r.json();
-        if (data.success && onRefresh) {
-          onRefresh();
-        }
-      })
-      .catch((err) => console.error("Erro na API ao excluir reserva:", err));
+    try {
+      const r = await fetch(`/api/reservations?id=${encodeURIComponent(resIdToDelete)}&tenantId=TNT-01`, {
+        method: "DELETE",
+      });
+      const data = await r.json();
+      if (!r.ok || !data.success) {
+        throw new Error(data?.error || `HTTP ${r.status}`);
+      }
+      setReservations(prev => prev.filter(res => res.id !== resIdToDelete));
+      setSelectedReservationId(null);
+      toast.success(`Reserva de ${target ? target.guestName : "Hóspede"} foi excluída com sucesso.`);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error("Erro na API ao excluir reserva:", err);
+      toast.error(`Não foi possível excluir a reserva${target ? ` de ${target.guestName}` : ""}. Tente novamente.`);
+    }
   };
 
   // Drag & Drop Handlers (Bloqueado para Hospedagem em vigência)

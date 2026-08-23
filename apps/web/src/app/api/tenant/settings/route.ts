@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
 
     const tenant = await prisma.tenant.findFirst({
       where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-      select: { id: true, dailyRolloverTime: true, allowNegativeStock: true, breakfastHours: true },
+      select: { id: true, dailyRolloverTime: true, allowNegativeStock: true, breakfastHours: true, maxDiscountPercent: true },
     });
 
     if (!tenant) {
@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
         dailyRolloverTime: tenant.dailyRolloverTime,
         allowNegativeStock: tenant.allowNegativeStock,
         breakfastHours: tenant.breakfastHours,
+        maxDiscountPercent: Number(tenant.maxDiscountPercent),
       },
     });
   } catch (error: any) {
@@ -36,13 +37,23 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { tenantId, dailyRolloverTime, allowNegativeStock, breakfastHours } = body;
+    const { tenantId, dailyRolloverTime, allowNegativeStock, breakfastHours, maxDiscountPercent } = body;
 
     if (dailyRolloverTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(dailyRolloverTime)) {
       return NextResponse.json(
         { success: false, error: "Horário de virada de diária inválido (use HH:MM)." },
         { status: 400 }
       );
+    }
+
+    if (maxDiscountPercent !== undefined) {
+      const parsed = Number(maxDiscountPercent);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+        return NextResponse.json(
+          { success: false, error: "Desconto máximo deve ser um percentual entre 0 e 100." },
+          { status: 400 }
+        );
+      }
     }
 
     const tenant = await prisma.tenant.findFirst({
@@ -60,6 +71,7 @@ export async function PATCH(req: NextRequest) {
         ...(dailyRolloverTime !== undefined ? { dailyRolloverTime } : {}),
         ...(allowNegativeStock !== undefined ? { allowNegativeStock: Boolean(allowNegativeStock) } : {}),
         ...(breakfastHours !== undefined ? { breakfastHours: breakfastHours || null } : {}),
+        ...(maxDiscountPercent !== undefined ? { maxDiscountPercent: Number(maxDiscountPercent) } : {}),
       },
     });
 

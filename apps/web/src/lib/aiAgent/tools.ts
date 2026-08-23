@@ -303,10 +303,30 @@ async function createReservationForAgent(
   return result;
 }
 
+// Janela de validade de um pedido de cancelamento pendente (ver cancelReservationForAgent) — se o
+// hóspede não confirmar dentro deste prazo, a próxima chamada da tool volta a exigir novo pedido.
+const AGENT_CANCEL_CONFIRMATION_WINDOW_MS = 5 * 60 * 1000;
+// Intervalo mínimo antes de uma confirmação pendente poder ser efetivada — existe para impedir que
+// o próprio modelo "confirme" chamando a tool duas vezes seguidas dentro do mesmo turno (o
+// ToolLoopAgent permite até 8 passos numa única execução, ver buildGuestSupportAgent em agent.ts).
+// Uma resposta real do hóspede sempre implica uma nova mensagem de WhatsApp chegando por um novo
+// webhook, em processos separados — o que na prática nunca acontece em menos deste intervalo —
+// enquanto duas chamadas da mesma tool dentro do mesmo turno acontecem em milissegundos.
+const AGENT_CANCEL_MIN_CONFIRMATION_GAP_MS = 5 * 1000;
+
 // Cancela (soft-cancel, status = CANCELLED) uma reserva a pedido do hóspede via WhatsApp — nunca
 // apaga a linha do banco (diferente da exclusão física que a tela de admin usa). Só permite
 // cancelar PRE_RESERVATION/CONFIRMED; nunca CHECKED_IN (hospedagem em andamento sempre vai para a
 // recepção). Gated por AIAgentSetting.allowAgentCancelReservation — desligado por padrão.
+//
+// Exige confirmação registrada em código, não só sugerida no prompt do modelo: a PRIMEIRA chamada
+// desta função para uma reserva nunca cancela de verdade — só grava Reservation.agentCancelRequestedAt
+// e devolve aguardandoConfirmacao:true, pedindo que o hóspede confirme explicitamente. Só uma
+// SEGUNDA chamada, para a mesma reserva e dentro de AGENT_CANCEL_CONFIRMATION_WINDOW_MS, efetiva o
+// cancelamento (isso acontece naturalmente no fluxo: o modelo chama a tool de novo depois que o
+// hóspede responde afirmativamente numa mensagem seguinte — ver instruções em agent.ts). Assim, uma
+// única chamada da tool nunca é suficiente para cancelar, mesmo que o modelo erre a leitura da
+// conversa e chame a tool cedo demais.
 async function cancelReservationForAgent(tenantId: string, guestPhone: string, reservationNumber: string) {
   const setting = await prisma.aIAgentSetting.findUnique({ where: { tenantId }, select: { allowAgentCancelReservation: true } });
   if (!setting?.allowAgentCancelReservation) {
@@ -329,7 +349,29 @@ async function cancelReservationForAgent(tenantId: string, guestPhone: string, r
     return { sucesso: false, erro: `Reserva já está com status ${reservation.status}, não é possível cancelar.` };
   }
 
-  await prisma.reservation.update({ where: { id: reservation.id }, data: { status: "CANCELLED" } });
+  const now = new Date();
+  const pendingSince = reservation.agentCancelRequestedAt;
+  const pendingAgeMs = pendingSince ? now.getTime() - pendingSince.getTime() : -1;
+  const pendingStillValid = pendingAgeMs >= AGENT_CANCEL_MIN_CONFIRMATION_GAP_MS && pendingAgeMs < AGENT_CANCEL_CONFIRMATION_WINDOW_MS;
+
+  if (!pendingStillValid) {
+    // Primeira chamada (ou pedido anterior expirado): só registra o pedido, não cancela.
+    await prisma.reservation.update({ where: { id: reservation.id }, data: { agentCancelRequestedAt: now } });
+    return {
+      sucesso: false,
+      aguardandoConfirmacao: true,
+      numeroReserva: reservationNumber,
+      quarto: reservation.room.number,
+      erro:
+        "Pedido de cancelamento registrado, mas ainda não confirmado. Peça para o hóspede confirmar explicitamente (ex: responda CONFIRMAR) e só então chame cancel_reservation de novo com o mesmo número de reserva.",
+    };
+  }
+
+  // Segunda chamada dentro da janela de validade: cancela de verdade.
+  await prisma.reservation.update({
+    where: { id: reservation.id },
+    data: { status: "CANCELLED", agentCancelRequestedAt: null },
+  });
 
   await logActivity({
     tenantId,
@@ -527,7 +569,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     cancel_reservation: tool({
       description:
-        "Cancela (soft-cancel, reversível) uma reserva do hóspede. Só use depois que o hóspede confirmar explicitamente que quer cancelar (ex: respondeu CONFIRMAR). Se o retorno tiver precisaEscalar:true, use escalate_to_human em seguida — significa que o cancelamento pelo agente está desligado nas configurações do hotel, ou que a hospedagem já teve check-in.",
+        "Pede o cancelamento (soft-cancel, reversível) de uma reserva do hóspede. NUNCA cancela na primeira chamada: ela só registra o pedido e devolve aguardandoConfirmacao:true — nesse caso, peça ao hóspede uma confirmação explícita (ex: 'responda CONFIRMAR para cancelar a reserva RES-XXXX') e só chame esta tool de novo, com o mesmo número de reserva, depois que ele confirmar numa mensagem seguinte; a segunda chamada, dentro de poucos minutos da primeira, efetiva o cancelamento. Se o retorno tiver precisaEscalar:true, use escalate_to_human em seguida — significa que o cancelamento pelo agente está desligado nas configurações do hotel, ou que a hospedagem já teve check-in.",
       inputSchema: z.object({
         reservationNumber: z.string().describe("Número da reserva (ex: RES-1234), já visto pelo hóspede via get_reservation_by_phone ou na confirmação da reserva"),
       }),

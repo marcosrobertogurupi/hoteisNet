@@ -5,6 +5,8 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { sendUazapiText } from "@/lib/uazapi";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 import { processPaymentLine } from "@/lib/paymentProcessing";
+import { validateCPF, validateCNPJ } from "@/lib/documentValidation";
+import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -184,6 +186,12 @@ export async function POST(req: NextRequest) {
       secondaryGuests,
       adults,
       children,
+      birthDate,
+      gender,
+      motherName,
+      fatherName,
+      fullAddress,
+      email,
     } = body;
 
     const roomTarget = String(roomId || roomNumber || "");
@@ -192,6 +200,22 @@ export async function POST(req: NextRequest) {
         { success: false, error: "Quarto, hóspede e período da hospedagem são obrigatórios." },
         { status: 400 }
       );
+    }
+
+    // Validações que antes só existiam no modal de check-in — replicadas aqui porque este
+    // endpoint também pode ser chamado diretamente (ex: futura integração, agente operacional).
+    const documentDigits = (documentNumber || "").replace(/\D/g, "");
+    if (documentType === "CPF" && documentDigits && !validateCPF(documentDigits)) {
+      return NextResponse.json({ success: false, error: "CPF com dígitos verificadores inválidos." }, { status: 400 });
+    }
+    if (documentType === "CNPJ" && documentDigits && !validateCNPJ(documentDigits)) {
+      return NextResponse.json({ success: false, error: "CNPJ com dígitos verificadores inválidos." }, { status: 400 });
+    }
+    if (adults !== undefined && (!Number.isFinite(Number(adults)) || Number(adults) < 1)) {
+      return NextResponse.json({ success: false, error: "O número de adultos deve ser pelo menos 1." }, { status: 400 });
+    }
+    if (dailyRate !== undefined && Number(dailyRate) <= 0 && Number(totalAmount || 0) <= 0) {
+      return NextResponse.json({ success: false, error: "O valor da diária/hospedagem deve ser maior que zero." }, { status: 400 });
     }
 
     const session = await getSessionUser(req);
@@ -206,6 +230,30 @@ export async function POST(req: NextRequest) {
 
       if (!room) {
         throw new Error(`Quarto ${roomTarget} não encontrado.`);
+      }
+
+      // Trava a linha do quarto pelo resto da transação: impede que dois check-ins quase
+      // simultâneos no mesmo quarto leiam "sem hospedagem aberta" ao mesmo tempo e ambos
+      // avancem — o segundo espera aqui até o primeiro terminar (commit ou rollback).
+      await tx.$queryRaw`SELECT id FROM rooms WHERE id = ${room.id} FOR UPDATE`;
+
+      const openStay = await tx.stayCheckin.findFirst({ where: { roomId: room.id, isClosed: false } });
+      if (openStay) {
+        throw new Error(
+          `O Quarto ${room.number} já possui uma hospedagem em aberto (iniciada em ${openStay.checkInDate.toLocaleString("pt-BR")}). ` +
+          `Efetue o check-out dessa hospedagem antes de abrir uma nova.`
+        );
+      }
+
+      if (tariffId) {
+        const tariff = await tx.tariff.findFirst({ where: { id: tariffId, tenantId: room.tenantId } });
+        const totalOccupants = Number(adults || 1) + Number(children || 0);
+        if (tariff && totalOccupants > tariff.adults) {
+          throw new Error(
+            `A tarifa '${tariff.name}' suporta no máximo ${tariff.adults} hóspede(s). ` +
+            `Selecione uma tarifa com maior capacidade para acomodar ${totalOccupants} hóspede(s).`
+          );
+        }
       }
 
       const cpfDigits = (documentNumber || "").replace(/\D/g, "");
@@ -224,15 +272,29 @@ export async function POST(req: NextRequest) {
             phone: phone || null,
             whatsappPhone: phone || null,
             hasWhatsapp: !!phone,
+            birthDate: birthDate ? new Date(birthDate) : null,
+            gender: gender || null,
+            email: email || null,
+            motherName: motherName || null,
+            fatherName: fatherName || null,
+            fullAddress: fullAddress || null,
+          },
+        });
+      } else {
+        // Só preenche o que estava vazio — nunca sobrescreve um dado já cadastrado/corrigido
+        // manualmente com o que veio da consulta ao Hub deste check-in.
+        await tx.guest.update({
+          where: { id: guest.id },
+          data: {
+            birthDate: guest.birthDate ?? (birthDate ? new Date(birthDate) : undefined),
+            gender: guest.gender ?? (gender || undefined),
+            email: guest.email ?? (email || undefined),
+            motherName: guest.motherName ?? (motherName || undefined),
+            fatherName: guest.fatherName ?? (fatherName || undefined),
+            fullAddress: guest.fullAddress ?? (fullAddress || undefined),
           },
         });
       }
-
-      // Encerra qualquer hospedagem aberta remanescente neste quarto antes de abrir uma nova
-      await tx.stayCheckin.updateMany({
-        where: { roomId: room.id, isClosed: false },
-        data: { isClosed: true, actualCheckOut: new Date() },
-      });
 
       const checkInAt = new Date(checkInDate);
       const checkOutAt = new Date(checkOutDate);
@@ -243,10 +305,16 @@ export async function POST(req: NextRequest) {
       let targetReservationId: string | null = reservationId || null;
 
       if (!targetReservationId) {
+        // Check-in avulso (sem reserva selecionada explicitamente): só pode "adotar" uma reserva
+        // já existente no quarto se ela for de HOJE — nunca uma reserva futura de outro hóspede,
+        // que seria destruída/sobrescrita pelos dados deste check-in avulso.
+        const todayStart = dateOnlyBrasilia(new Date());
+        const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
         const match = await tx.reservation.findFirst({
           where: {
             roomId: room.id,
             status: { notIn: RESERVATION_STATUSES_NOT_MATCHABLE as any },
+            checkInDate: { gte: todayStart, lt: todayEnd },
           },
           orderBy: { checkInDate: "asc" },
         });
@@ -414,8 +482,9 @@ export async function POST(req: NextRequest) {
         // Sem isto, o snapshot financeiro da hospedagem (totalAdvance/balanceDue) nasce zerado
         // mesmo com adiantamento já pago no check-in — só seria corrigido no próximo pagamento
         // avulso ou no checkout, deixando qualquer leitura nesse meio-tempo (ex.: Transferência de
-        // Débitos) com o saldo devedor desatualizado.
-        const saldoAposCheckin = Math.max(0, Number(dailyRate || 0) - totalPagoCheckin - Number(discount || 0));
+        // Débitos) com o saldo devedor desatualizado. Usa o valor TOTAL da hospedagem (todas as
+        // diárias), não só uma diária — senão o saldo nasce subavaliado em estadias de N > 1 noites.
+        const saldoAposCheckin = Math.max(0, Number(totalAmount || dailyRate || 0) - totalPagoCheckin - Number(discount || 0));
         await tx.stayCheckin.update({
           where: { id: stay.id },
           data: { totalAdvance: totalPagoCheckin, balanceDue: saldoAposCheckin },
@@ -491,6 +560,15 @@ export async function PATCH(req: NextRequest) {
     const session = await getSessionUser(req);
 
     const stay = await prisma.$transaction(async (tx) => {
+      // Trava a linha da hospedagem ANTES de ler/agregar o saldo devedor (Postgres Read Committed
+      // não trava nada em um SELECT comum — só a partir do primeiro UPDATE nesta linha um lock de
+      // escrita seria adquirido). Sem isso, um consumo lançado por outro terminal (POST
+      // /api/stay/consumo) no exato instante do checkout pode ser commitado sem ser bloqueado, e o
+      // checkout fecha usando saldo desatualizado. Qualquer outra transação que tente escrever
+      // nesta mesma StayCheckin (incluindo lançamento de novo consumo, que também trava a mesma
+      // linha — ver /api/stay/consumo) espera até esta transação terminar.
+      await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${stayCheckinId} FOR UPDATE`;
+
       // Garante, dentro da própria transação, que o saldo devedor está quitado antes de permitir
       // o encerramento — mesma fórmula usada em /api/caixa/pagamento-lote. Se houver débito
       // pendente (ex.: chamada direta à API, sem passar pela tela de pagamento), a transação

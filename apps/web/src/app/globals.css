@@ -82,6 +82,24 @@ html[data-theme="light-navy"] body {
   animation: statusFlashAmber 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
+/* Sino de intervenção humana: pisca continuamente enquanto houver alerta de prioridade
+   pendente (ex.: limpeza de quarto travada há mais de 6h) — o som já avisa uma vez,
+   isso mantém o alerta visível até alguém marcar como resolvido. */
+@keyframes humanEscalationBlink {
+  0%, 100% {
+    background-color: rgba(239, 68, 68, 0.95);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  50% {
+    background-color: rgba(239, 68, 68, 0.25);
+    box-shadow: 0 0 12px 4px rgba(239, 68, 68, 0.35);
+  }
+}
+
+.animate-human-escalation-blink {
+  animation: humanEscalationBlink 1s ease-in-out infinite;
+}
+
 /* Check-in Celebration Overlay: animação de boas-vindas ao efetuar check-in */
 @keyframes checkinOverlayFade {
   0% { opacity: 0; transform: scale(0.98); }

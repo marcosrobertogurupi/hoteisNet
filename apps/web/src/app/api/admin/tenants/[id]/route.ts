@@ -14,7 +14,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   try {
     const { id } = await params;
     const body = await req.json();
-    const { cpfQueryQuotaMonthly, aiSystemPromptExtra, aiTokenQuotaOverride, aiBlocked } = body;
+    const { cpfQueryQuotaMonthly, cpfQueryEnabled, aiSystemPromptExtra, aiTokenQuotaOverride, aiBlocked } = body;
 
     if (cpfQueryQuotaMonthly !== undefined) {
       if (typeof cpfQueryQuotaMonthly !== "number" || cpfQueryQuotaMonthly < 0 || !Number.isInteger(cpfQueryQuotaMonthly)) {
@@ -24,6 +24,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         );
       }
       await prisma.tenant.update({ where: { id }, data: { cpfQueryQuotaMonthly } });
+    }
+
+    // Liga/desliga o serviço de consulta de CPF para este assinante, independente da cota —
+    // um assinante pode ter cota configurada e ainda assim estar sem o recurso no plano.
+    if (cpfQueryEnabled !== undefined) {
+      await prisma.tenant.update({ where: { id }, data: { cpfQueryEnabled: !!cpfQueryEnabled } });
     }
 
     // systemPromptExtra, tokenQuotaOverride e blocked são controles exclusivos do admin master —
@@ -55,6 +61,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         id: true,
         cpfQueryQuotaMonthly: true,
         cpfQueryUsed: true,
+        cpfQueryEnabled: true,
         aiAgentSettings: { select: { systemPromptExtra: true, tokenQuotaOverride: true, blocked: true } },
       },
     });

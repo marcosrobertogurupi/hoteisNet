@@ -291,9 +291,36 @@ export default function CadastroHospedeModal({
     message: string;
   } | null>(null);
 
+  const [empresasConveniadas, setEmpresasConveniadas] = useState<
+    { id: string; name: string; tradeName: string | null; cnpj: string }[]
+  >([]);
+  const [empresaSearchQuery, setEmpresaSearchQuery] = useState("");
+  const [showEmpresaDropdown, setShowEmpresaDropdown] = useState(false);
+
   useEffect(() => {
     if (isOpen) setActiveTab(initialTab || "dados");
   }, [isOpen, initialTab]);
+
+  // Carrega a lista de empresas conveniadas cadastradas para permitir buscar/vincular uma
+  // delas ao hóspede em vez de digitar código/nome livremente.
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch("/api/cadastros/empresas")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.companies)) {
+          setEmpresasConveniadas(
+            data.companies.map((c: any) => ({
+              id: c.id,
+              name: c.name,
+              tradeName: c.tradeName || null,
+              cnpj: c.cnpj || "",
+            }))
+          );
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
 
   useEffect(() => {
     if (initialData) {
@@ -1441,37 +1468,110 @@ export default function CadastroHospedeModal({
                   <h3 className={`text-sm font-bold flex items-center gap-2 ${isDark ? "text-white" : "text-slate-900"}`}>
                     <Building2 className="w-4 h-4 text-sky-500" /> Empresa Conveniada Vinculada
                   </h3>
-                  <span className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>Edt_CodEmpresa / Edt_NomeEmpresa</span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-1.5">
-                    <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Código / ID Empresa</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: EMP-001"
-                      value={formData.codEmpresa}
-                      onChange={(e) => setFormData({ ...formData, codEmpresa: e.target.value })}
-                      className={`${inputClass} font-mono`}
-                    />
+                {formData.codEmpresa ? (
+                  <div className={`flex items-center justify-between gap-3 p-3 rounded-xl border ${
+                    isDark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-300"
+                  }`}>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Building2 className="w-5 h-5 text-sky-500 shrink-0" />
+                      <div className="min-w-0">
+                        <p className={`text-sm font-bold truncate ${isDark ? "text-white" : "text-slate-900"}`}>{formData.nomeEmpresa}</p>
+                        <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                          {empresasConveniadas.find((e) => e.id === formData.codEmpresa)?.cnpj || "Empresa cadastrada"}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, codEmpresa: "", nomeEmpresa: "" })}
+                      className="text-rose-500 hover:text-rose-600 p-1.5 shrink-0"
+                      title="Desvincular empresa"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
+                ) : (
+                  <div className="relative space-y-1.5">
+                    <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                      Buscar empresa cadastrada por razão social, fantasia ou CNPJ
+                    </label>
+                    <div className="relative">
+                      <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${isDark ? "text-slate-500" : "text-slate-400"}`} />
+                      <input
+                        type="text"
+                        placeholder="Ex: Petrobras S.A."
+                        value={empresaSearchQuery}
+                        onChange={(e) => {
+                          setEmpresaSearchQuery(e.target.value);
+                          setShowEmpresaDropdown(true);
+                        }}
+                        onFocus={() => setShowEmpresaDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowEmpresaDropdown(false), 150)}
+                        className={`${inputClass} pl-9`}
+                      />
+                    </div>
 
-                  <div className="md:col-span-2 space-y-1.5">
-                    <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Razão Social / Fantasia da Empresa</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Petrobras S.A."
-                      value={formData.nomeEmpresa}
-                      onChange={(e) => setFormData({ ...formData, nomeEmpresa: e.target.value })}
-                      className={inputClass}
-                    />
+                    {showEmpresaDropdown && (
+                      <div className={`absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border shadow-lg ${
+                        isDark ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"
+                      }`}>
+                        {empresasConveniadas
+                          .filter((e) => {
+                            const q = empresaSearchQuery.trim().toLowerCase();
+                            if (!q) return true;
+                            return (
+                              e.name.toLowerCase().includes(q) ||
+                              (e.tradeName || "").toLowerCase().includes(q) ||
+                              e.cnpj.includes(q)
+                            );
+                          })
+                          .slice(0, 20)
+                          .map((e) => (
+                            <button
+                              key={e.id}
+                              type="button"
+                              onMouseDown={() => {
+                                setFormData({ ...formData, codEmpresa: e.id, nomeEmpresa: e.name });
+                                setEmpresaSearchQuery("");
+                                setShowEmpresaDropdown(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 text-sm border-b last:border-0 ${
+                                isDark
+                                  ? "border-slate-800 hover:bg-slate-800 text-white"
+                                  : "border-slate-100 hover:bg-slate-50 text-slate-900"
+                              }`}
+                            >
+                              <p className="font-semibold truncate">{e.name}</p>
+                              <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                                {e.tradeName ? `${e.tradeName} · ` : ""}{e.cnpj || "Sem CNPJ"}
+                              </p>
+                            </button>
+                          ))}
+
+                        {empresasConveniadas.filter((e) => {
+                          const q = empresaSearchQuery.trim().toLowerCase();
+                          if (!q) return true;
+                          return (
+                            e.name.toLowerCase().includes(q) ||
+                            (e.tradeName || "").toLowerCase().includes(q) ||
+                            e.cnpj.includes(q)
+                          );
+                        }).length === 0 && (
+                          <p className={`px-3 py-3 text-xs text-center ${isDark ? "text-slate-500" : "text-slate-400"}`}>
+                            Nenhuma empresa encontrada. Cadastre-a em Empresas Conveniadas.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
 
                 <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0 text-indigo-500 mt-0.5" />
                   <p>
-                    Vincular uma empresa autoriza o faturamento direto no checkout para faturas mensais e aplica eventuais tarifas corporativas negociadas.
+                    Vincular uma empresa autoriza o faturamento direto no checkout: ao fechar a hospedagem com forma de pagamento parcelada (ex: fatura), o débito vai para o Contas a Receber em nome da empresa, mantendo o hóspede registrado como origem do débito.
                   </p>
                 </div>
               </div>

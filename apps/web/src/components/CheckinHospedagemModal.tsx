@@ -31,6 +31,7 @@ import { useToast } from "@/context/ToastContext";
 import { useOperator } from "@/context/OperatorContext";
 import DateRangeCalendarPicker from "@/components/DateRangeCalendarPicker";
 import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
+import { validateCPF, validateCNPJ, formatCPF, formatCNPJ } from "@/lib/documentValidation";
 
 export interface VerifiedPhone {
   id: string;
@@ -134,64 +135,9 @@ export interface CheckinHospedagemModalProps {
   onSuccess: (checkinData: any) => void;
 }
 
-// Formatters & Validators
-export function validateCPF(cpf: string): boolean {
-  const clean = cpf.replace(/\D/g, "");
-  if (clean.length !== 11 || /^(\d)\1{10}$/.test(clean)) return false;
-  let sum = 0, rest;
-  for (let i = 1; i <= 9; i++) sum += parseInt(clean.substring(i - 1, i)) * (11 - i);
-  rest = (sum * 10) % 11;
-  if (rest === 10 || rest === 11) rest = 0;
-  if (rest !== parseInt(clean.substring(9, 10))) return false;
-  sum = 0;
-  for (let i = 1; i <= 10; i++) sum += parseInt(clean.substring(i - 1, i)) * (12 - i);
-  rest = (sum * 10) % 11;
-  if (rest === 10 || rest === 11) rest = 0;
-  return rest === parseInt(clean.substring(10, 11));
-}
-
-export function validateCNPJ(cnpj: string): boolean {
-  const clean = cnpj.replace(/\D/g, "");
-  if (clean.length !== 14 || /^(\d)\1{13}$/.test(clean)) return false;
-  let size = clean.length - 2;
-  let numbers = clean.substring(0, size);
-  const digits = clean.substring(size);
-  let sum = 0;
-  let pos = size - 7;
-  for (let i = size; i >= 1; i--) {
-    sum += parseInt(numbers.charAt(size - i)) * pos--;
-    if (pos < 2) pos = 9;
-  }
-  let result = sum % 11 < 2 ? 0 : 11 - (sum % 11);
-  if (result !== parseInt(digits.charAt(0))) return false;
-  size = size + 1;
-  numbers = clean.substring(0, size);
-  sum = 0;
-  pos = size - 7;
-  for (let i = size; i >= 1; i--) {
-    sum += parseInt(numbers.charAt(size - i)) * pos--;
-    if (pos < 2) pos = 9;
-  }
-  result = sum % 11 < 2 ? 0 : 11 - (sum % 11);
-  return result === parseInt(digits.charAt(1));
-}
-
-export function formatCPF(val: string): string {
-  const clean = val.replace(/\D/g, "").slice(0, 11);
-  return clean
-    .replace(/(\d{3})(\d)/, "$1.$2")
-    .replace(/(\d{3})(\d)/, "$1.$2")
-    .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
-}
-
-export function formatCNPJ(val: string): string {
-  const clean = val.replace(/\D/g, "").slice(0, 14);
-  return clean
-    .replace(/^(\d{2})(\d)/, "$1.$2")
-    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
-    .replace(/\.(\d{3})(\d)/, ".$1/$2")
-    .replace(/(\d{4})(\d)/, "$1-$2");
-}
+// Formatters & Validators — implementação real vive em @/lib/documentValidation (compartilhada
+// com o backend); reexportadas aqui para não quebrar quem já importa deste arquivo (ex: LancarReservaModal).
+export { validateCPF, validateCNPJ, formatCPF, formatCNPJ };
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 // Convert "DD/MM/YYYY HH:MM:SS" or "YYYY-MM-DD HH:MM" → "YYYY-MM-DDTHH:MM" (datetime-local value)
@@ -426,7 +372,27 @@ export default function CheckinHospedagemModal({
         setHubMessage(`⚠️ Hóspede vindo da reserva. Complete os dados para efetivar.`);
       }
 
-      // Tarifa escolhida na reserva
+      // Tarifa escolhida na reserva. Se a reserva não tiver um valor de diária definido,
+      // NUNCA usar o valor TOTAL da reserva como se fosse o valor de uma única diária —
+      // isso cobraria o hóspede várias vezes o valor combinado numa estadia de N noites.
+      // Em vez disso, o total é dividido pelo número de noites da própria reserva.
+      const reservationNights = (() => {
+        try {
+          const inLocal = reservationData.checkInDate ? brDateTimeToLocal(reservationData.checkInDate) : "";
+          const outLocal = reservationData.checkOutDate ? brDateTimeToLocal(reservationData.checkOutDate) : "";
+          if (!inLocal || !outLocal) return 1;
+          const [y1, m1, d1] = localToDateOnly(inLocal).split("-").map(Number);
+          const [y2, m2, d2] = localToDateOnly(outLocal).split("-").map(Number);
+          const diffMs = new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime();
+          return Math.max(1, Math.round(diffMs / (1000 * 3600 * 24)));
+        } catch {
+          return 1;
+        }
+      })();
+      const reservationPerNightRate =
+        reservationData.dailyRate ||
+        (reservationData.totalAmount ? reservationData.totalAmount / reservationNights : 0);
+
       if (reservationData.tariffName) {
         const matched = LISTA_TARIFAS.find(
           (t) => t.name.toLowerCase() === reservationData.tariffName?.toLowerCase()
@@ -438,7 +404,7 @@ export default function CheckinHospedagemModal({
             id: `TAR-RES`,
             name: reservationData.tariffName.toUpperCase(),
             pax: 1,
-            price: reservationData.dailyRate || reservationData.totalAmount || 170,
+            price: reservationPerNightRate || 170,
           });
         }
       } else if (roomData?.category) {
@@ -446,8 +412,7 @@ export default function CheckinHospedagemModal({
         if (matchedCat) setSelectedTariff(matchedCat);
       }
       setDailyRate(
-        reservationData.dailyRate ||
-        reservationData.totalAmount ||
+        reservationPerNightRate ||
         roomData?.ratePerNight ||
         LISTA_TARIFAS[0].price
       );
@@ -564,6 +529,22 @@ export default function CheckinHospedagemModal({
       }
     }
   }, [isOpen, reservationData, roomData?.number, roomData?.category, roomData?.ratePerNight, defaultCheckInTime, defaultCheckOutTime]);
+
+  // Busca o percentual máximo de desconto sem autorização de admin (Configurações do assinante)
+  // sempre que o modal abre, e reseta a autorização de desconto de uma sessão de check-in anterior.
+  useEffect(() => {
+    if (!isOpen) return;
+    setDiscountAuthorized(false);
+    setDiscountAuthorizedBy(null);
+    fetch("/api/tenant/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && typeof data.settings?.maxDiscountPercent === "number") {
+          setMaxDiscountPercent(data.settings.maxDiscountPercent);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
 
   // WhatsApp active verification & Meta username state
   const [whatsappPhone, setWhatsappPhone] = useState<string>("");
@@ -708,7 +689,13 @@ export default function CheckinHospedagemModal({
   const [earlyArrivalCourtesyAuthorized, setEarlyArrivalCourtesyAuthorized] = useState<boolean>(false);
   const [earlyArrivalAuthorizedBy, setEarlyArrivalAuthorizedBy] = useState<string | null>(null);
   const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
-  const [adminAuthPurpose, setAdminAuthPurpose] = useState<"COURTESY" | "LOW_FIXED_FEE" | null>(null);
+  const [adminAuthPurpose, setAdminAuthPurpose] = useState<"COURTESY" | "LOW_FIXED_FEE" | "HIGH_DISCOUNT" | null>(null);
+
+  // Desconto máximo (%) sem autorização de administrador — parametrizado por assinante em
+  // Configurações (Tenant.maxDiscountPercent). 20 é só o valor inicial até a busca responder.
+  const [maxDiscountPercent, setMaxDiscountPercent] = useState<number>(20);
+  const [discountAuthorized, setDiscountAuthorized] = useState<boolean>(false);
+  const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
 
   const [adults, setAdults] = useState<number>(reservationData?.adults || 1);
   const [children, setChildren] = useState<number>(reservationData?.children || 0);
@@ -767,11 +754,15 @@ export default function CheckinHospedagemModal({
   const [obsType, setObsType] = useState<string>("1 - Recepção");
   const [obsText, setObsText] = useState<string>("");
   const [obsList, setObsList] = useState<ObservationItem[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Financial Calculations, Discount & Auto-registered Guest Info
   const [discount, setDiscount] = useState<number>(0);
   const [hubLoading, setHubLoading] = useState<boolean>(false);
   const [hubMessage, setHubMessage] = useState<string | null>(null);
+  // Cache em memória (só dura enquanto o modal está aberto) do resultado já pago do Hub do
+  // Desenvolvedor por CPF, para não debitar cota novamente ao reconsultar o mesmo CPF na mesma sessão.
+  const hubCpfCacheRef = useRef<Map<string, any>>(new Map());
   
   // Additional Guest Details from Hub do Desenvolvedor / Database
   const [birthDate, setBirthDate] = useState<string>("");
@@ -927,6 +918,11 @@ export default function CheckinHospedagemModal({
   const totalAdiantamento = paymentsList.reduce((acc, item) => acc + item.amount, 0);
   const saldoAPagar = Math.max(0, totalDiariasBruto - discount - totalAdiantamento);
 
+  // Desconto acima do percentual configurado em Configurações exige autorização de admin —
+  // mesmo padrão já usado para cortesia/taxa reduzida na chegada de madrugada.
+  const discountPercent = totalDiariasBruto > 0 ? (discount / totalDiariasBruto) * 100 : 0;
+  const discountNeedsAuth = discount > 0 && discountPercent > maxDiscountPercent && !discountAuthorized;
+
   // Close dropdown on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -988,9 +984,10 @@ export default function CheckinHospedagemModal({
         }
       }
 
-      const res = await fetch(`/api/stay/hub-consult-cpf?cpf=${clean}`);
-      const data = await res.json();
+      const cached = hubCpfCacheRef.current.get(clean);
+      const data = cached ?? (await (await fetch(`/api/stay/hub-consult-cpf?cpf=${clean}`)).json());
       if (data.success && data.data) {
+        if (!cached) hubCpfCacheRef.current.set(clean, data);
         const d = data.data;
         setGuestName(d.nome || guestName);
         setPhone(d.telefone || phone);
@@ -1023,7 +1020,36 @@ export default function CheckinHospedagemModal({
         setTelephonesList(d.telefones || []);
         setEmailsList(d.emails || []);
         setHubGuestSaved(true);
-        setHubMessage(`✓ Hóspede '${d.nome}' cadastrado automaticamente no banco de dados com sucesso!`);
+
+        // Grava o cadastro no banco assim que o Hub encontra o CPF — não só quando o check-in é
+        // confirmado. Assim, se o operador fechar o modal sem completar a hospedagem e pesquisar
+        // o mesmo CPF de novo depois, a busca local (acima) já encontra o cadastro e não gasta
+        // outra consulta paga na API por engano.
+        if (!cached) {
+          fetch("/api/cadastros/hospedes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fullName: d.nome || guestName,
+              cpf: clean,
+              birthDate: d.dataNascimento || null,
+              gender: d.genero || null,
+              email: d.email || null,
+              phone: (d.telefones && d.telefones[0]) || d.telefone || null,
+              motherName: d.nomeDaMae || null,
+              fatherName: d.nomeDoPai || null,
+              fullAddress: d.enderecoCompleto || null,
+              street: d.logradouro || null,
+              number: d.numero || null,
+              neighborhood: d.bairro || null,
+              city: d.cidade || null,
+              state: d.uf || null,
+              zipCode: d.cep || null,
+            }),
+          }).catch((err) => console.warn("[Check-in] Falha ao gravar hóspede consultado no Hub:", err));
+        }
+
+        setHubMessage(`✓ Hóspede '${d.nome}' localizado e cadastrado no banco de dados.`);
       } else {
         setHubMessage(`⚠️ ${data.message || "CPF não localizado na API."}`);
       }
@@ -1108,11 +1134,24 @@ export default function CheckinHospedagemModal({
 
   // Submit Check-in — posts dailies to room account + executes check-in
   const handleConfirmCheckin = async () => {
+    // Trava contra duplo clique/duplo envio: sem isso, dois cliques rápidos no botão disparam
+    // dois POSTs concorrentes para /api/stay/checkin com o mesmo reservationId, e o segundo
+    // falha com "Unique constraint failed on the fields: (reservationId)".
+    if (isSaving) return;
+
     // Validations
     if (earlyArrivalPending) {
       toast.error(
         `Esta chegada foi registrada de madrugada (${dtChegada.slice(11, 16)}), bem antes do horário padrão de check-in.\n\nDefina abaixo como tratar a noite anterior (diária extra, meia diária, taxa fixa ou cortesia) antes de efetivar a hospedagem.`,
         "Decisão de Chegada de Madrugada Pendente"
+      );
+      return;
+    }
+
+    if (discountNeedsAuth) {
+      toast.error(
+        `O desconto informado (${discountPercent.toFixed(1)}%) é maior que o limite de ${maxDiscountPercent}% permitido sem autorização, definido em Configurações.\n\nPeça a um administrador para autorizar (ícone de escudo ao lado do campo de desconto).`,
+        "Desconto Acima do Limite"
       );
       return;
     }
@@ -1191,6 +1230,15 @@ export default function CheckinHospedagemModal({
       documentNumber: docNumber,
       guestName: guestName.toUpperCase(),
       phone,
+      // Ficha completa consultada no Hub do Desenvolvedor (ou já vinda do cadastro local) — antes
+      // esses dados eram exibidos na tela mas descartados ao confirmar; agora seguem para o
+      // cadastro do hóspede junto com o check-in.
+      birthDate,
+      gender,
+      motherName,
+      fatherName,
+      fullAddress,
+      email,
       tariffId: selectedTariff.id,
       tariffName: selectedTariff.name,
       dailyRate,
@@ -1214,6 +1262,7 @@ export default function CheckinHospedagemModal({
       operatorName: activeOperatorName,
     };
 
+    setIsSaving(true);
     onSuccess(payload);
   };
 
@@ -1228,7 +1277,7 @@ export default function CheckinHospedagemModal({
             </div>
             <div>
               <h2 className={`font-bold text-base tracking-wide flex items-center gap-2 ${isDark ? "text-white" : "text-slate-900"}`}>
-                Hospedagem — Situação da thread: <span className="text-amber-500 font-mono text-xs">Thread_ChecarQuartos - suspenso</span>
+                Hospedagem
               </h2>
               <p className={`text-[11px] ${isDark ? "text-slate-400" : "text-slate-500 font-medium"}`}>Recepção • Efetuar Check-in no Quarto {roomData.number}</p>
             </div>
@@ -1590,6 +1639,9 @@ export default function CheckinHospedagemModal({
                       if (docType === "CPF") setDocNumber(formatCPF(val));
                       else if (docType === "CNPJ") setDocNumber(formatCNPJ(val));
                       else setDocNumber(val);
+                      // Editar o documento manualmente invalida a verificação prévia (Hub/pesquisa/cadastro manual):
+                      // impede que o operador troque para outra pessoa sem nova verificação.
+                      setHubGuestSaved(false);
                     }}
                     placeholder={docType === "CPF" ? "000.000.000-00" : docType === "CNPJ" ? "00.000.000/0000-00" : "Nº Passaporte"}
                     className={`w-full border rounded-lg p-2 font-mono text-xs outline-none ${
@@ -1615,7 +1667,12 @@ export default function CheckinHospedagemModal({
                   <input
                     type="text"
                     value={guestName}
-                    onChange={(e) => setGuestName(e.target.value.toUpperCase())}
+                    onChange={(e) => {
+                      setGuestName(e.target.value.toUpperCase());
+                      // Editar o nome manualmente invalida a verificação prévia (Hub/pesquisa/cadastro manual):
+                      // impede que o operador troque para outra pessoa sem nova verificação.
+                      setHubGuestSaved(false);
+                    }}
                     placeholder="NOME COMPLETO DO HÓSPEDE PRINCIPAL"
                     className={`w-full rounded-lg p-2 font-bold uppercase text-xs outline-none border ${
                       isDark
@@ -2480,15 +2537,34 @@ export default function CheckinHospedagemModal({
 
               <div>
                 <span className={`text-[10px] block ${isDark ? "text-slate-400" : "text-slate-600"}`}>Desconto (R$)</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={discount}
-                  onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                  className={`w-24 border rounded px-2 py-0.5 text-rose-500 font-mono font-bold text-xs ${
-                    isDark ? "bg-slate-950 border-slate-700" : "bg-white border-slate-300"
-                  }`}
-                />
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={discount}
+                    onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
+                    className={`w-24 border rounded px-2 py-0.5 text-rose-500 font-mono font-bold text-xs ${
+                      discountNeedsAuth
+                        ? "border-red-500"
+                        : (isDark ? "bg-slate-950 border-slate-700" : "bg-white border-slate-300")
+                    }`}
+                  />
+                  {discountNeedsAuth && (
+                    <button
+                      type="button"
+                      title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — exige autorização`}
+                      onClick={() => { setAdminAuthPurpose("HIGH_DISCOUNT"); setShowAdminAuthModal(true); }}
+                      className="p-1 rounded bg-red-500/15 border border-red-500/40 text-red-500 hover:bg-red-500/25 transition-colors"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {discountAuthorized && discountAuthorizedBy && (
+                  <span className={`text-[9px] flex items-center gap-1 mt-0.5 ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>
+                    <ShieldCheck className="w-2.5 h-2.5" /> Autorizado por {discountAuthorizedBy}
+                  </span>
+                )}
               </div>
 
               <div>
@@ -2517,11 +2593,12 @@ export default function CheckinHospedagemModal({
               <button
                 type="button"
                 onClick={handleConfirmCheckin}
-                className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold flex items-center gap-2 shadow-lg transition-all ${
+                disabled={isSaving}
+                className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold flex items-center gap-2 shadow-lg transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                   isDark ? "bg-[#00b4d8] hover:bg-[#0077b6] shadow-cyan-500/20" : "bg-[#0284C7] hover:bg-[#0369A1] shadow-sky-500/20"
                 }`}
               >
-                <Save className="w-4 h-4" /> Efetuar Hospedagem
+                <Save className="w-4 h-4" /> {isSaving ? "Salvando..." : "Efetuar Hospedagem"}
               </button>
             </div>
           </div>
@@ -2814,21 +2891,28 @@ export default function CheckinHospedagemModal({
           </div>
         )}
 
-        {/* ===== AUTORIZAÇÃO ADMIN: CORTESIA OU TAXA FIXA ABAIXO DA META DIÁRIA (CHEGADA DE MADRUGADA) ===== */}
+        {/* ===== AUTORIZAÇÃO ADMIN: CORTESIA, TAXA FIXA ABAIXO DA META DIÁRIA OU DESCONTO ACIMA DO LIMITE ===== */}
         <AdminAuthorizationModal
           isOpen={showAdminAuthModal}
           onClose={() => { setShowAdminAuthModal(false); setAdminAuthPurpose(null); }}
           reason={
             adminAuthPurpose === "LOW_FIXED_FEE"
               ? "aplicar uma taxa de chegada antecipada abaixo da meia diária"
+              : adminAuthPurpose === "HIGH_DISCOUNT"
+              ? `aplicar um desconto de ${discountPercent.toFixed(1)}%, acima do limite de ${maxDiscountPercent}% sem autorização`
               : "conceder cortesia (isenção de cobrança) na noite anterior a uma chegada de madrugada"
           }
           onAuthorized={(admin) => {
-            setEarlyArrivalAuthorizedBy(admin.name);
             if (adminAuthPurpose === "LOW_FIXED_FEE") {
+              setEarlyArrivalAuthorizedBy(admin.name);
               setEarlyArrivalFixedFeeAuthorized(true);
               toast.success(`Taxa reduzida autorizada por ${admin.name}.`);
+            } else if (adminAuthPurpose === "HIGH_DISCOUNT") {
+              setDiscountAuthorized(true);
+              setDiscountAuthorizedBy(admin.name);
+              toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
             } else {
+              setEarlyArrivalAuthorizedBy(admin.name);
               setEarlyArrivalCourtesyAuthorized(true);
               setEarlyArrivalChoice("COURTESY");
               toast.success(`Cortesia autorizada por ${admin.name}.`);

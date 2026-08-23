@@ -9,7 +9,6 @@ import {
   Users,
   Package,
   ShoppingBag,
-  CreditCard,
   DollarSign,
   FileText,
   FileBarChart,
@@ -85,7 +84,6 @@ export default function Sidebar() {
     { href: "/app/governance", label: "Governança & Quartos", icon: BedDouble },
     { href: "/app/stock", label: "Estoque Multi-PDV", icon: Package },
     { href: "/app/consumption", label: "PDV & Consumo", icon: ShoppingBag },
-    { href: "/app/checkout", label: "Checkout & Faturamento", icon: CreditCard, iconColor: isSidebarLight ? "text-emerald-600" : "text-[#10B981]" },
     { href: "/app/fiscal", label: "Módulo Fiscal NFSe/NFCe", icon: FileText, iconColor: isSidebarLight ? "text-cyan-600" : "text-[#38BDF8]" },
   ];
 

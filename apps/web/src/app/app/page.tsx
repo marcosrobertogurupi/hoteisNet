@@ -147,6 +147,28 @@ export default function TenantDashboardPage() {
     }[];
   } | null>(null);
   const [activeStayPayments, setActiveStayPayments] = useState<{ id: string; date: string; amount: number; methodDescription: string; operatorName?: string; caixaMovimentoId: string }[]>([]);
+  // Descrições (uppercase) das formas de pagamento cadastradas como Parcelamento (ex.: FATURA) —
+  // usado para separar, no Resumo de Hospedagem impresso no check-out, o que foi pago de fato do
+  // que foi faturado para a empresa (exige assinatura do hóspede, ver LancarPagamentoHospedagemModal).
+  const [installmentPaymentMethodNames, setInstallmentPaymentMethodNames] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/cadastros/formas-pagamento");
+        const data = await res.json();
+        if (!data?.success || !Array.isArray(data.paymentMethods)) return;
+        setInstallmentPaymentMethodNames(
+          new Set(
+            data.paymentMethods
+              .filter((f: any) => f.installment)
+              .map((f: any) => String(f.description).toUpperCase())
+          )
+        );
+      } catch (err) {
+        console.warn("[Mapa de Quartos] Erro ao buscar formas de pagamento:", err);
+      }
+    })();
+  }, []);
   // Reservas futuras (ainda não check-in) do quarto em edição no Alterar Período — usado para
   // bloquear no calendário datas que colidiriam com uma reserva já confirmada para o mesmo quarto.
   const [activeRoomReservations, setActiveRoomReservations] = useState<{ id: string; guestName: string; roomNumber: string; checkInDate: string; checkOutDate: string }[]>([]);
@@ -158,7 +180,10 @@ export default function TenantDashboardPage() {
   const [showAlterarTarifaModal, setShowAlterarTarifaModal] = useState(false);
   const [showCadastroTarifasModal, setShowCadastroTarifasModal] = useState(false);
   const [showLancarPagamentoModal, setShowLancarPagamentoModal] = useState(false);
-  const [lancarPagamentoCheckoutIntent, setLancarPagamentoCheckoutIntent] = useState(false);
+  // "payment": lança pagamentos/adiantamentos na hospedagem sem nunca fechar a conta (botão fixo
+  // em "Salvar Crédito"). "checkout": única forma de efetivamente encerrar a hospedagem — exige
+  // débito zerado (ou quitado no ato) e libera o quarto. Nunca misturar os dois no mesmo botão.
+  const [lancarPagamentoMode, setLancarPagamentoMode] = useState<"payment" | "checkout">("payment");
   const [showTransferDebitoModal, setShowTransferDebitoModal] = useState(false);
   const [showHistoricoLimpezaModal, setShowHistoricoLimpezaModal] = useState(false);
   const [showLancarReservaModal, setShowLancarReservaModal] = useState(false);
@@ -177,6 +202,15 @@ export default function TenantDashboardPage() {
 
   const [activeRoom, setActiveRoom] = useState<RoomItem | null>(null);
   const lastFetchedRoomNumberRef = useRef<string | null>(null);
+  // true enquanto a busca abaixo está em voo. Extrato/Resumo/WhatsApp tiram um snapshot único dos
+  // dados na abertura (nunca sobrescrito por um refresh em segundo plano, para não estragar um
+  // documento já em exibição/impressão) — então, se activeStayDetail já estava carregado de uma
+  // tela anterior (ex.: Lançar Pagamento aberta por baixo) e esses modais forem abertos por cima
+  // ANTES do refetch iniciado por essa própria abertura terminar, eles tirariam o snapshot com os
+  // dados antigos (ex.: sem o pagamento que acabou de ser salvo) e nunca mais atualizariam. Usado
+  // para manter a tela de carregamento visível até o refetch terminar, garantindo que esses modais
+  // só montem (e tirem o snapshot) com os dados já atualizados.
+  const [isLoadingStayModal, setIsLoadingStayModal] = useState(false);
   const [targetRoomNumber, setTargetRoomNumber] = useState<string>("101");
   const [showInactive, setShowInactive] = useState(false);
 
@@ -384,6 +418,11 @@ export default function TenantDashboardPage() {
     return () => clearInterval(interval);
   }, [syncRoomsFromDatabase, anyModalOpen]);
 
+  // Espelha anyModalOpen num ref para ser lido dentro do intervalo de diária extra abaixo, sem
+  // precisar reiniciar esse intervalo toda vez que um modal abre/fecha.
+  const anyModalOpenRef = useRef(anyModalOpen);
+  useEffect(() => { anyModalOpenRef.current = anyModalOpen; }, [anyModalOpen]);
+
   // Verificação automática de diária extra por checkout atrasado: a cada 1 minuto, checa todos os
   // quartos ocupados e, se a data/hora atual já ultrapassou o horário de virada de diária configurado
   // em Configurações (Tenant.dailyRolloverTime), lança +1 diária extra no débito da hospedagem
@@ -405,7 +444,13 @@ export default function TenantDashboardPage() {
               "Diária Extra Lançada"
             );
           }
-          syncRoomsFromDatabase();
+          // A cobrança da diária extra já foi gravada no backend independentemente do modal aberto
+          // (o horário de virada não pode esperar o operador fechar a tela) — mas o redesenho do
+          // card do quarto por baixo de um modal aberto é adiado, para não violar a regra de
+          // pausar a atualização automática enquanto o operador está com uma tela aberta.
+          if (!anyModalOpenRef.current) {
+            syncRoomsFromDatabase();
+          }
         }
       } catch (err) {
         console.warn("[MapaQuartos] Erro na verificação de diária extra por checkout atrasado:", err);
@@ -467,6 +512,7 @@ export default function TenantDashboardPage() {
         setActiveStayPayments([]);
       }
       lastFetchedRoomNumberRef.current = activeRoom.number;
+      setIsLoadingStayModal(true);
       (async () => {
         try {
           // Alterar Período depende da diária do dia já estar lançada (ou não) para calcular a
@@ -556,6 +602,8 @@ export default function TenantDashboardPage() {
           setShowConsumptionModal(false);
           setShowTransferDebitoModal(false);
           setShowWppModal(false);
+        } finally {
+          setIsLoadingStayModal(false);
         }
       })();
     }
@@ -723,6 +771,13 @@ export default function TenantDashboardPage() {
     const outrosDebitos = activeStayDetail.otherDebits ?? 0;
     const discount = activeStayDetail.discount ?? 0;
     const totalAdiantamento = activeStayPayments.reduce((acc, p) => acc + p.amount, 0);
+    // Separa o que foi efetivamente pago do que foi faturado para a empresa (forma de pagamento
+    // com Parcelamento, ex.: FATURA) — o Resumo de Hospedagem impresso no check-out precisa exibir
+    // os dois totais separadamente, nunca somados como se tudo fosse pagamento recebido.
+    const totalFaturado = activeStayPayments
+      .filter((p) => installmentPaymentMethodNames.has(p.methodDescription.toUpperCase()))
+      .reduce((acc, p) => acc + p.amount, 0);
+    const totalPago = totalAdiantamento - totalFaturado;
     const totalDespesas = totalDiarias + totalConsumo + outrosDebitos;
 
     return {
@@ -761,8 +816,10 @@ export default function TenantDashboardPage() {
       totalDespesas,
       discount,
       totalAdiantamento,
+      totalPago,
+      totalFaturado,
     };
-  }, [activeStayDetail, activeStayPayments]);
+  }, [activeStayDetail, activeStayPayments, installmentPaymentMethodNames]);
 
   // Quartos elegíveis como destino na Transferência de Débitos: ocupados, com hóspede, exceto o
   // próprio quarto de origem (o menu que abre o modal já garante que a origem está ocupada).
@@ -1027,9 +1084,11 @@ export default function TenantDashboardPage() {
                 onDoubleClick={() => {
                   if (isInactive || isMaintenance) return;
                   if (isOccupied) {
-                    // Quarto ocupado: abre a tela de check-out (fechamento de conta) com os dados da hospedagem
+                    // Quarto ocupado: abre a tela de check-out (fechamento de conta) com os dados da hospedagem.
+                    // Duplo-clique é uma das duas únicas formas de encerrar a hospedagem (a outra é o item
+                    // "Encerrar Hospedagem" do menu de contexto) — por isso sempre abre em modo "checkout".
                     setActiveRoom(room);
-                    setLancarPagamentoCheckoutIntent(false);
+                    setLancarPagamentoMode("checkout");
                     setShowLancarPagamentoModal(true);
                   } else if (isVacantClean) {
                     // Quarto livre: abre a tela de check-in com os dados do quarto
@@ -1504,7 +1563,7 @@ export default function TenantDashboardPage() {
                   setContextMenu(prev => ({ ...prev, visible: false }));
                   if (contextMenu.room) {
                     setActiveRoom(contextMenu.room);
-                    setLancarPagamentoCheckoutIntent(false);
+                    setLancarPagamentoMode("payment");
                     setShowLancarPagamentoModal(true);
                   }
                 }}
@@ -1613,7 +1672,7 @@ export default function TenantDashboardPage() {
                   setContextMenu(prev => ({ ...prev, visible: false }));
                   if (contextMenu.room) {
                     setActiveRoom(contextMenu.room);
-                    setLancarPagamentoCheckoutIntent(true);
+                    setLancarPagamentoMode("checkout");
                     setShowLancarPagamentoModal(true);
                   }
                 }}
@@ -1783,6 +1842,12 @@ export default function TenantDashboardPage() {
                   documentType: checkinData.documentType,
                   documentNumber: checkinData.documentNumber,
                   phone: checkinData.phone,
+                  birthDate: checkinData.birthDate,
+                  gender: checkinData.gender,
+                  motherName: checkinData.motherName,
+                  fatherName: checkinData.fatherName,
+                  fullAddress: checkinData.fullAddress,
+                  email: checkinData.email,
                   checkInDate: brDateTimeToIso(checkinData.checkInDate),
                   checkOutDate: brDateTimeToIso(checkinData.checkOutDate),
                   dailyRate: checkinData.dailyRate,
@@ -1901,8 +1966,13 @@ export default function TenantDashboardPage() {
         />
       )}
 
-      {/* Enquanto a hospedagem real ainda não voltou da API, mostra um loading — nunca os dados de amostra do componente */}
-      {((showExtratoModal || showResumoModal || showLancarPagamentoModal || showAlterarTarifaModal || showWppModal) && activeRoom && !realStayBilling) ||
+      {/* Enquanto a hospedagem real ainda não voltou da API, mostra um loading — nunca os dados de amostra do componente.
+          Extrato/Resumo/WhatsApp também esperam isLoadingStayModal (não só realStayBilling) porque tiram um
+          snapshot único dos dados na abertura: se activeStayDetail já estivesse carregado de uma tela anterior
+          (ex.: Lançar Pagamento aberta por baixo) eles montariam de imediato com dados desatualizados (ex.: sem
+          um pagamento que acabou de ser salvo), sem chance de atualizar depois. */}
+      {((showExtratoModal || showResumoModal || showWppModal) && activeRoom && (!realStayBilling || isLoadingStayModal)) ||
+      ((showLancarPagamentoModal || showAlterarTarifaModal) && activeRoom && !realStayBilling) ||
       (showConsumptionModal && activeRoom && !activeStayDetail) ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm">
           <div className={`px-6 py-4 rounded-xl border shadow-2xl text-sm font-semibold flex items-center gap-2 ${theme.isDark ? "bg-[#0F172A] border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"}`}>
@@ -1912,7 +1982,7 @@ export default function TenantDashboardPage() {
       ) : null}
 
       {/* MODAL EXTRATO DE HOSPEDAGEM (TELA WINDEV & WHATSAPP) */}
-      {showExtratoModal && activeRoom && realStayBilling && (
+      {showExtratoModal && activeRoom && realStayBilling && !isLoadingStayModal && (
         <ImprimirExtratoHospedagemModal
           isOpen={showExtratoModal}
           onClose={() => setShowExtratoModal(false)}
@@ -1941,7 +2011,7 @@ export default function TenantDashboardPage() {
       )}
 
       {/* MODAL RESUMO DE HOSPEDAGEM (PDF IMPRESSÃO) */}
-      {showResumoModal && activeRoom && realStayBilling && (
+      {showResumoModal && activeRoom && realStayBilling && !isLoadingStayModal && (
         <ImprimirResumoHospedagemModal
           isOpen={showResumoModal}
           onClose={() => setShowResumoModal(false)}
@@ -1967,8 +2037,8 @@ export default function TenantDashboardPage() {
             totalConsumo: realStayBilling?.totalConsumo || 0,
             outrosDebitos: realStayBilling?.outrosDebitos || 0,
             totalDespesas: realStayBilling?.totalDespesas || 0,
-            pagamentosAmount: realStayBilling?.totalAdiantamento ?? 0,
-            totalAFaturar: 0.0,
+            pagamentosAmount: realStayBilling?.totalPago ?? 0,
+            totalAFaturar: realStayBilling?.totalFaturado ?? 0,
             descontos: realStayBilling?.discount ?? 0,
             saldoAPagar: Math.max(
               0,
@@ -1981,12 +2051,17 @@ export default function TenantDashboardPage() {
               quantity: c.quantity,
               totalPrice: c.totalPrice,
             })),
+            paymentItems: activeStayPayments.map((p) => ({
+              dateTime: p.date,
+              amount: p.amount,
+              paymentMethod: p.methodDescription,
+            })),
           }}
         />
       )}
 
       {/* MODAL MENSAGENS WHATSAPP (RESUMO/CONSUMO/EXTRATO EM PDF + TEXTO AVULSO) */}
-      {showWppModal && activeRoom && realStayBilling && activeStayDetail && (
+      {showWppModal && activeRoom && realStayBilling && activeStayDetail && !isLoadingStayModal && (
         <MensagensWhatsAppModal
           isOpen={showWppModal}
           onClose={() => setShowWppModal(false)}
@@ -2395,7 +2470,7 @@ export default function TenantDashboardPage() {
         <LancarPagamentoHospedagemModal
           isOpen={showLancarPagamentoModal}
           onClose={() => setShowLancarPagamentoModal(false)}
-          checkoutIntent={lancarPagamentoCheckoutIntent}
+          mode={lancarPagamentoMode}
           stayData={{
             idHospedagem: activeStayDetail.id,
             roomNumber: activeRoom.number,

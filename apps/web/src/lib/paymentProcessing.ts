@@ -72,7 +72,7 @@ export async function processPaymentLine(
         tenantId,
         stayCheckinId,
         companyId: billedToCompanyId,
-        guestId: billedToCompanyId ? null : guestId || null,
+        guestId: guestId || null,
         billedToName,
         documentNumber: `${stayCheckinId}.01.HOS`,
         issueDate,

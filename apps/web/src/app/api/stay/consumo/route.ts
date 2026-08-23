@@ -127,6 +127,12 @@ export async function POST(req: NextRequest) {
     const totalPrice = qty * price;
 
     const result = await prisma.$transaction(async (tx) => {
+      // Trava a linha da hospedagem ANTES de gravar o consumo — mesmo lock adquirido pelo checkout
+      // (ver /api/stay/checkin PATCH). Sem isso na ponta do consumo, o lock do checkout sozinho não
+      // impede a corrida: esta transação não tentaria adquirir o mesmo lock e poderia commitar um
+      // consumo novo entre a leitura do saldo e o fechamento do checkout em outro terminal.
+      await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${stayCheckinId!} FOR UPDATE`;
+
       // Baixa o estoque do PDV escolhido, quando o item lançado está vinculado a um produto cadastrado.
       if (productId && posLocationId) {
         const stayForTenant = await tx.stayCheckin.findUnique({

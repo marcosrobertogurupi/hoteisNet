@@ -115,17 +115,35 @@ export async function POST(request: NextRequest) {
       state,
       country,
       companyId,
+      motherName,
+      fatherName,
+      fullAddress,
     } = body;
 
     if (!fullName || fullName.trim().length < 3) {
       return NextResponse.json({ error: "Nome completo é obrigatório" }, { status: 400 });
     }
 
+    // Sem @@unique em Guest.cpf (um mesmo CPF pode legitimamente existir em tenants diferentes),
+    // então a proteção contra duplicata é feita aqui: se já existe um cadastro com este CPF neste
+    // tenant, devolve o existente em vez de criar outro — importante agora que a consulta ao Hub
+    // do Desenvolvedor no check-in chama este endpoint assim que encontra o CPF, podendo ser
+    // chamada mais de uma vez para o mesmo hóspede.
+    const formattedCpf = cpf ? formatCPF(cpf) : null;
+    if (formattedCpf) {
+      const existing = await prisma.guest.findFirst({
+        where: { tenantId: tenantId || DEFAULT_TENANT_ID, cpf: formattedCpf },
+      });
+      if (existing) {
+        return NextResponse.json({ success: true, ...existing, alreadyExisted: true }, { status: 200 });
+      }
+    }
+
     const newGuest = await prisma.guest.create({
       data: {
         tenantId: tenantId || DEFAULT_TENANT_ID,
         fullName: fullName.trim().toUpperCase(),
-        cpf: cpf ? formatCPF(cpf) : null,
+        cpf: formattedCpf,
         passport: passport || null,
         birthDate: birthDate ? new Date(birthDate) : null,
         gender: gender || "M",
@@ -141,6 +159,9 @@ export async function POST(request: NextRequest) {
         state: state || null,
         country: country || "Brasil",
         companyId: companyId || null,
+        motherName: motherName || null,
+        fatherName: fatherName || null,
+        fullAddress: fullAddress || null,
       },
     });
 

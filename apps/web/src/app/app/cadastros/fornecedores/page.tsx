@@ -14,15 +14,19 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
+import { useToast } from "@/context/ToastContext";
 import CadastroFornecedorModal, { FornecedorFormData } from "@/components/CadastroFornecedorModal";
+import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function FornecedoresPage() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
   const confirmDialog = useConfirm();
+  const toast = useToast();
 
   const [fornecedores, setFornecedores] = useState<FornecedorFormData[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isLoadingFornecedores, setIsLoadingFornecedores] = useState(true);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFornecedor, setEditingFornecedor] = useState<FornecedorFormData | null>(null);
@@ -33,53 +37,33 @@ export default function FornecedoresPage() {
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.suppliers)) return;
 
-      setFornecedores((prevList) => {
-        const prevMap = new Map(prevList.map((f) => [f.id, f]));
+      const updatedList: FornecedorFormData[] = data.suppliers.map((s: any) => ({
+        id: s.id,
+        cnpjCpf: s.cnpj || "",
+        razao: s.name,
+        fantasia: s.tradeName || "",
+        ie: s.ie || "",
+        cep: s.zipCode || "",
+        logradouro: s.address || "",
+        numero: s.number || "",
+        bairro: s.neighborhood || "",
+        cidade: s.city || "",
+        uf: s.state || "",
+        telefone: s.phone || "",
+        email: s.email || "",
+        observacao: s.notes || "",
+      }));
 
-        const updatedList: FornecedorFormData[] = data.suppliers.map((s: any) => {
-          const existing = prevMap.get(s.id);
-          const rName = s.name;
-          const tName = s.tradeName || s.name;
-          const cCpf = s.cnpj || "Sem CNPJ";
-          const ph = s.phone || "";
-          const em = s.email || "";
-
-          if (existing) {
-            if (existing.razao === rName && existing.cnpjCpf === cCpf && existing.telefone === ph) {
-              return existing;
-            }
-            return { ...existing, razao: rName, fantasia: tName, cnpjCpf: cCpf, telefone: ph, email: em };
-          }
-
-          return {
-            id: s.id,
-            cnpjCpf: cCpf,
-            razao: rName,
-            fantasia: tName,
-            ie: "ISENTO",
-            cep: "77400-000",
-            logradouro: s.address || "Centro",
-            numero: "100",
-            bairro: "Centro",
-            cidade: s.city || "Gurupi",
-            uf: s.state || "TO",
-            telefone: ph,
-            email: em,
-            observacao: s.category ? `Categoria: ${s.category}` : "Fornecedor ativo.",
-          };
-        });
-
-        return updatedList;
-      });
+      setFornecedores(updatedList);
     } catch (err) {
-      console.warn("[CadastroFornecedores] Erro na sincronização transparente:", err);
+      console.warn("[CadastroFornecedores] Erro ao buscar fornecedores:", err);
+    } finally {
+      setIsLoadingFornecedores(false);
     }
   }, []);
 
   useEffect(() => {
     syncFornecedoresFromDatabase();
-    const interval = setInterval(syncFornecedoresFromDatabase, 3000);
-    return () => clearInterval(interval);
   }, [syncFornecedoresFromDatabase]);
 
   const filteredFornecedores = fornecedores.filter((f) =>
@@ -107,26 +91,45 @@ export default function FornecedoresPage() {
       confirmLabel: "Excluir",
       variant: "danger",
     });
-    if (ok) {
-      setFornecedores((prev) => prev.filter((item) => item.id !== id));
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/cadastros/fornecedores?id=${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!data.success) {
+        toast.error(data.error || "Não foi possível excluir o fornecedor.");
+        return;
+      }
+      toast.success("Fornecedor excluído com sucesso.");
+      await syncFornecedoresFromDatabase();
+    } catch (err: any) {
+      toast.error("Erro de conexão ao excluir o fornecedor.");
     }
   };
 
-  const handleSaveFornecedor = (data: FornecedorFormData) => {
-    if (data.id) {
-      setFornecedores((prev) => prev.map((f) => (f.id === data.id ? data : f)));
-    } else {
-      const newF: FornecedorFormData = {
-        ...data,
-        id: `FOR-${Math.floor(100 + Math.random() * 900)}`,
-      };
-      setFornecedores((prev) => [newF, ...prev]);
+  const handleSaveFornecedor = async (data: FornecedorFormData) => {
+    try {
+      const res = await fetch(`/api/cadastros/fornecedores`, {
+        method: data.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const result = await res.json();
+      if (!result.success) {
+        toast.error(result.error || "Não foi possível salvar o fornecedor.");
+        return;
+      }
+      toast.success(data.id ? "Fornecedor atualizado com sucesso." : "Fornecedor cadastrado com sucesso.");
+      await syncFornecedoresFromDatabase();
+      setIsModalOpen(false);
+    } catch (err: any) {
+      toast.error("Erro de conexão ao salvar o fornecedor.");
     }
-    setIsModalOpen(false);
   };
 
   return (
     <div className={`min-h-screen p-4 md:p-8 ${theme.bgApp} ${theme.textMain} transition-colors`}>
+      <LoadingOverlay show={isLoadingFornecedores} message="Buscando fornecedores..." submessage="Estamos carregando os fornecedores mais recentes." />
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <Link
