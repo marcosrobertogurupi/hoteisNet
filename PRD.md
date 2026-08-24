@@ -1,7 +1,7 @@
 # Product Requirement Document (PRD) — Hoteis.Net PMS SaaS
 
-**Versão:** 1.5.0
-**Data:** 20 de Agosto de 2026
+**Versão:** 1.6.0
+**Data:** 23 de Agosto de 2026
 **Status:** Documento Oficial de Referência do Projeto — **atualizado a cada alteração relevante no sistema** (ver regra em `.agents/AGENTS.md`)
 
 ### Legenda de Status de Implementação
@@ -34,14 +34,16 @@ O **Hoteis.Net PMS SaaS** é uma plataforma moderna de Gestão Hoteleira (Proper
 
 ## 2. Arquitetura Multi-Tenancy & Segurança
 
-### 2.1. Isolamento de Dados por Tenant
-Todas as entidades do banco de dados operacionais (apartamentos, categorias, reservas, check-ins, hóspedes, produtos, caixas, movimentações) contêm o campo obrigatório `tenantId`. O middleware de banco garante que nenhuma consulta cruze dados entre clientes SaaS distintos.
+### 2.1. Isolamento de Dados por Tenant ✅ (auditado em 23/08/2026)
+Todas as entidades do banco de dados operacionais (apartamentos, categorias, reservas, check-ins, hóspedes, produtos, caixas, movimentações) contêm o campo obrigatório `tenantId`. Diferente do texto original desta seção, **não existe middleware central que garanta isso** — `apps/web/src/middleware.ts` só protege páginas (`/app/**`, `/admin/**`), nunca `/api/**`. Uma auditoria de segurança em 23/08/2026 encontrou dezenas de rotas de API que confiavam em um `tenantId` vindo do body/query do próprio cliente (ou caíam para uma constante compartilhada tipo `"tenant-hoteisnet-demo"`/`"TNT-01"`), permitindo ler/editar/apagar dados de qualquer hotel sem autenticação. Corrigido em toda a API: cada rota agora exige `getSessionUser`/`getHousekeeperSession` e usa exclusivamente `session.tenantId` (nunca um valor do cliente); `update`/`delete` sempre repetem o filtro de tenant na própria escrita (`updateMany`/`deleteMany`), nunca só numa checagem de leitura anterior. As regras obrigatórias para toda rota nova estão documentadas em `CLAUDE.md` (raiz do projeto) — consulte antes de criar qualquer endpoint.
 
 ### 2.2. Autenticação e Sessão ✅
 * Login por e-mail/senha validado contra `prisma.User` (senha com hash), com emissão de um JWT assinado (`jose`) armazenado em cookie de sessão `httpOnly`.
-* Um segundo cookie, não-`httpOnly`, identifica o terminal/estação de atendimento para fins de auditoria (ex.: "RECEPÇÃO 01").
+* Um segundo cookie, `httpOnly` desde 23/08/2026, identifica o terminal/estação de atendimento para fins de auditoria (ex.: "RECEPÇÃO 01").
 * `/api/auth/me` decodifica a sessão no servidor e retorna o usuário autenticado com uma flag `isAdmin`; `/api/auth/logout` limpa a sessão.
 * Todo login/logout gera um registro em `AuditLog` com terminal e IP de origem.
+* **Proteção contra força bruta ✅ (23/08/2026):** login, `verify-admin` e login de governança bloqueiam a conta por 15min após 5 tentativas incorretas (`User.failedLoginAttempts`/`lockedUntil`) e usam comparação de senha timing-safe (`verifyPasswordTimingSafe`) para não vazar, por tempo de resposta, se um e-mail está cadastrado.
+* **Revogação de sessão ✅ (23/08/2026):** `User.tokenVersion` é incluído no JWT e revalidado a cada requisição (`getSessionUser`); desativar o usuário, trocar sua senha ou seu papel incrementa esse campo e invalida instantaneamente qualquer sessão já emitida, em vez de esperar o token expirar sozinho (até 12h).
 
 ### 2.3. Perfis de Usuários (User Roles)
 * **`SUPER_ADMIN`:** Administrador geral da plataforma SaaS Hoteis.Net (gestão de tenants, planos, cotas de IA e cobrança).
@@ -73,7 +75,7 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * **Grid de Reservas (Estilo Gantt / Linha do Tempo):** Visualização gráfica da ocupação dos quartos ao longo dos dias do mês.
 * **Interatividade:** Duplo clique em células de datas para criar/editar reservas diretamente no mapa.
 * **Prevenção de Overbooking:** Verificação automática em tempo real que bloqueia reservas conflitantes no mesmo apartamento.
-* **Comunicação por WhatsApp ✅:** Envio de comprovante de reserva em PDF via Uazapi (`api/uazapi/send-reserva`), com fallback de servidor/token padrão embutido no código (pendência de segurança — mover para configuração por tenant).
+* **Comunicação por WhatsApp ✅:** Envio de comprovante de reserva em PDF via Uazapi (`api/uazapi/send-reserva`). Credenciais sempre resolvidas a partir do tenant da sessão (`getTenantUazapiCredentials`); o antigo fallback de servidor/token embutido no código foi removido em 23/08/2026 (ver 4).
 * **Reservas Múltiplas em Lote ✅:** `api/reservations/batch` grava várias reservas de uma só vez dentro de uma única transação Prisma, equivalente ao botão "Salvar Reservas" da tela de Reservas Múltiplas do WinDev original — o usuário monta o lote em grade local e só é persistido no clique final; se qualquer reserva do lote colidir ou falhar, nenhuma é gravada.
 
 ### 3.3. Check-in, Hospedagem & Alteração de Período ✅
@@ -138,7 +140,7 @@ Todas as entidades do banco de dados operacionais (apartamentos, categorias, res
 * **Mensagens Automáticas Configuráveis ✅:** `WhatsappMessageSetting` (via `api/tenant/whatsapp-messages`) permite habilitar/customizar por tenant os textos de confirmação de reserva, boas-vindas no check-in, aviso de previsão de check-out e mensagem de check-out, com placeholders (`{HOTEL}`, `{HOSPEDE}`, `{QUARTO}`).
 * **Envio de Extrato por WhatsApp ✅:** `api/uazapi/send-extrato` envia o extrato de consumo/hospedagem em PDF via Uazapi.
 * **Resiliência a Instância Fora do Ar ✅:** `fetchUazapi` (em `lib/uazapiInstance.ts`) envolve as chamadas à instância uazapi com timeout de 15s e converte falhas de rede em `UazapiUnreachableError`; as rotas `api/uazapi/{messages/download,profile-picture,send-extrato}` distinguem esse caso (`unreachable`/`checkFailed: true`, status 503) de uma resposta legítima "sem WhatsApp"/"anexo indisponível", evitando que a UI informe erroneamente que o hóspede não tem WhatsApp quando na verdade a instância está instável.
-* **Dívida de segurança remanescente ⚠️:** `api/uazapi/send-reserva` e `api/uazapi/send-extrato` ainda usam fallback de servidor/token padrão embutido no código quando o tenant não tem instância própria configurada — deve ser removido (ver seção 4).
+* **Segredo por-tenant no webhook ✅ (23/08/2026):** `api/uazapi/webhook/[tenantId]` passou a exigir um segredo (`UazapiSetting.webhookSecret`, comparado via `timingSafeEqual`) enviado como query param na URL registrada na uazapi — antes qualquer POST com um `tenantId` válido (sequencial/adivinhável, ex. `TNT-01`) era tratado como mensagem legítima de hóspede, inclusive acionando o Agente de IA. O fallback de servidor/token uazapi embutido no código-fonte (usado por `instance`, `send-text`, `send-reserva`, `send-extrato` quando o tenant não tinha instância própria) também foi removido — agora só via `UAZAPI_FALLBACK_SERVER_URL`/`UAZAPI_FALLBACK_INSTANCE_TOKEN` (variáveis de ambiente).
 * **QR Code Expresso:** ⏳ não implementado.
 
 ### 3.9. Agentes de IA (Atendimento WhatsApp + Operacional) ✅ (parcialmente — ver ressalvas)
@@ -261,7 +263,7 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 ### 3.14. Consulta de CPF (Hub do Desenvolvedor) ✅
 * `api/stay/hub-consult-cpf` integra com a API paga do "Hub do Desenvolvedor" (`ws.hubdodesenvolvedor.com.br`) para resolver CPF em dados da Receita Federal (nome, nascimento, filiação, endereço, telefones, e-mails), agilizando o cadastro do hóspede.
 * **Cota Mensal por Assinante ✅ (persistida no banco):** o controle de cota deixou de viver em memória de processo — `Tenant.cpfQueryQuotaMonthly`/`cpfQueryUsed`/`cpfQueryCycleStart` guardam limite, uso do mês corrente e início do ciclo; a rota reseta `cpfQueryUsed` automaticamente quando o ciclo vigente é de um mês anterior, e incrementa o uso a cada consulta bem-sucedida. A cota é editável por assinante no Painel SuperAdmin (ver 3.10).
-* **Pendências de segurança/robustez:** há um token/contrato padrão **embutido no código-fonte** (`DEFAULT_HUB_TOKEN`/`DEFAULT_HUB_CONTRACT`) usado quando a variável de ambiente não está configurada — deve ser removido do código.
+* **Segurança ✅ (23/08/2026):** o token/contrato do Hub já vem exclusivamente de variável de ambiente (`HUB_DESENVOLVEDOR_TOKEN`/`HUB_DESENVOLVEDOR_CONTRACT`, sem fallback embutido no código). A rota passou a exigir sessão autenticada — antes qualquer pessoa na internet, sem login, conseguia consultar CPF de terceiros consumindo a cota paga do tenant demo.
 
 ### 3.15. Dashboard Operacional ✅
 * `api/dashboard/metrics` calcula, com fuso de Brasília: ocupação atual (quartos ocupados/vagos, taxa de ocupação), chegadas e saídas do dia, série histórica de ocupação x vacância dos últimos 15 dias (a partir dos snapshots horários de `RoomOccupancySnapshot`) e ranking dos quartos mais/menos ocupados nos últimos 30 dias. Métricas operacionais, não financeiras.
@@ -280,8 +282,8 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 2. **Desempenho & Baixa Latência:** Renderização rápida de componentes de grade e mapa de quartos sem engasgos, com queries de banco indexadas e caching inteligente no Next.js.
 3. **Disponibilidade & Escalabilidade:** Arquitetura desacoplada em nuvem pronta para suportar múltiplos hotéis em regime SaaS 24/7.
 4. **Segurança & Privacidade:** Criptografia HTTPS/TLS, autenticação segura, isolamento estrito de dados entre hotéis e conformidade com a LGPD.
-5. **Dívida técnica de segurança identificada (a corrigir):**
-   * Credenciais padrão (token Uazapi e token/contrato do Hub do Desenvolvedor) embutidas como fallback no código-fonte — devem ser removidas e exigidas via variável de ambiente/configuração por tenant.
+5. **Auditoria de segurança de 23/08/2026 — concluída ✅:** revisão completa de todas as ~106 rotas de API encontrou vazamento de dados entre hotéis (PII de hóspede, financeiro, conversas de WhatsApp) por falta de checagem de sessão e por confiar em `tenantId` vindo do cliente. Todos os achados foram corrigidos (ver 2.1, 2.2, 3.2, 3.8, 3.14): autenticação obrigatória em toda rota não-pública, `tenantId` sempre da sessão, `update`/`delete` com filtro de tenant na própria escrita, credenciais de API de terceiros (Uazapi, Hub do Desenvolvedor) só via variável de ambiente, webhook do WhatsApp com segredo por-tenant, rate limiting + revogação de sessão no login, e-mail/SMTP sem relay aberto. Regras obrigatórias para rotas novas documentadas em `CLAUDE.md`.
+6. **Dívida técnica restante (não é de segurança):**
    * Duas fontes de dados paralelas para tarifas (Prisma vs. Supabase direto) — risco de inconsistência, deve ser unificado.
 
 ---
@@ -300,10 +302,11 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * [ ] **Fase 8 (nova):** Sair do estágio de protótipo de UI para as telas de Fiscal/NFe, Painel Super Admin (tenants/telemetria IA/suporte) e Central de Ajuda com IA — hoje totalmente mockadas, sem nenhuma chamada de API.
 * [ ] **Fase 9 (nova):** Unificar acesso a dados de Tarifas (eliminar rota paralela via Supabase) e migrar configuração de e-mail/WhatsApp para as tabelas `EmailSetting`/`UazapiSetting` por tenant, removendo credenciais padrão embutidas no código.
 * [x] **Fase 10 (nova):** Transferência de Débitos entre Quartos (`api/stay/transfer-debit` + `StayDebitTransfer`), Reservas Múltiplas em Lote (`api/reservations/batch`), Dashboard Operacional (`api/dashboard/metrics`) e Relatórios de Governança/Café da Manhã/Reservas por Período (`api/relatorios/*`) — implementados e conectados ao banco.
-* [~] **Fase 11 (nova):** Reformulação da Integração WhatsApp (Uazapi) — gestão completa de instância por tenant (`api/uazapi/instance/*`, incluindo vincular instância já existente), conversa bidirecional via webhook com histórico (`WhatsappMessage`), badge de não lidas + som configurável no Mapa de Quartos e mensagens automáticas configuráveis (`WhatsappMessageSetting`) já implementados; pendente remover o fallback de credencial padrão embutida no código em `send-reserva`/`send-extrato`/`send-text` para tenants sem instância própria configurada.
+* [x] **Fase 11 (nova):** Reformulação da Integração WhatsApp (Uazapi) — gestão completa de instância por tenant (`api/uazapi/instance/*`, incluindo vincular instância já existente), conversa bidirecional via webhook com histórico (`WhatsappMessage`), badge de não lidas + som configurável no Mapa de Quartos e mensagens automáticas configuráveis (`WhatsappMessageSetting`) já implementados; fallback de credencial padrão embutida no código em `send-reserva`/`send-extrato`/`send-text` removido em 23/08/2026 (ver 3.8/4).
 * [ ] **Fase 12 (nova):** Implementar fluxo de UI para cancelamento de hospedagem (`StayCheckin.isCanceled`/`canceledAt`/`canceledByUser*`), campos já existentes no schema mas ainda não gravados por nenhuma tela.
 * [x] **Fase 13 (nova):** Caixa obrigatório para operar o sistema (`CashRegisterGate`), Caixa Geral consolidado para Admin (`app/cash-register-geral` + `api/caixa/geral`), sangria vinculada a plano de contas e gestão de usuários multi-hotel para `SUPER_ADMIN` — implementados e conectados ao banco.
 * [x] **Fase 14 (nova):** Validação de placa de veículo única no cadastro de hóspede, cota mensal de consulta de CPF persistida no banco e editável por assinante no Painel SuperAdmin (`api/admin/tenants`), e resiliência da integração uazapi a instância fora do ar (`fetchUazapi`/`UazapiUnreachableError`) — implementados e conectados ao banco.
 * [x] **Fase 15 (nova):** Formas de Pagamento com regras de negócio (Parcelamento, Debitar Saldo Hóspede, Transf.Débito, Soma Caixa x Conta Corrente) centralizadas em `paymentProcessing.ts`, Saldo do Hóspede/Conta Corrente (`Guest.balance` + `GuestBalanceEntry`) e Contas a Pagar/Contas a Receber avulsas com baixa (total/parcial, juros/desconto) — implementados e conectados ao banco. Correção do loop infinito e adoção do tema claro/escuro no modal de Alterar Período, com a regra de data mínima de saída (nunca antes de hoje, travada na última diária lançada após o horário de virada). Overlays de celebração de check-in e despedida de check-out no Mapa de Quartos.
 * [x] **Fase 16 (nova):** Conclusão dos cadastros auxiliares (Bancos, Colaboradores, Comandas, Grupos, PDV, Pratos) com CRUD real via API, remoção da página standalone `app/checkout` (fluxo de fechamento já coberto pelo Mapa de Quartos) e busca de Empresa Conveniada no cadastro do hóspede vinculada ao cadastro real de Empresas (`Guest.companyId`), garantindo que o Contas a Receber sempre rastreie o hóspede de origem do débito mesmo quando faturado à empresa.
 * [~] **Fase 16 (nova):** Agentes de IA (Atendimento WhatsApp + Operacional) — ver detalhamento completo na seção 3.9 e em `PLANO_AGENTE_IA.md`. Agente de atendimento completo: disponibilidade, criação/cancelamento de reserva real (guardrails de auto-confirmação e de permissão de cancelamento, ambos por tenant), reenvio de FNRH sob demanda, identificação de hóspede por CPF, envio de fotos de quarto, lista de serviços/café da manhã, base de conhecimento (RAG leve) e escalonamento para humano; agente operacional com modo `AUTONOMOUS_LIMITED` implementado (avisa governanta responsável, dá uma chance extra de reenvio de FNRH travada) além do alerta padrão; núcleo de execução determinístico + tela "Ações do Agente" para auditoria; separação de controle assinante/admin master; painel admin real de prompt/cota/bloqueio por assinante. Pendente: atalho de salvar conhecimento direto da conversa.
+* [x] **Fase 17 (nova):** Auditoria e correção de segurança de toda a API (23/08/2026) — isolamento multi-tenant, autenticação, força bruta/revogação de sessão, segredos de API de terceiros e webhook do WhatsApp. Ver detalhamento em 2.1, 2.2, 3.2, 3.8, 3.14 e 4. Regras obrigatórias para rotas novas em `CLAUDE.md`.

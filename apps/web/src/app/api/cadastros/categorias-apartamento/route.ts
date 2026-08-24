@@ -1,21 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 // GET /api/cadastros/categorias-apartamento — lista as categorias de apartamento (UH)
-// pré-cadastradas pelo assinante (tenant)
+// pré-cadastradas pelo tenant da sessão
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const reqTenantId = searchParams.get("tenantId");
-
-    const tenantIdsToSearch = reqTenantId
-      ? [reqTenantId, DEFAULT_TENANT_ID, "TNT-01"]
-      : [DEFAULT_TENANT_ID, "TNT-01"];
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
     const categories = await prisma.roomCategory.findMany({
-      where: { tenantId: { in: tenantIdsToSearch } },
+      where: { tenantId: session.tenantId },
       orderBy: { name: "asc" },
     });
 
@@ -29,17 +26,19 @@ export async function GET(req: NextRequest) {
 // POST /api/cadastros/categorias-apartamento — cria uma nova categoria de apartamento
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
-    const { tenantId, name, dailyPrice, capacity, description } = body;
+    const { name, dailyPrice, capacity, description } = body;
 
     if (!name || !String(name).trim()) {
       return NextResponse.json({ success: false, error: "O nome da categoria é obrigatório." }, { status: 400 });
     }
 
-    const effectiveTenantId = tenantId || DEFAULT_TENANT_ID;
-
     const existing = await prisma.roomCategory.findFirst({
-      where: { tenantId: effectiveTenantId, name: String(name).trim() },
+      where: { tenantId: session!.tenantId!, name: String(name).trim() },
     });
     if (existing) {
       return NextResponse.json({ success: false, error: "Esta categoria já está cadastrada." }, { status: 409 });
@@ -47,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     const category = await prisma.roomCategory.create({
       data: {
-        tenantId: effectiveTenantId,
+        tenantId: session!.tenantId!,
         name: String(name).trim(),
         dailyPrice: dailyPrice ?? 0,
         capacity: capacity ?? 2,
@@ -65,6 +64,10 @@ export async function POST(req: NextRequest) {
 // PATCH /api/cadastros/categorias-apartamento — atualiza uma categoria existente
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const { id, name, dailyPrice, capacity, description, active } = body;
 
@@ -84,7 +87,11 @@ export async function PATCH(req: NextRequest) {
     if (description !== undefined) data.description = description || null;
     if (active !== undefined) data.active = active;
 
-    const category = await prisma.roomCategory.update({ where: { id }, data });
+    const updated = await prisma.roomCategory.updateMany({ where: { id, tenantId: session!.tenantId! }, data });
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: "Categoria não encontrada." }, { status: 404 });
+    }
+    const category = await prisma.roomCategory.findUnique({ where: { id } });
 
     return NextResponse.json({ success: true, category });
   } catch (error: any) {
@@ -96,6 +103,10 @@ export async function PATCH(req: NextRequest) {
 // DELETE /api/cadastros/categorias-apartamento?id=... — exclui uma categoria de apartamento
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
 
@@ -105,7 +116,7 @@ export async function DELETE(req: NextRequest) {
 
     let deleted;
     try {
-      deleted = await prisma.roomCategory.deleteMany({ where: { id } });
+      deleted = await prisma.roomCategory.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     } catch (dbErr: any) {
       if (dbErr?.code === "P2003") {
         return NextResponse.json(

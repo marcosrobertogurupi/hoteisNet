@@ -1,28 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/room-cleaning-history?roomId=&tenantId= — histórico de arrumações (limpeza com
+// GET /api/tenant/room-cleaning-history?roomId= — histórico de arrumações (limpeza com
 // hóspede no quarto, tipo OCCUPIED) feitas durante a hospedagem ATUAL do quarto, para o menu de
 // contexto do Mapa de Quartos ("Histórico de Limpeza"). Escopo pela hospedagem ativa: só mostra
 // limpezas concluídas a partir do check-in em vigor, nunca de estadias anteriores.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
+    const resolvedTenantId = session.tenantId;
 
+    const { searchParams } = new URL(req.url);
     const roomId = searchParams.get("roomId");
     if (!roomId) {
       return NextResponse.json({ success: false, error: "Quarto não informado." }, { status: 400 });

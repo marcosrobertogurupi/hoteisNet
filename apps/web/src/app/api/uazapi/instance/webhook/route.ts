@@ -1,31 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// POST /api/uazapi/instance/webhook — configura (modo simples) o webhook da instância na uazapi
-// para receber eventos de mensagens/conexão. excludeMessages: ["wasSentByApi"] evita loop com o
-// próprio envio feito pelo HoteisNet.
+// POST /api/uazapi/instance/webhook — configura (modo simples) o webhook da instância do tenant
+// da sessão na uazapi, para receber eventos de mensagens/conexão. excludeMessages:
+// ["wasSentByApi"] evita loop com o próprio envio feito pelo HoteisNet.
+//
+// Gera (ou reaproveita) um segredo por tenant e o anexa como query param na URL registrada na
+// uazapi — POST /api/uazapi/webhook/[tenantId] exige esse segredo antes de processar qualquer
+// evento recebido, para que não seja possível forjar mensagens de hóspede sabendo só o tenantId.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId;
+    if (!resolvedTenantId) {
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
+    }
+
     const body = await req.json();
-    const { tenantId, url } = body;
+    const { url } = body;
 
     if (!url) {
       return NextResponse.json({ success: false, error: "URL do webhook é obrigatória." }, { status: 400 });
-    }
-
-    const resolvedTenantId = await resolveTenantId(tenantId || null);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
     }
 
     const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId: resolvedTenantId } });
@@ -36,11 +35,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const webhookSecret = setting.webhookSecret || randomBytes(24).toString("hex");
+    const baseUrl = String(url).split("?")[0];
+    const signedUrl = `${baseUrl}?secret=${webhookSecret}`;
+
     const response = await fetch(`${setting.serverUrl}/webhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json", token: setting.instanceToken },
       body: JSON.stringify({
-        url,
+        url: signedUrl,
         enabled: true,
         events: ["messages", "connection"],
         excludeMessages: ["wasSentByApi"],
@@ -64,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     await prisma.uazapiSetting.update({
       where: { tenantId: resolvedTenantId },
-      data: { webhookUrl: url },
+      data: { webhookUrl: baseUrl, webhookSecret },
     });
 
     return NextResponse.json({ success: true });

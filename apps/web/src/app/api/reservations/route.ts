@@ -22,14 +22,21 @@ function occupiedUntilDate(
   return billedThrough > expectedCheckOut ? billedThrough : expectedCheckOut;
 }
 
-// GET /api/reservations — lista reservas
+// Toda Reservation vive sob este tenantId fixo por convenção histórica deste projeto — o
+// isolamento real por hotel é sempre via Reservation.room.tenantId (ver comentário em
+// lib/preCheckinSender.ts). Nunca usar o tenantId do cliente/sessão como valor deste campo.
+const RESERVATION_TENANT_ID = "TNT-01";
+
+// GET /api/reservations — lista reservas do tenant da sessão
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || "TNT-01";
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
     const reservations = await prisma.reservation.findMany({
-      where: { tenantId },
+      where: { room: { tenantId: session.tenantId } },
       include: {
         room: {
           include: { category: true },
@@ -81,7 +88,7 @@ export async function GET(req: NextRequest) {
     );
 
     const activeStays = await prisma.stayCheckin.findMany({
-      where: { isClosed: false },
+      where: { isClosed: false, tenantId: session.tenantId },
       include: { room: { include: { category: true } }, primaryGuest: true },
     });
 
@@ -89,7 +96,7 @@ export async function GET(req: NextRequest) {
 
     const syntheticFromStays = unlinkedStays.map((s) => ({
       id: `stay-${s.id}`,
-      tenantId,
+      tenantId: RESERVATION_TENANT_ID,
       roomId: s.roomId,
       guestName: s.primaryGuest.fullName,
       guestCpf: s.primaryGuest.cpf,
@@ -126,9 +133,13 @@ export async function GET(req: NextRequest) {
 // POST /api/reservations — cria uma nova reserva
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
-      tenantId = "TNT-01",
       roomId,
       tariffId,
       tariffName,
@@ -164,7 +175,7 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const realRoomId = await resolveRoomId(tx as any, String(roomId), tenantId);
+      const realRoomId = await resolveRoomId(tx as any, String(roomId), session.tenantId!);
       const checkIn = new Date(checkInDate);
       const checkOut = new Date(checkOutDate);
 
@@ -177,17 +188,33 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // guestId, se informado, precisa pertencer ao mesmo tenant — senão a reserva ficaria
+      // vinculada ao hóspede de outro hotel.
+      let realGuestId: string | null = null;
+      if (guestId) {
+        const guest = await tx.guest.findFirst({ where: { id: guestId, tenantId: session.tenantId! }, select: { id: true } });
+        realGuestId = guest?.id || null;
+      }
+
+      // cashRegisterId, se informado, também precisa ser um caixa do mesmo tenant — senão o
+      // adiantamento seria lançado no caixa de outro hotel.
+      let realCashRegisterId: string | null = null;
+      if (cashRegisterId) {
+        const caixa = await tx.cashRegister.findFirst({ where: { id: cashRegisterId, tenantId: session.tenantId! }, select: { id: true } });
+        realCashRegisterId = caixa?.id || null;
+      }
+
       const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
       const finalTotal = totalAmount || totalDiarias || 0;
 
       const reservation = await tx.reservation.create({
         data: {
-          tenantId,
+          tenantId: RESERVATION_TENANT_ID,
           roomId: realRoomId,
           guestName,
           guestCpf: guestCpf || null,
           guestPhone: guestPhone || null,
-          guestId: guestId || null,
+          guestId: realGuestId,
           checkInDate: checkIn,
           checkOutDate: checkOut,
           tariffId,
@@ -201,7 +228,7 @@ export async function POST(req: NextRequest) {
           children,
           hasWhatsapp: !!hasWhatsapp,
           wppSent: false,
-          cashRegisterId: cashRegisterId || null,
+          cashRegisterId: realCashRegisterId,
           operatorName: operatorName || null,
           notes: notes || null,
           roomDescription: roomDescription || null,
@@ -223,18 +250,18 @@ export async function POST(req: NextRequest) {
           data: {
             id: crypto.randomUUID(),
             reservationId: reservation.id,
-            tenantId,
-            cashRegisterId: cashRegisterId || null,
+            tenantId: RESERVATION_TENANT_ID,
+            cashRegisterId: realCashRegisterId,
             amount: pmt.amount,
             paymentMethod: pmt.paymentMethod || "DINHEIRO",
             operatorName: operatorName || null,
           },
         });
 
-        if (cashRegisterId) {
+        if (realCashRegisterId) {
           await tx.cashTransaction.create({
             data: {
-              cashRegisterId,
+              cashRegisterId: realCashRegisterId,
               type: "INCOME",
               amount: pmt.amount,
               description: `Adiantamento Reserva ${reservationNumber} - ${guestName}`,
@@ -247,11 +274,10 @@ export async function POST(req: NextRequest) {
       return { reservationId: reservation.id, reservationNumber };
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId,
-      userId: session?.userId,
-      userName: session?.name,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "RESERVATION_CREATE",
       description: `${session?.name || "Usuário"} criou a reserva ${result.reservationNumber} (${guestName}, quarto ${roomId}).`,
       entityType: "RESERVATION",
@@ -278,10 +304,14 @@ export async function POST(req: NextRequest) {
 // PATCH /api/reservations — atualiza/move uma reserva existente
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
       id,
-      tenantId = "TNT-01",
       roomId,
       checkInDate,
       checkOutDate,
@@ -300,12 +330,12 @@ export async function PATCH(req: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
-      const existing = await tx.reservation.findFirst({ where: { id, tenantId } });
+      const existing = await tx.reservation.findFirst({ where: { id, room: { tenantId: session.tenantId! } } });
       if (!existing) {
         throw new Error(`Reserva ${id} não encontrada.`);
       }
 
-      const realRoomId = roomId ? await resolveRoomId(tx as any, String(roomId), tenantId) : undefined;
+      const realRoomId = roomId ? await resolveRoomId(tx as any, String(roomId), session.tenantId!) : undefined;
       const effectiveCheckIn = checkInDate ? new Date(checkInDate) : existing.checkInDate;
       const effectiveCheckOut = checkOutDate ? new Date(checkOutDate) : existing.checkOutDate;
 
@@ -342,7 +372,7 @@ export async function PATCH(req: NextRequest) {
       if (status) data.status = status;
 
       const updated = await tx.reservation.updateMany({
-        where: { id, tenantId },
+        where: { id, room: { tenantId: session.tenantId! } },
         data,
       });
 
@@ -355,11 +385,10 @@ export async function PATCH(req: NextRequest) {
       }
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId,
-      userId: session?.userId,
-      userName: session?.name,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "RESERVATION_UPDATE",
       description: `${session?.name || "Usuário"} atualizou a reserva ${id}.`,
       entityType: "RESERVATION",
@@ -394,14 +423,16 @@ export async function DELETE(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
-    const tenantId = searchParams.get("tenantId") || "TNT-01";
 
     if (!id) {
       return NextResponse.json({ success: false, error: "ID da reserva é obrigatório." }, { status: 400 });
     }
+    if (!session!.tenantId) {
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
+    }
 
     const updated = await prisma.reservation.updateMany({
-      where: { id, tenantId },
+      where: { id, room: { tenantId: session!.tenantId } },
       data: { status: "CANCELLED" },
     });
 
@@ -410,7 +441,7 @@ export async function DELETE(req: NextRequest) {
     }
 
     await logActivity({
-      tenantId,
+      tenantId: session!.tenantId,
       userId: session!.userId,
       userName: session!.name,
       action: "RESERVATION_CANCEL",

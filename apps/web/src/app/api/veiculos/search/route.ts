@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-// GET /api/veiculos/search?q=...&by=placa|caracteristica&tenantId=...
+// GET /api/veiculos/search?q=...&by=placa|caracteristica
 // Busca veículos por placa ou por característica, trazendo o hóspede dono de cada um.
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || DEFAULT_TENANT_ID;
     const q = (searchParams.get("q") || "").trim();
     const by = searchParams.get("by") === "caracteristica" ? "caracteristica" : "placa";
 
-    const where: any = { tenantId };
+    const where: any = { tenantId: session.tenantId };
     if (q) {
       where[by] = { contains: q, mode: "insensitive" };
     }

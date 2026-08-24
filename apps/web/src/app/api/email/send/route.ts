@@ -1,8 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
+import { getSessionUser } from "@/lib/auth";
+import { escapeHtml, isBlockedSmtpHost } from "@/lib/htmlEscape";
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await request.json();
     const {
       recipientEmail,
@@ -41,6 +48,10 @@ export async function POST(request: Request) {
       );
     }
 
+    if (isBlockedSmtpHost(smtpHost)) {
+      return NextResponse.json({ success: false, error: "Servidor SMTP inválido." }, { status: 400 });
+    }
+
     const isSecure = smtpSecure === "ssl" || Number(smtpPort) === 465;
 
     // Configura Nodemailer
@@ -50,7 +61,7 @@ export async function POST(request: Request) {
       secure: isSecure,
       auth: { user: smtpUser.trim(), pass: smtpPass.trim() },
       tls: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: true,
       },
       connectionTimeout: 12000,
     });
@@ -96,22 +107,28 @@ export async function POST(request: Request) {
       });
     }
 
+    const safeFromName = escapeHtml(fromName);
+    const safeRecipientName = escapeHtml(recipientName || "Prezado(a) Hóspede");
+    const safeMessage = message ? escapeHtml(message) : `Segue em anexo o seu <strong>${escapeHtml(docTitle.toLowerCase())}</strong> gerado pelo nosso sistema.`;
+    const safeFooterText = escapeHtml(footerText);
+    const safeDocFilename = escapeHtml(docFilename.endsWith(".pdf") ? docFilename : `${docFilename}.pdf`);
+
     const htmlContent = `
       <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
         <!-- Top Header Banner -->
         <div style="background-color: ${badgeColor}; padding: 24px 32px; text-align: center; color: #ffffff;">
-          <h1 style="margin: 0; font-size: 22px; font-weight: 700; text-transform: uppercase;">${fromName}</h1>
+          <h1 style="margin: 0; font-size: 22px; font-weight: 700; text-transform: uppercase;">${safeFromName}</h1>
           <p style="margin: 6px 0 0 0; font-size: 14px; opacity: 0.9;">${docTitle}</p>
         </div>
 
         <!-- Body Content -->
         <div style="padding: 32px; color: #334155; line-height: 1.6;">
           <p style="font-size: 16px; font-weight: 600; margin-top: 0; color: #0f172a;">
-            Olá, ${recipientName || "Prezado(a) Hóspede"}!
+            Olá, ${safeRecipientName}!
           </p>
-          
+
           <p style="font-size: 14px; color: #475569;">
-            ${message || `Segue em anexo o seu <strong>${docTitle.toLowerCase()}</strong> gerado pelo nosso sistema.`}
+            ${safeMessage}
           </p>
 
           ${
@@ -122,7 +139,7 @@ export async function POST(request: Request) {
                   📎 Arquivo em Anexo (PDF):
                 </p>
                 <span style="font-family: monospace; font-size: 12px; color: ${badgeColor}; font-weight: bold;">
-                  ${docFilename.endsWith(".pdf") ? docFilename : `${docFilename}.pdf`}
+                  ${safeDocFilename}
                 </span>
                 <p style="margin: 6px 0 0 0; font-size: 12px; color: #64748b;">
                   Você pode abrir e salvar este arquivo PDF diretamente no seu dispositivo.
@@ -133,13 +150,13 @@ export async function POST(request: Request) {
           }
 
           <div style="background-color: #f1f5f9; border-left: 4px solid ${badgeColor}; padding: 12px 16px; margin-top: 24px; border-radius: 0 8px 8px 0; font-size: 13px; color: #475569;">
-            ${footerText}
+            ${safeFooterText}
           </div>
         </div>
 
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; text-align: center; font-size: 12px; color: #94a3b8;">
-          <p style="margin: 0;">Enviado por <strong>${fromName}</strong> via Hoteis.Net PMS SaaS.</p>
+          <p style="margin: 0;">Enviado por <strong>${safeFromName}</strong> via Hoteis.Net PMS SaaS.</p>
         </div>
       </div>
     `;

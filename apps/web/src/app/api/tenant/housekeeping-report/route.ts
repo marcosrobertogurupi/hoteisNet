@@ -1,27 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/housekeeping-report?tenantId=&from=&to=&housekeeperId= — relatório de limpezas
+// GET /api/tenant/housekeeping-report?from=&to=&housekeeperId= — relatório de limpezas
 // concluídas (DONE): quantidade e duração, agregado geral e por governanta. Usado no painel de
 // relatório em Cadastros > Governantas. `from`/`to` filtram por finishedAt (padrão: últimos 30 dias).
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
+    const resolvedTenantId = session.tenantId;
 
+    const { searchParams } = new URL(req.url);
     const fromParam = searchParams.get("from");
     const toParam = searchParams.get("to");
     const housekeeperIdParam = searchParams.get("housekeeperId");

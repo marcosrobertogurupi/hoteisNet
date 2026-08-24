@@ -142,8 +142,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       let signatureUrl: string | null = null;
       if (body.signatureDataUrl && typeof body.signatureDataUrl === "string") {
         const match = body.signatureDataUrl.match(/^data:image\/png;base64,(.+)$/);
-        if (match) {
-          const buffer = Buffer.from(match[1], "base64");
+        // Confere a assinatura de bytes real do PNG (89 50 4E 47 0D 0A 1A 0A) além do prefixo
+        // textual do data URI — sem isso, qualquer binário rotulado "image/png" seria aceito e
+        // armazenado no bucket público de assinaturas.
+        const PNG_MAGIC_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const buffer = match ? Buffer.from(match[1], "base64") : null;
+        const isValidPng = !!buffer && buffer.length > PNG_MAGIC_BYTES.length && buffer.subarray(0, 8).equals(PNG_MAGIC_BYTES);
+        if (match && isValidPng && buffer) {
           const path = `${tenantId}/${link.reservation.id}-${Date.now()}.png`;
           const { error: uploadError } = await supabaseAdmin.storage
             .from(SIGNATURE_BUCKET)

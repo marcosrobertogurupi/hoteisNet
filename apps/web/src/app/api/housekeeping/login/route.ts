@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { verifyPassword } from "@/lib/auth";
+import { verifyPasswordTimingSafe, isAccountLocked, lockoutRemainingMinutes, nextFailedLoginState } from "@/lib/auth";
 import {
   createHousekeeperSessionToken,
   HOUSEKEEPER_SESSION_COOKIE,
@@ -22,13 +22,26 @@ export async function POST(req: NextRequest) {
       where: { whatsapp: whatsapp.trim() },
     });
 
+    const validPassword = await verifyPasswordTimingSafe(password, housekeeper?.passwordHash);
+
     if (!housekeeper || !housekeeper.active) {
       return NextResponse.json({ success: false, error: "WhatsApp ou senha inválidos." }, { status: 401 });
     }
 
-    const validPassword = await verifyPassword(password, housekeeper.passwordHash);
+    if (isAccountLocked(housekeeper.lockedUntil)) {
+      return NextResponse.json(
+        { success: false, error: `Muitas tentativas incorretas. Tente novamente em ${lockoutRemainingMinutes(housekeeper.lockedUntil)} minuto(s).` },
+        { status: 429 }
+      );
+    }
+
     if (!validPassword) {
+      const nextState = nextFailedLoginState(housekeeper.failedLoginAttempts);
+      await prisma.housekeeper.update({ where: { id: housekeeper.id }, data: nextState });
       return NextResponse.json({ success: false, error: "WhatsApp ou senha inválidos." }, { status: 401 });
+    }
+    if (housekeeper.failedLoginAttempts > 0) {
+      await prisma.housekeeper.update({ where: { id: housekeeper.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
     }
 
     const token = await createHousekeeperSessionToken({

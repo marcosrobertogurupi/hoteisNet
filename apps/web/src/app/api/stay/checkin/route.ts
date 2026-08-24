@@ -22,8 +22,12 @@ function formatCPF(v: string) {
 // usada pelo Histórico de Hospedagens da ficha do hóspede para montar Extrato/Resumo de estadias antigas.
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId");
     const stayId = searchParams.get("stayId");
     const roomTarget = searchParams.get("roomNumber") || searchParams.get("roomId") || "";
 
@@ -34,11 +38,11 @@ export async function GET(req: NextRequest) {
     let stay;
 
     if (stayId) {
-      stay = await prisma.stayCheckin.findUnique({
-        where: { id: stayId },
+      stay = await prisma.stayCheckin.findFirst({
+        where: { id: stayId, tenantId: session.tenantId },
         include: {
           room: true,
-          primaryGuest: true,
+          primaryGuest: { include: { company: true } },
           consumptions: { orderBy: { createdAt: "asc" }, include: { posLocation: true } },
           charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } },
           secondaryGuests: { orderBy: { createdAt: "asc" } },
@@ -52,7 +56,7 @@ export async function GET(req: NextRequest) {
       const room = await prisma.room.findFirst({
         where: {
           OR: [{ id: roomTarget }, { number: roomTarget }],
-          tenantId: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] },
+          tenantId: session.tenantId,
         },
       });
 
@@ -65,7 +69,7 @@ export async function GET(req: NextRequest) {
         orderBy: { checkInDate: "desc" },
         include: {
           room: true,
-          primaryGuest: true,
+          primaryGuest: { include: { company: true } },
           consumptions: { orderBy: { createdAt: "asc" }, include: { posLocation: true } },
           charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } },
           secondaryGuests: { orderBy: { createdAt: "asc" } },
@@ -128,6 +132,17 @@ export async function GET(req: NextRequest) {
           street: stay.primaryGuest.street,
           neighborhood: stay.primaryGuest.neighborhood,
           zipCode: stay.primaryGuest.zipCode,
+          company: stay.primaryGuest.company
+            ? {
+                cnpj: stay.primaryGuest.company.cnpj,
+                name: stay.primaryGuest.company.name,
+                ie: stay.primaryGuest.company.ie,
+                address: stay.primaryGuest.company.address,
+                neighborhood: stay.primaryGuest.company.neighborhood,
+                city: stay.primaryGuest.company.city,
+                state: stay.primaryGuest.company.state,
+              }
+            : null,
         },
         secondaryGuests: stay.secondaryGuests.map((g) => ({
           id: g.id,
@@ -163,9 +178,13 @@ const RESERVATION_STATUSES_NOT_MATCHABLE = ["CANCELLED", "CHECKED_IN", "CHECKED_
 // Reservas nunca fiquem dessincronizados por uma falha parcial entre as duas escritas.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
-      tenantId,
       roomId,
       roomNumber,
       guestName,
@@ -218,13 +237,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "O valor da diária/hospedagem deve ser maior que zero." }, { status: 400 });
     }
 
-    const session = await getSessionUser(req);
-
     const result = await prisma.$transaction(async (tx) => {
       const room = await tx.room.findFirst({
         where: {
           OR: [{ id: roomTarget }, { number: roomTarget }],
-          tenantId: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] },
+          tenantId: session.tenantId!,
         },
       });
 
@@ -442,7 +459,7 @@ export async function POST(req: NextRequest) {
         const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
 
         let caixa = await tx.cashRegister.findFirst({
-          where: { operatorId: opId, isOpen: true, tenantId: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
+          where: { operatorId: opId, isOpen: true, tenantId: room.tenantId },
         });
 
         if (!caixa) {
@@ -550,14 +567,17 @@ export async function POST(req: NextRequest) {
 // Usado quando o saldo devedor é totalmente quitado e o usuário confirma o check-out.
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { stayCheckinId } = body;
 
     if (!stayCheckinId) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });
     }
-
-    const session = await getSessionUser(req);
 
     const stay = await prisma.$transaction(async (tx) => {
       // Trava a linha da hospedagem ANTES de ler/agregar o saldo devedor (Postgres Read Committed
@@ -574,7 +594,7 @@ export async function PATCH(req: NextRequest) {
       // pendente (ex.: chamada direta à API, sem passar pela tela de pagamento), a transação
       // inteira é abortada e NADA é alterado: quarto continua ocupado, hospedagem continua aberta.
       const stayBeforeClose = await tx.stayCheckin.findUnique({ where: { id: stayCheckinId } });
-      if (!stayBeforeClose) {
+      if (!stayBeforeClose || stayBeforeClose.tenantId !== session.tenantId) {
         throw new Error(`Hospedagem ${stayCheckinId} não encontrada.`);
       }
       if (stayBeforeClose.isClosed) {

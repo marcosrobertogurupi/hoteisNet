@@ -3,8 +3,6 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // Forma de pagamento pré-cadastrada usada para "quitar" no quarto de origem o valor que está
 // sendo movido para outro quarto — já existia na lista de PRE_REGISTERED_PAYMENT_METHODS do
 // LancarPagamentoHospedagemModal, criada especificamente para este fluxo.
@@ -18,8 +16,13 @@ const TRANSFER_PAYMENT_METHOD = "TRANSF.DEBITO";
 // se qualquer parte falhar, nenhum dos dois quartos é alterado.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
-    const { tenantId, operatorId, operatorName, fromStayCheckinId, toStayCheckinId, amount } = body;
+    const { operatorId, operatorName, fromStayCheckinId, toStayCheckinId, amount } = body;
 
     const valorTransferir = Number(amount);
     if (!fromStayCheckinId || !toStayCheckinId) {
@@ -43,7 +46,6 @@ export async function POST(req: NextRequest) {
 
     const opId = operatorId || "USR-001";
     const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
-    const tenantIdsToSearch = [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[];
 
     const result = await prisma.$transaction(async (tx) => {
       const [fromStay, toStay] = await Promise.all([
@@ -59,6 +61,12 @@ export async function POST(req: NextRequest) {
 
       if (!fromStay) throw new Error(`Hospedagem de origem ${fromStayCheckinId} não encontrada.`);
       if (!toStay) throw new Error(`Hospedagem de destino ${toStayCheckinId} não encontrada.`);
+      // Ambas as pontas precisam ser do mesmo tenant do operador logado — sem isso, dava para
+      // zerar o débito de um quarto às custas do saldo de um hotel diferente (ver relatório de
+      // segurança: transferência de débito entre tenants).
+      if (fromStay.tenantId !== session.tenantId || toStay.tenantId !== session.tenantId) {
+        throw new Error("Hospedagem de origem ou destino não encontrada.");
+      }
       if (fromStay.isClosed) throw new Error(`A hospedagem do quarto ${fromStay.room.number} (origem) já está encerrada.`);
       if (toStay.isClosed) throw new Error(`A hospedagem do quarto ${toStay.room.number} (destino) já está encerrada.`);
 
@@ -84,12 +92,12 @@ export async function POST(req: NextRequest) {
       }
 
       let caixa = await tx.cashRegister.findFirst({
-        where: { operatorId: opId, isOpen: true, tenantId: { in: tenantIdsToSearch } },
+        where: { operatorId: opId, isOpen: true, tenantId: fromStay.tenantId },
       });
       if (!caixa) {
         caixa = await tx.cashRegister.create({
           data: {
-            tenantId: tenantIdsToSearch[0] || fromStay.tenantId,
+            tenantId: fromStay.tenantId,
             operatorId: opId,
             operatorName: opName,
             openingBalance: 0,
@@ -188,9 +196,8 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId: session?.tenantId || result.tenantId || DEFAULT_TENANT_ID,
+      tenantId: session.tenantId,
       userId: session?.userId,
       userName: session?.name,
       action: "DEBIT_TRANSFER",

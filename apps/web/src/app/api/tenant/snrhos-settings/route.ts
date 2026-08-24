@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 const DEFAULTS = {
   environment: "HOMOLOGACAO",
@@ -11,26 +10,16 @@ const DEFAULTS = {
   enabled: false,
 };
 
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/snrhos-settings?tenantId=... — devolve a configuração de transmissão ao SNRHos
-// do assinante (ambiente, usuário/chave da API, CPF do responsável, habilitado).
+// GET /api/tenant/snrhos-settings — devolve a configuração de transmissão ao SNRHos do tenant da
+// sessão (ambiente, usuário/chave da API, CPF do responsável, habilitado). Só admin: expõe
+// credenciais de uma API governamental.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
-
-    const settings = await prisma.sNRHosSetting.findUnique({ where: { tenantId: resolvedTenantId } });
+    const settings = await prisma.sNRHosSetting.findUnique({ where: { tenantId: session!.tenantId! } });
 
     return NextResponse.json({
       success: true,
@@ -60,13 +49,12 @@ export async function GET(req: NextRequest) {
 // chave já salva), para a tela poder salvar outros campos sem exigir redigitar a chave.
 export async function PATCH(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { tenantId, ...fields } = body;
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId!;
 
-    const resolvedTenantId = await resolveTenantId(tenantId);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
+    const fields = await req.json();
 
     if (fields.environment && !["HOMOLOGACAO", "PRODUCAO"].includes(fields.environment)) {
       return NextResponse.json({ success: false, error: "Ambiente inválido." }, { status: 400 });

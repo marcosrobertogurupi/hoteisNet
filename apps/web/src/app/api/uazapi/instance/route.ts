@@ -1,24 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/uazapi/instance?tenantId=... — devolve a configuração salva da instância uazapi do
-// assinante (servidor, nome/token da instância, status de conexão, QR code pendente, webhook).
+// GET /api/uazapi/instance — devolve a configuração salva da instância uazapi do tenant da sessão
+// (servidor, nome/token da instância, status de conexão, QR code pendente, webhook). Só admin: os
+// campos retornados incluem segredos de API (adminToken/instanceToken) que permitem controlar
+// totalmente o WhatsApp do hotel.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId;
     if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
     const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId: resolvedTenantId } });
@@ -49,23 +44,26 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST /api/uazapi/instance — cria (ou re-cria) a instância uazapi do assinante na uazapiGO,
-// usando o servidor + admin token informados, e salva o token da instância retornado.
+// POST /api/uazapi/instance — cria (ou re-cria) a instância uazapi do tenant da sessão na
+// uazapiGO, usando o servidor + admin token informados, e salva o token da instância retornado.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId;
+    if (!resolvedTenantId) {
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
+    }
+
     const body = await req.json();
-    const { tenantId, serverUrl, adminToken, instanceName } = body;
+    const { serverUrl, adminToken, instanceName } = body;
 
     if (!serverUrl || !adminToken || !instanceName) {
       return NextResponse.json(
         { success: false, error: "Servidor, chave/token admin e nome da instância são obrigatórios." },
         { status: 400 }
       );
-    }
-
-    const resolvedTenantId = await resolveTenantId(tenantId || null);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
     }
 
     const targetServer = String(serverUrl).trim().replace(/\/$/, "");
@@ -126,14 +124,16 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE /api/uazapi/instance?tenantId=... — remove a configuração local da instância (não afeta
-// a instância criada na uazapi, apenas desvincula o assinante dela no HoteisNet).
+// DELETE /api/uazapi/instance — remove a configuração local da instância do tenant da sessão (não
+// afeta a instância criada na uazapi, apenas desvincula o assinante dela no HoteisNet).
 export async function DELETE(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId;
     if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
     await prisma.uazapiSetting.deleteMany({ where: { tenantId: resolvedTenantId } });

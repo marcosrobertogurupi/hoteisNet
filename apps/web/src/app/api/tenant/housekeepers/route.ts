@@ -1,26 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { hashPassword } from "@/lib/auth";
+import { getSessionUser, requireAdmin, hashPassword } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/housekeepers?tenantId=... — lista as governantas cadastradas pelo assinante,
+// GET /api/tenant/housekeepers — lista as governantas cadastradas pelo tenant da sessão,
 // usado no cadastro (app/cadastros/governantas) e na tela de atribuição manual de limpeza.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
+    const resolvedTenantId = session.tenantId;
 
     const housekeepers = await prisma.housekeeper.findMany({
       where: { tenantId: resolvedTenantId },
@@ -42,13 +32,13 @@ export async function GET(req: NextRequest) {
 // acesso ao app mobile de governança).
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { tenantId, name, whatsapp, photoUrl, password } = body;
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId!;
 
-    const resolvedTenantId = await resolveTenantId(tenantId);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
+    const body = await req.json();
+    const { name, whatsapp, photoUrl, password } = body;
 
     if (!name?.trim() || !whatsapp?.trim() || !password?.trim()) {
       return NextResponse.json(

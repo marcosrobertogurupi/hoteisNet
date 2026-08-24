@@ -1,24 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/uazapi/instance/status?tenantId=... — consulta o status atual da instância na uazapi
-// (usado para polling durante a leitura do QR code e para o badge de conexão da tela).
+// GET /api/uazapi/instance/status — consulta o status atual da instância do tenant da sessão na
+// uazapi (usado para polling durante a leitura do QR code e para o badge de conexão da tela).
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId;
     if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
     const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId: resolvedTenantId } });

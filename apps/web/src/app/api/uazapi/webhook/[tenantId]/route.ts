@@ -1,6 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
+
+// Compara o segredo recebido com o salvo sem vazar timing (tamanhos diferentes já são "inválido"
+// sem comparar byte a byte, evitando side-channel por tamanho da string).
+function isValidWebhookSecret(received: string | null, expected: string | null): boolean {
+  if (!received || !expected) return false;
+  const a = Buffer.from(received);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 import { sendUazapiText, downloadUazapiMedia, fetchAsBase64 } from "@/lib/uazapi";
 import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
 import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
@@ -183,8 +194,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
       return NextResponse.json({ success: true, ignored: "no-chatid-or-group" });
     }
 
-    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
-    if (!tenant) return NextResponse.json({ success: true, ignored: "tenant-not-found" });
+    const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId }, select: { webhookSecret: true } });
+    if (!setting) return NextResponse.json({ success: true, ignored: "tenant-not-found" });
+
+    // Sem o segredo por-tenant (query param configurado em POST /api/uazapi/instance/webhook), a
+    // uazapi/quem quer que seja não é tratado como fonte confiável — evita que alguém forje
+    // mensagens de hóspede sabendo só o tenantId (sequencial/previsível) e acione o Agente de IA.
+    const receivedSecret = req.nextUrl.searchParams.get("secret");
+    if (!isValidWebhookSecret(receivedSecret, setting.webhookSecret)) {
+      return NextResponse.json({ success: false, error: "Segredo do webhook inválido." }, { status: 401 });
+    }
 
     const phone = chatId.replace(/\D/g, "");
     const externalId: string | undefined = data?.messageid || undefined;

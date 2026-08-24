@@ -3,8 +3,11 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { resolveTerminalLabel } from "@/lib/terminal";
 import {
-  verifyPassword,
+  verifyPasswordTimingSafe,
   createSessionToken,
+  isAccountLocked,
+  lockoutRemainingMinutes,
+  nextFailedLoginState,
   SESSION_COOKIE,
   SESSION_COOKIE_MAX_AGE,
   TERMINAL_COOKIE,
@@ -24,13 +27,29 @@ export async function POST(req: NextRequest) {
 
     const user = await prisma.user.findUnique({ where: { email: String(email).toLowerCase().trim() } });
 
+    // Comparação sempre roda (mesmo com usuário inexistente, contra um hash dummy) para o tempo de
+    // resposta não vazar por timing se o e-mail existe ou não.
+    const validPassword = await verifyPasswordTimingSafe(password, user?.passwordHash);
+
     if (!user || !user.active) {
       return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
     }
 
-    const validPassword = await verifyPassword(password, user.passwordHash);
+    if (isAccountLocked(user.lockedUntil)) {
+      return NextResponse.json(
+        { success: false, error: `Muitas tentativas de login incorretas. Tente novamente em ${lockoutRemainingMinutes(user.lockedUntil)} minuto(s).` },
+        { status: 429 }
+      );
+    }
+
     if (!validPassword) {
+      const nextState = nextFailedLoginState(user.failedLoginAttempts);
+      await prisma.user.update({ where: { id: user.id }, data: nextState });
       return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
+    }
+
+    if (user.failedLoginAttempts > 0) {
+      await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
     }
 
     const token = await createSessionToken({
@@ -39,6 +58,7 @@ export async function POST(req: NextRequest) {
       email: user.email,
       name: user.name,
       role: user.role,
+      tokenVersion: user.tokenVersion,
     });
 
     const res = NextResponse.json({
@@ -60,7 +80,7 @@ export async function POST(req: NextRequest) {
     const terminalLabel = await resolveTerminalLabel(ip);
 
     res.cookies.set(TERMINAL_COOKIE, terminalLabel, {
-      httpOnly: false,
+      httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",

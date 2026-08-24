@@ -1,24 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// POST /api/uazapi/instance/connect — inicia a conexão da instância ao WhatsApp (gera QR code).
-// Use GET /api/uazapi/instance/status em seguida (com polling) para saber quando foi escaneado.
+// POST /api/uazapi/instance/connect — inicia a conexão da instância do tenant da sessão ao
+// WhatsApp (gera QR code). Use GET /api/uazapi/instance/status em seguida (com polling) para
+// saber quando foi escaneado.
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const resolvedTenantId = await resolveTenantId(body.tenantId || null);
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId;
     if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
     const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId: resolvedTenantId } });

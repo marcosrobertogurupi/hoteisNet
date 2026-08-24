@@ -1,14 +1,18 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 import { getTenantUazapiCredentials, normalizeUazapiPhone } from "@/lib/uazapiInstance";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // POST /api/uazapi/send-reserva — envia a confirmação de reserva em PDF via Uazapi
-// (POST {serverUrl}/send/media, type "document").
-export async function POST(request: Request) {
+// (POST {serverUrl}/send/media, type "document"). Credenciais sempre do tenant da sessão.
+export async function POST(request: NextRequest) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await request.json();
-    const { phone, caption, pdfBase64, filename, tenantId, serverUrl, instanceToken } = body;
+    const { phone, caption, pdfBase64, filename } = body;
 
     if (!phone || !pdfBase64) {
       return NextResponse.json(
@@ -17,10 +21,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const creds =
-      serverUrl && instanceToken
-        ? { serverUrl: String(serverUrl).trim().replace(/\/$/, ""), instanceToken: String(instanceToken).trim() }
-        : await getTenantUazapiCredentials(tenantId || DEFAULT_TENANT_ID);
+    const creds = await getTenantUazapiCredentials(session.tenantId);
 
     const cleanPhone = normalizeUazapiPhone(phone);
     const documentName = filename || "Confirmacao_Reserva.pdf";

@@ -1,21 +1,25 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 import { getTenantUazapiCredentials, normalizeUazapiPhone, fetchUazapi, UazapiUnreachableError } from "@/lib/uazapiInstance";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 // POST /api/uazapi/profile-picture — busca a foto de perfil do WhatsApp de um contato via
 // POST {serverUrl}/chat/details (endpoint oficial da uazapi), retornando a URL da imagem quando
-// o hóspede permite que ela seja vista.
-export async function POST(request: Request) {
+// o hóspede permite que ela seja vista. Credenciais sempre do tenant da sessão.
+export async function POST(request: NextRequest) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await request.json();
-    const { phone, tenantId } = body;
+    const { phone } = body;
 
     if (!phone) {
       return NextResponse.json({ success: false, error: "Telefone é obrigatório." }, { status: 400 });
     }
 
-    const { serverUrl, instanceToken } = await getTenantUazapiCredentials(tenantId || DEFAULT_TENANT_ID);
+    const { serverUrl, instanceToken } = await getTenantUazapiCredentials(session.tenantId);
     const cleanPhone = normalizeUazapiPhone(phone);
 
     const response = await fetchUazapi(`${serverUrl}/chat/details`, {

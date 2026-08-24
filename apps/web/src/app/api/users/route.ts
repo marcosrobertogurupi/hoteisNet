@@ -141,6 +141,12 @@ export async function PATCH(req: NextRequest) {
       }
       data.passwordHash = await hashPassword(password);
     }
+    // Desativar, trocar de papel ou trocar a senha precisa derrubar qualquer sessão (JWT) já
+    // emitida para esse usuário — sem isso, um funcionário desativado continuaria autenticado por
+    // até 12h (duração do token) mesmo depois de perder o acesso no sistema.
+    if (data.active === false || data.role !== undefined || data.passwordHash !== undefined) {
+      data.tokenVersion = { increment: 1 };
+    }
 
     const updated = await prisma.user.update({
       where: { id },

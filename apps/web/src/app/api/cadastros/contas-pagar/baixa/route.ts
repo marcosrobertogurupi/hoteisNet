@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
 // POST /api/cadastros/contas-pagar/baixa — registra a baixa (quitação, total ou parcial) de um
 // título de contas a pagar. Suporta juros/desconto, no mesmo padrão da baixa de Contas a Receber.
 // Quando o valor pago acumulado zera o saldo devedor, marca isPaid=true.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { accountsPayableId, amount, paidAt, interest, discount, paymentMethodDescription, operatorId, operatorName } = body;
 
@@ -22,7 +28,7 @@ export async function POST(req: NextRequest) {
     const paidAtDate = paidAt ? new Date(`${paidAt}T12:00:00Z`) : new Date();
 
     const result = await prisma.$transaction(async (tx) => {
-      const payable = await tx.accountsPayable.findUnique({ where: { id: accountsPayableId } });
+      const payable = await tx.accountsPayable.findFirst({ where: { id: accountsPayableId, tenantId: session.tenantId! } });
       if (!payable) throw new Error("Título de contas a pagar não encontrado.");
       if (payable.isPaid) throw new Error("Este título já está totalmente quitado.");
 

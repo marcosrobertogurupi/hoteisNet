@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 // GET /api/cadastros/hospedes/[id]/veiculos
 export async function GET(
@@ -9,9 +8,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { id } = await params;
     const guest = await prisma.guest.findFirst({
-      where: { id, tenantId: DEFAULT_TENANT_ID },
+      where: { id, tenantId: session.tenantId },
       select: { id: true },
     });
     if (!guest) {
@@ -19,7 +23,7 @@ export async function GET(
     }
 
     const vehicles = await prisma.vehicle.findMany({
-      where: { guestId: id, tenantId: DEFAULT_TENANT_ID },
+      where: { guestId: id, tenantId: session.tenantId },
       orderBy: { createdAt: "asc" },
     });
 
@@ -40,12 +44,17 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { id } = await params;
     const body = await request.json();
     const veiculos: { id?: string; placaVeiculo: string; caractVeic?: string }[] = body.veiculos || [];
 
     const guest = await prisma.guest.findFirst({
-      where: { id, tenantId: DEFAULT_TENANT_ID },
+      where: { id, tenantId: session.tenantId },
       select: { id: true, tenantId: true },
     });
     if (!guest) {

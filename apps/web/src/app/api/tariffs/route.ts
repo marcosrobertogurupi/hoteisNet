@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const tariffs = await prisma.tariff.findMany({
-      where: {
-        tenantId: { in: [DEFAULT_TENANT_ID, "TNT-01"] },
-      },
+      where: { tenantId: session.tenantId },
       orderBy: { price: "asc" },
     });
 

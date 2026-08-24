@@ -4,8 +4,6 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { findConflictingReservation } from "@/lib/reservationHelpers";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // PATCH /api/stay/period — grava no banco a previsão de saída (e, se informada, a tarifa da
 // diária corrente) escolhida no modal "Alterar Período da Hospedagem". Esta é a ÚNICA fonte de
 // verdade para StayCheckin.expectedCheckOut: alterar só a Reservation (via /api/reservations) ou
@@ -14,6 +12,11 @@ const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 // de diária extra por virada — ver /api/stay/rollover).
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { stayCheckinId, expectedCheckOut, ratePerNight, tariffName } = body as {
       stayCheckinId?: string;
@@ -35,7 +38,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const stay = await tx.stayCheckin.findUnique({ where: { id: stayCheckinId } });
+      const stay = await tx.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId! } });
       if (!stay) {
         throw new Error(`Hospedagem ${stayCheckinId} não encontrada.`);
       }
@@ -98,11 +101,10 @@ export async function PATCH(req: NextRequest) {
       return updatedStay;
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId: session?.tenantId || DEFAULT_TENANT_ID,
-      userId: session?.userId,
-      userName: session?.name,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "STAY_PERIOD_CHANGE",
       description: `${session?.name || "Usuário"} alterou a previsão de saída da hospedagem ${stayCheckinId} para ${newExpectedCheckOut.toLocaleString("pt-BR")}.`,
       entityType: "STAY_CHECKIN",

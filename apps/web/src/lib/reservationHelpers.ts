@@ -12,8 +12,11 @@ export async function resolveRoomId(
   roomIdOrNumber: string,
   tenantId: string
 ): Promise<string> {
+  // Sempre restrito ao tenant informado — sem isso, um número de quarto comum (ex: "101") podia
+  // resolver para o quarto de OUTRO hotel caso ele tivesse sido criado primeiro no banco, criando
+  // reservas/edições cruzadas entre tenants diferentes.
   const room = await tx.room.findFirst({
-    where: { OR: [{ id: roomIdOrNumber }, { number: roomIdOrNumber }] },
+    where: { OR: [{ id: roomIdOrNumber }, { number: roomIdOrNumber }], tenantId },
   });
   if (room) return room.id;
 

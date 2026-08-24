@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { dateOnlyBrasilia as dateOnly } from "@/lib/brasiliaDate";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 function parseLimitTime(limitTime?: string | null) {
   const [h, m] = (limitTime || "14:30").split(":").map(Number);
@@ -34,8 +33,10 @@ function nowBrazilHM(now: Date) {
 // Tenant.dailyRolloverTime de cada hospedagem.
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const tenantId = body.tenantId as string | undefined;
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
     const now = new Date();
     const today = dateOnly(now);
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
     const stays = await prisma.stayCheckin.findMany({
       where: {
         isClosed: false,
-        tenantId: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] },
+        tenantId: session.tenantId,
       },
       include: { room: true, tenant: { select: { dailyRolloverTime: true } } },
     });

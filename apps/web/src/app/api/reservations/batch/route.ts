@@ -9,11 +9,19 @@ import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelp
 // projeto WinDev original: o usuário vai incluindo reservas em uma grade local, sem gravar nada,
 // e só quando clica em "Salvar Reservas" tudo é persistido de uma vez). Se qualquer reserva do
 // lote apresentar conflito de quarto/data ou falhar, NENHUMA reserva do lote é gravada.
+// Ver comentário RESERVATION_TENANT_ID em ../route.ts — Reservation.tenantId é sempre este valor
+// fixo por convenção histórica; o isolamento real por hotel é via Reservation.room.tenantId.
+const RESERVATION_TENANT_ID = "TNT-01";
+
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
-      tenantId = "TNT-01",
       cashRegisterId,
       operatorName,
       reservations = [],
@@ -39,8 +47,16 @@ export async function POST(req: NextRequest) {
     const results = await prisma.$transaction(async (tx) => {
       const created: { reservationId: string; reservationNumber: string; roomId: string; guestName: string }[] = [];
 
+      // cashRegisterId, se informado, precisa ser um caixa do mesmo tenant — senão o adiantamento
+      // seria lançado no caixa de outro hotel.
+      let realCashRegisterId: string | null = null;
+      if (cashRegisterId) {
+        const caixa = await tx.cashRegister.findFirst({ where: { id: cashRegisterId, tenantId: session.tenantId! }, select: { id: true } });
+        realCashRegisterId = caixa?.id || null;
+      }
+
       for (const r of reservations) {
-        const realRoomId = await resolveRoomId(tx as any, String(r.roomId), tenantId);
+        const realRoomId = await resolveRoomId(tx as any, String(r.roomId), session.tenantId!);
         const checkInDate = new Date(r.checkInDate);
         const checkOutDate = new Date(r.checkOutDate);
 
@@ -51,17 +67,23 @@ export async function POST(req: NextRequest) {
           );
         }
 
+        let realGuestId: string | null = null;
+        if (r.guestId) {
+          const guest = await tx.guest.findFirst({ where: { id: r.guestId, tenantId: session.tenantId! }, select: { id: true } });
+          realGuestId = guest?.id || null;
+        }
+
         const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
         const finalTotal = r.totalAmount ?? r.totalDiarias ?? 0;
 
         const reservation = await tx.reservation.create({
           data: {
-            tenantId,
+            tenantId: RESERVATION_TENANT_ID,
             roomId: realRoomId,
             guestName: r.guestName,
             guestCpf: r.guestCpf || null,
             guestPhone: r.guestPhone || null,
-            guestId: r.guestId || null,
+            guestId: realGuestId,
             checkInDate,
             checkOutDate,
             tariffId: r.tariffId,
@@ -75,7 +97,7 @@ export async function POST(req: NextRequest) {
             children: r.children ?? 0,
             hasWhatsapp: !!r.hasWhatsapp,
             wppSent: false,
-            cashRegisterId: cashRegisterId || null,
+            cashRegisterId: realCashRegisterId,
             operatorName: operatorName || null,
             notes: r.notes || null,
             roomDescription: r.roomDescription || null,
@@ -93,18 +115,18 @@ export async function POST(req: NextRequest) {
             data: {
               id: crypto.randomUUID(),
               reservationId: reservation.id,
-              tenantId,
-              cashRegisterId: cashRegisterId || null,
+              tenantId: RESERVATION_TENANT_ID,
+              cashRegisterId: realCashRegisterId,
               amount: pmt.amount,
               paymentMethod: pmt.paymentMethod || "DINHEIRO",
               operatorName: operatorName || null,
             },
           });
 
-          if (cashRegisterId) {
+          if (realCashRegisterId) {
             await tx.cashTransaction.create({
               data: {
-                cashRegisterId,
+                cashRegisterId: realCashRegisterId,
                 type: "INCOME",
                 amount: pmt.amount,
                 description: `Adiantamento Reserva ${reservationNumber} - ${r.guestName}`,
@@ -125,12 +147,11 @@ export async function POST(req: NextRequest) {
       return created;
     });
 
-    const session = await getSessionUser(req);
     for (const created of results) {
       await logActivity({
-        tenantId,
-        userId: session?.userId,
-        userName: session?.name,
+        tenantId: session.tenantId,
+        userId: session.userId,
+        userName: session.name,
         action: "RESERVATION_CREATE",
         description: `${session?.name || "Usuário"} criou a reserva ${created.reservationNumber} (${created.guestName}, quarto ${created.roomId}) via Reservas Múltiplas.`,
         entityType: "RESERVATION",

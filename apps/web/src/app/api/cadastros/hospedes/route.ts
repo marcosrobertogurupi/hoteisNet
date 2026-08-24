@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 function formatCPF(v: string) {
   const c = v.replace(/\D/g, "");
@@ -13,17 +12,20 @@ function formatCPF(v: string) {
 // Suporta query params: q (busca por nome/cpf/email), page, pageSize, tenantId
 export async function GET(request: NextRequest) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const q = searchParams.get("q") || "";
-    const reqTenantId = searchParams.get("tenantId");
     const page = parseInt(searchParams.get("page") || "1", 10);
     const pageSize = parseInt(searchParams.get("pageSize") || "50", 10);
     const skip = (page - 1) * pageSize;
 
-    const where: any = {};
-    if (reqTenantId && !q.trim()) {
-      where.tenantId = { in: [reqTenantId, DEFAULT_TENANT_ID] };
-    }
+    // Sempre restrito ao tenant da sessão — inclusive quando `q` está preenchido. Antes o filtro de
+    // tenant era descartado nesse caso, vazando hóspedes (CPF, telefone, endereço) de TODOS os hotéis.
+    const where: any = { tenantId: session.tenantId };
 
     if (q.trim()) {
       const cleanDigits = q.replace(/\D/g, "");
@@ -94,10 +96,14 @@ export async function GET(request: NextRequest) {
 // Cria um novo hóspede no Supabase
 export async function POST(request: NextRequest) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await request.json();
 
     const {
-      tenantId,
       fullName,
       cpf,
       passport,
@@ -132,7 +138,7 @@ export async function POST(request: NextRequest) {
     const formattedCpf = cpf ? formatCPF(cpf) : null;
     if (formattedCpf) {
       const existing = await prisma.guest.findFirst({
-        where: { tenantId: tenantId || DEFAULT_TENANT_ID, cpf: formattedCpf },
+        where: { tenantId: session.tenantId, cpf: formattedCpf },
       });
       if (existing) {
         return NextResponse.json({ success: true, ...existing, alreadyExisted: true }, { status: 200 });
@@ -141,7 +147,7 @@ export async function POST(request: NextRequest) {
 
     const newGuest = await prisma.guest.create({
       data: {
-        tenantId: tenantId || DEFAULT_TENANT_ID,
+        tenantId: session.tenantId,
         fullName: fullName.trim().toUpperCase(),
         cpf: formattedCpf,
         passport: passport || null,

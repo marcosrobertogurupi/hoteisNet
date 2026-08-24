@@ -1,16 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
+import { getSessionUser } from "@/lib/auth";
 
 // GET /api/caixa/conta-quarto?stayCheckinId=... — lista os pagamentos/créditos já lançados
 // na hospedagem, para que o modal de pagamento reflita o histórico real ao ser reaberto.
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const stayCheckinId = searchParams.get("stayCheckinId");
 
     if (!stayCheckinId) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });
+    }
+
+    const stay = await prisma.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId }, select: { id: true } });
+    if (!stay) {
+      return NextResponse.json({ success: false, error: "Hospedagem não encontrada." }, { status: 404 });
     }
 
     const movimentos = await prisma.cashTransaction.findMany({

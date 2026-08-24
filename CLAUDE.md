@@ -1,0 +1,121 @@
+# HoteisNet — Guia do projeto
+
+## 🔒 Segurança — regras obrigatórias para toda rota de API nova
+
+Este projeto é um SaaS multi-tenant (cada hotel/pousada é um tenant isolado no mesmo banco). Em 23/08/2026 uma auditoria de segurança encontrou dezenas de rotas de API que vazavam dados de hóspedes/financeiros de qualquer tenant sem autenticação, porque cada rota implementa seu próprio isolamento manualmente e isso foi esquecido/feito errado em boa parte do código (ver commit da correção para o histórico completo). As regras abaixo existem para nunca repetir isso. **Aplicam-se a toda rota nova sob `apps/web/src/app/api/**`, sem exceção — sinalize explicitamente qualquer violação ao revisar código e corrija antes de prosseguir.**
+
+### 1. Toda rota de API autentica explicitamente — não existe rede de segurança automática
+
+`apps/web/src/middleware.ts` só protege páginas (`/app/**`, `/admin/**`). **Rotas de API não passam por nenhum middleware central** — cada `route.ts` é responsável por checar a própria sessão. Nunca assuma que uma rota está protegida "porque fica atrás do login" da tela que a chama.
+
+Padrão obrigatório no início de todo handler que não seja explicitamente público (login, webhook, link de pré-check-in por token):
+
+```ts
+import { getSessionUser } from "@/lib/auth";
+
+export async function GET(req: NextRequest) {
+  const session = await getSessionUser(req);
+  if (!session?.tenantId) {
+    return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+  }
+  // ...
+}
+```
+
+Para ações restritas a administradores (exclusão, configurações, cadastros mestres como bancos/plano de contas/formas de pagamento), combine com `requireAdmin`:
+
+```ts
+import { getSessionUser, requireAdmin } from "@/lib/auth";
+
+const session = await getSessionUser(req);
+const adminError = requireAdmin(session);
+if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+```
+
+As únicas rotas legitimamente sem sessão são: `/api/auth/login`, `/api/housekeeping/login`, `/api/uazapi/webhook/[tenantId]` (autenticada por segredo de webhook, não por sessão — ver regra 5) e `/api/public/pre-checkin/[token]` (autenticada pelo token da URL, nunca por tenantId/reservationId do cliente).
+
+### 2. `tenantId` NUNCA vem do cliente — sempre de `session.tenantId`
+
+Esta foi a causa da maioria dos achados críticos: rotas que liam `tenantId` do body/query da requisição (ou caíam para uma constante compartilhada tipo `DEFAULT_TENANT_ID`/`"TNT-01"` quando ausente) permitiam qualquer requisição ler/editar/apagar dados de **qualquer hotel**, bastando informar (ou nem informar) o tenant certo.
+
+```ts
+// ❌ NUNCA — tenantId do body/query é controlado pelo atacante
+const { tenantId } = await req.json();
+const items = await prisma.guest.findMany({ where: { tenantId } });
+
+// ✅ SEMPRE — tenantId vem exclusivamente da sessão autenticada
+const session = await getSessionUser(req);
+const items = await prisma.guest.findMany({ where: { tenantId: session!.tenantId! } });
+```
+
+Isso vale tanto para `create` (nunca gravar o `tenantId` que veio no corpo) quanto para `findMany`/`findFirst`/`update`/`delete` (sempre filtrar por `session.tenantId`).
+
+### 3. Toda escrita (`update`/`delete`) repete o filtro de tenant — nunca confie só na checagem de leitura
+
+Um padrão que parecia seguro mas não era: checar `findFirst({ where: { id, tenantId } })` e, se existir, chamar `update({ where: { id } })` **sem repetir o tenantId na escrita**. Isso deixa a porta aberta para qualquer refactor futuro que remova/altere a checagem de leitura sem que ninguém perceba que a escrita ficou desprotegida.
+
+```ts
+// ✅ Use updateMany/deleteMany com o filtro de tenant DIRETO na escrita — nunca update/delete por id puro
+const updated = await prisma.guest.updateMany({
+  where: { id, tenantId: session!.tenantId! },
+  data: { ... },
+});
+if (updated.count === 0) {
+  return NextResponse.json({ success: false, error: "Não encontrado." }, { status: 404 });
+}
+```
+
+Referência de boas práticas já usada no projeto: `apps/web/src/app/api/tenant/human-escalations/[id]/route.ts`, `apps/web/src/app/api/caixa/abrir/route.ts`.
+
+### 4. IDs relacionados recebidos do cliente (guestId, cashRegisterId, roomId, companyId...) também precisam ser validados contra o tenant
+
+Não basta proteger o registro principal — todo ID estrangeiro que o cliente manda no body (ex: `guestId` ao criar uma reserva, `cashRegisterId` ao lançar um pagamento) precisa ser confirmado como pertencente ao mesmo tenant antes de usar, senão dá para vincular um registro de um hotel a um recurso de outro:
+
+```ts
+let realGuestId: string | null = null;
+if (guestId) {
+  const guest = await tx.guest.findFirst({ where: { id: guestId, tenantId: session.tenantId! }, select: { id: true } });
+  realGuestId = guest?.id || null; // se não achou, ignora — nunca usa o guestId "cru" do body
+}
+```
+
+### 5. Webhooks e rotas verdadeiramente públicas usam segredo próprio, nunca dependem só do ID na URL
+
+`POST /api/uazapi/webhook/[tenantId]` valida um segredo por-tenant (`UazapiSetting.webhookSecret`) via `timingSafeEqual`, além do `tenantId` da URL — um `tenantId` sozinho é adivinhável/enumerável. Ao integrar um novo provedor externo (webhook de pagamento, WhatsApp, etc.), sempre exija um segredo compartilhado configurado nos dois lados, nunca confie apenas em um identificador na URL.
+
+`/api/public/pre-checkin/[token]` é o modelo para links públicos: o token é gerado com `randomBytes(32)`, expira, é revogado ao gerar um novo, e a rota **nunca aceita tenantId/reservationId/guestId do cliente** — tudo é resolvido a partir do próprio token no servidor.
+
+### 6. Segredos de API de terceiros nunca vão hardcoded no código-fonte
+
+Sempre `process.env.NOME_DA_VARIAVEL`, nunca uma string literal como fallback (nem "só para dev"). Um segredo commitado fica no histórico do git para sempre, mesmo removido depois. Ver `apps/web/src/lib/uazapiInstance.ts` (`UAZAPI_FALLBACK_SERVER_URL`/`UAZAPI_FALLBACK_INSTANCE_TOKEN`) como referência.
+
+### 7. Rotas que fazem proxy para um serviço externo (SMTP, WhatsApp, etc.) nunca aceitam host/credenciais arbitrários do body
+
+Se a rota existe para usar as credenciais **do próprio tenant** (ex: enviar e-mail com o SMTP configurado pelo hotel), resolva essas credenciais a partir do banco (`getTenantUazapiCredentials(session.tenantId)` é o padrão), nunca a partir de um campo livre do body — senão a rota vira um relay/SSRF aberto para qualquer host escolhido por quem chama.
+
+### 8. Força bruta: login sempre com rate limiting + comparação timing-safe
+
+Todo endpoint de autenticação (login, verify-admin, login de qualquer app satélite futuro) precisa usar os helpers já existentes em `lib/auth.ts`: `verifyPasswordTimingSafe` (evita enumeração de e-mail por tempo de resposta), `isAccountLocked`/`nextFailedLoginState` (bloqueio após tentativas repetidas, campos `failedLoginAttempts`/`lockedUntil` no modelo). Nunca reimplementar isso do zero por endpoint.
+
+### 9. Desativar/rebaixar um usuário precisa invalidar sessões já emitidas
+
+Toda alteração que reduz o acesso de um usuário (`active: false`, mudança de `role`, troca de senha) deve incrementar `User.tokenVersion` — é isso que faz `getSessionUser` rejeitar o JWT antigo imediatamente, em vez de esperar o token expirar sozinho (até 12h). Ver `apps/web/src/app/api/users/route.ts` (PATCH) como referência.
+
+### 10. Nunca interpolar texto livre em HTML sem escapar
+
+Qualquer campo preenchido por hóspede/usuário (nome, observações, mensagens) que for renderizado depois dentro de um template HTML (e-mail, PDF gerado via HTML, etc.) precisa passar por `escapeHtml` (`apps/web/src/lib/htmlEscape.ts`) antes de entrar no template.
+
+---
+
+## Checklist rápido ao criar/revisar uma rota de API
+
+- [ ] A rota chama `getSessionUser` (ou é uma das 4 rotas explicitamente públicas, documentadas como tal em comentário)?
+- [ ] Toda query (`findMany`/`findFirst`/`update`/`delete`/`create`) usa `session.tenantId`, nunca um `tenantId` vindo de body/query/params?
+- [ ] `update`/`delete` usam `updateMany`/`deleteMany` com o filtro de tenant na própria escrita (não só numa checagem de leitura anterior)?
+- [ ] Todo ID estrangeiro recebido do cliente (guestId, roomId, cashRegisterId, companyId, accountPlanId...) é revalidado contra `session.tenantId` antes de usar?
+- [ ] Ações destrutivas ou de configuração exigem `requireAdmin`?
+- [ ] Nenhum segredo/token de API hardcoded — sempre `process.env`?
+- [ ] Se a rota faz proxy para um serviço externo, as credenciais vêm do tenant salvo no banco, nunca do body da requisição?
+- [ ] Texto livre de usuário é escapado antes de virar HTML?
+
+Se qualquer resposta for "não", a rota não está pronta.

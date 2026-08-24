@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 // GET /api/cadastros/hospedes/[id]
 export async function GET(
@@ -9,9 +8,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { id } = await params;
     const guest = await prisma.guest.findFirst({
-      where: { id, tenantId: DEFAULT_TENANT_ID },
+      where: { id, tenantId: session.tenantId },
       include: {
         company: true,
         fnrhRecords: true,
@@ -43,19 +47,28 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { id } = await params;
     const body = await request.json();
 
     const existing = await prisma.guest.findFirst({
-      where: { id, tenantId: DEFAULT_TENANT_ID },
+      where: { id, tenantId: session.tenantId },
     });
 
     if (!existing) {
       return NextResponse.json({ error: "Hóspede não encontrado" }, { status: 404 });
     }
 
-    const updatedGuest = await prisma.guest.update({
-      where: { id },
+    // updateMany (não update por id puro) repete o filtro de tenant também na escrita real — sem
+    // isso, a checagem de existência acima não bastava para proteger contra IDOR: bastaria acertar
+    // um id de hóspede de outro tenant que passasse a checagem (ex.: se ela fosse removida/burlada
+    // num refactor futuro) para editar o registro de qualquer forma.
+    await prisma.guest.updateMany({
+      where: { id, tenantId: session.tenantId },
       data: {
         fullName: body.fullName ? body.fullName.trim().toUpperCase() : existing.fullName,
         cpf: body.cpf !== undefined ? body.cpf || null : existing.cpf,
@@ -77,6 +90,7 @@ export async function PUT(
       },
     });
 
+    const updatedGuest = await prisma.guest.findUnique({ where: { id } });
     return NextResponse.json(updatedGuest);
   } catch (error) {
     console.error("[PUT /api/cadastros/hospedes/[id]] Erro:", error);
@@ -90,16 +104,19 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const existing = await prisma.guest.findFirst({
-      where: { id, tenantId: DEFAULT_TENANT_ID },
-    });
-
-    if (!existing) {
-      return NextResponse.json({ error: "Hóspede não encontrado" }, { status: 404 });
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
     }
 
-    await prisma.guest.delete({ where: { id } });
+    const { id } = await params;
+    const deleted = await prisma.guest.deleteMany({
+      where: { id, tenantId: session.tenantId },
+    });
+
+    if (deleted.count === 0) {
+      return NextResponse.json({ error: "Hóspede não encontrado" }, { status: 404 });
+    }
 
     return NextResponse.json({ success: true, message: "Hóspede excluído com sucesso" });
   } catch (error) {

@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const companies = await prisma.company.findMany({
-      where: {
-        tenantId: { in: [DEFAULT_TENANT_ID, "TNT-01"] },
-      },
+      where: { tenantId: session.tenantId },
       orderBy: { name: "asc" },
     });
 
@@ -20,8 +22,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
-    const { tenantId, razao, ...rest } = body;
+    const { razao, ...rest } = body;
 
     if (!razao || !String(razao).trim()) {
       return NextResponse.json({ success: false, error: "A razão social é obrigatória." }, { status: 400 });
@@ -29,7 +35,7 @@ export async function POST(req: NextRequest) {
 
     const company = await prisma.company.create({
       data: {
-        tenantId: tenantId || DEFAULT_TENANT_ID,
+        tenantId: session!.tenantId!,
         name: String(razao).trim(),
         tradeName: rest.fantasia || null,
         cnpj: rest.cnpj || "",
@@ -65,6 +71,10 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const { id, razao, ...rest } = body;
 
@@ -75,8 +85,8 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: "A razão social é obrigatória." }, { status: 400 });
     }
 
-    const company = await prisma.company.update({
-      where: { id },
+    const updated = await prisma.company.updateMany({
+      where: { id, tenantId: session!.tenantId! },
       data: {
         name: String(razao).trim(),
         tradeName: rest.fantasia || null,
@@ -103,6 +113,10 @@ export async function PUT(req: NextRequest) {
         email: rest.emails?.[0]?.email || null,
       },
     });
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: "Empresa não encontrada." }, { status: 404 });
+    }
+    const company = await prisma.company.findUnique({ where: { id } });
 
     return NextResponse.json({ success: true, company });
   } catch (error: any) {
@@ -113,13 +127,17 @@ export async function PUT(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) {
       return NextResponse.json({ success: false, error: "ID da empresa é obrigatório." }, { status: 400 });
     }
 
-    const deleted = await prisma.company.deleteMany({ where: { id } });
+    const deleted = await prisma.company.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     if (deleted.count === 0) {
       return NextResponse.json({ success: false, error: "Empresa não encontrada." }, { status: 404 });
     }

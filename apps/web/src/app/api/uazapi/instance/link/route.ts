@@ -1,35 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 // POST /api/uazapi/instance/link — vincula uma instância uazapi JÁ EXISTENTE (criada fora do
-// HoteisNet, ex.: direto no painel da uazapi) ao assinante, usando apenas servidor + token da
-// própria instância (sem precisar do admin token, que só é exigido para CRIAR uma instância nova).
-// Valida a instância via GET /instance/status antes de salvar.
+// HoteisNet, ex.: direto no painel da uazapi) ao tenant da sessão, usando apenas servidor + token
+// da própria instância (sem precisar do admin token, que só é exigido para CRIAR uma instância
+// nova). Valida a instância via GET /instance/status antes de salvar.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId;
+    if (!resolvedTenantId) {
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
+    }
+
     const body = await req.json();
-    const { tenantId, serverUrl, instanceToken } = body;
+    const { serverUrl, instanceToken } = body;
 
     if (!serverUrl || !instanceToken) {
       return NextResponse.json(
         { success: false, error: "Servidor e token da instância são obrigatórios." },
         { status: 400 }
       );
-    }
-
-    const resolvedTenantId = await resolveTenantId(tenantId || null);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
     }
 
     const targetServer = String(serverUrl).trim().replace(/\/$/, "");

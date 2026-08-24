@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 // Nomes dos PDVs de destino da baixa de estoque no lançamento de consumo do quarto,
 // espelhando o popup "P.D.V." (Restaurante / Bar Recepção / Frigobar) do sistema WinDev original.
@@ -11,11 +10,14 @@ const DEFAULT_POS_NAMES = ["RESTAURANTE", "BAR RECEPCAO", "FRIGOBAR"];
 // pontos padrão na primeira chamada caso o tenant ainda não os possua cadastrados.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || DEFAULT_TENANT_ID;
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    const tenantId = session.tenantId;
 
     let posLocations = await prisma.pOSLocation.findMany({
-      where: { tenantId: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"] } },
+      where: { tenantId },
       orderBy: { name: "asc" },
     });
 

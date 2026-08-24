@@ -1,25 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/housekeeping-tasks?tenantId=... — tarefas de limpeza em aberto (PENDING ou
-// IN_PROGRESS), usado na tela de atribuição manual (Governança) e no selo visual do Mapa de Quartos.
+// GET /api/tenant/housekeeping-tasks — tarefas de limpeza em aberto (PENDING ou IN_PROGRESS) do
+// tenant da sessão, usado na tela de atribuição manual (Governança) e no selo visual do Mapa de Quartos.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
+    const resolvedTenantId = session.tenantId;
 
     const tasks = await prisma.housekeepingTask.findMany({
       where: { tenantId: resolvedTenantId, status: { in: ["PENDING", "IN_PROGRESS"] } },
@@ -45,14 +36,16 @@ export async function GET(req: NextRequest) {
 // Um quarto com tarefa IN_PROGRESS não pode ser reatribuído (limpeza já em andamento).
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    const resolvedTenantId = session.tenantId;
+
     const body = await req.json();
-    const { tenantId, roomId, housekeeperId, type } = body;
+    const { roomId, housekeeperId, type } = body;
     const taskType: "CHECKOUT" | "OCCUPIED" = type === "OCCUPIED" ? "OCCUPIED" : "CHECKOUT";
 
-    const resolvedTenantId = await resolveTenantId(tenantId);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
     if (!roomId || !housekeeperId) {
       return NextResponse.json({ success: false, error: "Quarto e governanta são obrigatórios." }, { status: 400 });
     }

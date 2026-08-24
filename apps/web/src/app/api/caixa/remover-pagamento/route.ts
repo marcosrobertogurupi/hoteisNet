@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 // Mesma constante usada em /api/stay/transfer-debit — forma pré-cadastrada usada para "quitar" no
 // quarto de origem o valor movido para outro quarto.
@@ -19,6 +20,10 @@ const TRANSFER_PAYMENT_METHOD = "TRANSF.DEBITO";
 // arriscar corromper dados financeiros.
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const { caixaMovimentoId } = body;
 
@@ -29,12 +34,19 @@ export async function DELETE(req: NextRequest) {
     await prisma.$transaction(async (tx) => {
       const ct = await tx.cashTransaction.findUnique({
         where: { id: caixaMovimentoId },
-        include: { stay: true },
+        include: { stay: true, cashRegister: { select: { tenantId: true } } },
       });
 
       if (!ct) {
         // Lançamento pode já ter sido removido ou nunca ter sido persistido (dado legado/mock) — não é fatal.
         return;
+      }
+
+      // CashTransaction não tem tenantId direto — chega via stay (quando vinculada a uma
+      // hospedagem) ou sempre via o caixa (CashRegister) que a contém. Confere os dois.
+      const ownerTenantId = ct.stay?.tenantId || ct.cashRegister.tenantId;
+      if (ownerTenantId !== session!.tenantId) {
+        throw new Error("Lançamento não encontrado.");
       }
 
       const stay = ct.stay;

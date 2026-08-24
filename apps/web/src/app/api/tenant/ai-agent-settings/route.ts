@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { AgentTonePreset, OperationalAutonomyMode } from "@prisma/client";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 const DEFAULTS = {
   enabled: false,
@@ -16,27 +15,18 @@ const DEFAULTS = {
   operationalAutonomyMode: "ALERT_ONLY" as OperationalAutonomyMode,
 };
 
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/ai-agent-settings?tenantId=... — configuração do agente de IA que o ASSINANTE
-// controla: liga/desliga, identidade (nome/foto) e tom de conversa dos agentes. O prompt cru de
+// GET /api/tenant/ai-agent-settings — configuração do agente de IA que o ASSINANTE controla:
+// liga/desliga, identidade (nome/foto) e tom de conversa dos agentes. O prompt cru de
 // personalidade e o controle de cota/bloqueio são exclusivos do admin master (/api/admin/tenants) —
 // nunca devolvidos nem aceitos aqui. Ver AIAgentSetting no schema e PLANO_AGENTE_IA.md.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
 
-    const settings = await prisma.aIAgentSetting.findUnique({ where: { tenantId: resolvedTenantId } });
+    const settings = await prisma.aIAgentSetting.findUnique({ where: { tenantId: session.tenantId } });
 
     return NextResponse.json({
       success: true,
@@ -66,13 +56,12 @@ export async function GET(req: NextRequest) {
 // PATCH /api/tenant/ai-agent-settings — cria/atualiza (upsert) as preferências do assinante.
 export async function PATCH(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { tenantId, ...fields } = body;
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
-    const resolvedTenantId = await resolveTenantId(tenantId);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
+    const fields = await req.json();
+    const resolvedTenantId = session!.tenantId!;
 
     const data: Record<string, any> = {};
     if (fields.enabled !== undefined) data.enabled = !!fields.enabled;

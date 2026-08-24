@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const tables = await prisma.hotelTable.findMany({
-      where: { tenantId: { in: [DEFAULT_TENANT_ID, "TNT-01"] } },
+      where: { tenantId: session.tenantId },
       orderBy: { number: "asc" },
     });
     return NextResponse.json({ success: true, tables });
@@ -17,8 +21,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
-    const { tenantId, numero, descricao, tipo, status } = body;
+    const { numero, descricao, tipo, status } = body;
 
     if (!numero || !String(numero).trim()) {
       return NextResponse.json({ success: false, error: "O número da mesa/comanda é obrigatório." }, { status: 400 });
@@ -26,7 +34,7 @@ export async function POST(req: NextRequest) {
 
     const table = await prisma.hotelTable.create({
       data: {
-        tenantId: tenantId || DEFAULT_TENANT_ID,
+        tenantId: session!.tenantId!,
         number: String(numero).trim(),
         description: descricao || null,
         type: tipo || "MESA",
@@ -43,6 +51,10 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const { id, numero, descricao, tipo, status } = body;
 
@@ -53,8 +65,8 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: "O número da mesa/comanda é obrigatório." }, { status: 400 });
     }
 
-    const table = await prisma.hotelTable.update({
-      where: { id },
+    const updated = await prisma.hotelTable.updateMany({
+      where: { id, tenantId: session!.tenantId! },
       data: {
         number: String(numero).trim(),
         description: descricao || null,
@@ -62,6 +74,10 @@ export async function PUT(req: NextRequest) {
         status: status || "LIVRE",
       },
     });
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: "Mesa/comanda não encontrada." }, { status: 404 });
+    }
+    const table = await prisma.hotelTable.findUnique({ where: { id } });
 
     return NextResponse.json({ success: true, table });
   } catch (error: any) {
@@ -72,13 +88,17 @@ export async function PUT(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) {
       return NextResponse.json({ success: false, error: "ID da mesa/comanda é obrigatório." }, { status: 400 });
     }
 
-    const deleted = await prisma.hotelTable.deleteMany({ where: { id } });
+    const deleted = await prisma.hotelTable.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     if (deleted.count === 0) {
       return NextResponse.json({ success: false, error: "Mesa/comanda não encontrada." }, { status: 404 });
     }

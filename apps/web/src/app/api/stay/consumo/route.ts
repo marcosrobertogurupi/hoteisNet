@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 function mapConsumption(c: {
   id: string;
@@ -33,6 +32,11 @@ function mapConsumption(c: {
 // usado para recarregar a grade "Consumo detalhado" da tela de Lançamento de Consumo do Quarto.
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const stayCheckinId = searchParams.get("stayCheckinId");
 
@@ -40,8 +44,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });
     }
 
-    const stay = await prisma.stayCheckin.findUnique({
-      where: { id: stayCheckinId },
+    const stay = await prisma.stayCheckin.findFirst({
+      where: { id: stayCheckinId, tenantId: session.tenantId },
       include: { consumptions: { orderBy: { createdAt: "asc" }, include: { posLocation: true } } },
     });
 
@@ -65,9 +69,13 @@ export async function GET(req: NextRequest) {
 // no momento em que o usuário confirma "Salvar Lançamentos" (F5) na tela de consumo.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
-      tenantId,
       roomId,
       roomNumber,
       stayCheckinId: stayCheckinIdInput,
@@ -92,7 +100,12 @@ export async function POST(req: NextRequest) {
 
     let stayCheckinId = stayCheckinIdInput as string | undefined;
 
-    if (!stayCheckinId) {
+    if (stayCheckinId) {
+      const owned = await prisma.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId }, select: { id: true } });
+      if (!owned) {
+        return NextResponse.json({ success: false, error: "Hospedagem não encontrada." }, { status: 404 });
+      }
+    } else {
       const roomTarget = String(roomId || roomNumber || "");
       if (!roomTarget) {
         return NextResponse.json({ success: false, error: "Quarto é obrigatório." }, { status: 400 });
@@ -101,7 +114,7 @@ export async function POST(req: NextRequest) {
       const room = await prisma.room.findFirst({
         where: {
           OR: [{ id: roomTarget }, { number: roomTarget }],
-          tenantId: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] },
+          tenantId: session.tenantId,
         },
       });
 
@@ -201,6 +214,11 @@ export async function POST(req: NextRequest) {
 // subtraindo o valor do total de consumo (e, por consequência, do débito total do quarto).
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { consumptionId } = body;
 
@@ -209,7 +227,9 @@ export async function DELETE(req: NextRequest) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const consumption = await tx.stayConsumption.findUnique({ where: { id: consumptionId } });
+      const consumption = await tx.stayConsumption.findFirst({
+        where: { id: consumptionId, stayCheckin: { tenantId: session.tenantId! } },
+      });
       if (!consumption) {
         throw new Error("Lançamento de consumo não encontrado.");
       }

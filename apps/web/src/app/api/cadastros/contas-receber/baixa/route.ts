@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
 // POST /api/cadastros/contas-receber/baixa — registra a baixa (quitação, total ou parcial) de um
 // título de contas a receber. Suporta juros/desconto, como a aba "Baixa" do Win_ContasReceber
 // original. Quando o valor pago acumulado zera o saldo devedor, marca isPaid=true.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { accountsReceivableId, amount, interest, discount, paymentMethodDescription, operatorId, operatorName } = body;
 
@@ -18,7 +24,7 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const receivable = await tx.accountsReceivable.findUnique({ where: { id: accountsReceivableId } });
+      const receivable = await tx.accountsReceivable.findFirst({ where: { id: accountsReceivableId, tenantId: session.tenantId! } });
       if (!receivable) throw new Error("Título de contas a receber não encontrado.");
       if (receivable.isPaid) throw new Error("Este título já está totalmente quitado.");
 

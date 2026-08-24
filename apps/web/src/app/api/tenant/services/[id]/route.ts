@@ -11,6 +11,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const { id } = await params;
+    const existing = await prisma.hotelService.findFirst({ where: { id, tenantId: session!.tenantId! } });
+    if (!existing) {
+      return NextResponse.json({ success: false, error: "Serviço não encontrado." }, { status: 404 });
+    }
+
     const body = await req.json();
     const { code, description, category, price, active } = body;
 
@@ -53,6 +58,11 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const { id } = await params;
+    const existing = await prisma.hotelService.findFirst({ where: { id, tenantId: session!.tenantId! } });
+    if (!existing) {
+      return NextResponse.json({ success: false, error: "Serviço não encontrado." }, { status: 404 });
+    }
+
     const service = await prisma.hotelService.delete({ where: { id } });
 
     await logActivity({

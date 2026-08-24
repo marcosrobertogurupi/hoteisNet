@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // Master Token da Hub do Desenvolvedor: HoteisNet compra o crédito e revende aos
 // assinantes através da cota mensal configurada por assinante (Tenant.cpfQueryQuotaMonthly).
 // Só é configurável no Painel SuperAdmin / variáveis de ambiente — nunca pelo assinante.
@@ -24,7 +22,10 @@ export async function GET(req: NextRequest) {
     }
 
     const session = await getSessionUser(req);
-    const tenantId = session?.tenantId || DEFAULT_TENANT_ID;
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, message: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    const tenantId = session.tenantId;
 
     let tenant = await prisma.tenant.findUnique({
       where: { id: tenantId },

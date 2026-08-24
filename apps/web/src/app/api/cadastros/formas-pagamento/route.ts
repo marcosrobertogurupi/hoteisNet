@@ -1,20 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-// GET /api/cadastros/formas-pagamento — lista as formas de pagamento cadastradas pelo assinante
+// GET /api/cadastros/formas-pagamento — lista as formas de pagamento do tenant da sessão
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const reqTenantId = searchParams.get("tenantId");
-
-    const tenantIdsToSearch = reqTenantId
-      ? [reqTenantId, DEFAULT_TENANT_ID, "TNT-01"]
-      : [DEFAULT_TENANT_ID, "TNT-01"];
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
     const paymentMethods = await prisma.paymentMethod.findMany({
-      where: { tenantId: { in: tenantIdsToSearch } },
+      where: { tenantId: session.tenantId },
       orderBy: { description: "asc" },
     });
 
@@ -28,17 +25,19 @@ export async function GET(req: NextRequest) {
 // POST /api/cadastros/formas-pagamento — cria uma nova forma de pagamento
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
-    const { tenantId, description, installment, debitGuestBalance, transferDebit, sumsToCashRegister } = body;
+    const { description, installment, debitGuestBalance, transferDebit, sumsToCashRegister } = body;
 
     if (!description || !String(description).trim()) {
       return NextResponse.json({ success: false, error: "A descrição da forma de pagamento é obrigatória." }, { status: 400 });
     }
 
-    const effectiveTenantId = tenantId || DEFAULT_TENANT_ID;
-
     const existing = await prisma.paymentMethod.findFirst({
-      where: { tenantId: effectiveTenantId, description: { equals: String(description).trim(), mode: "insensitive" } },
+      where: { tenantId: session!.tenantId!, description: { equals: String(description).trim(), mode: "insensitive" } },
     });
     if (existing) {
       return NextResponse.json({ success: false, error: "Esta forma de pagamento já está cadastrada." }, { status: 409 });
@@ -46,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     const paymentMethod = await prisma.paymentMethod.create({
       data: {
-        tenantId: effectiveTenantId,
+        tenantId: session!.tenantId!,
         description: String(description).trim(),
         installment: !!installment,
         debitGuestBalance: !!debitGuestBalance,
@@ -65,6 +64,10 @@ export async function POST(req: NextRequest) {
 // PATCH /api/cadastros/formas-pagamento — atualiza uma forma de pagamento existente
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const { id, description, installment, debitGuestBalance, transferDebit, sumsToCashRegister, active } = body;
 
@@ -85,7 +88,11 @@ export async function PATCH(req: NextRequest) {
     if (sumsToCashRegister !== undefined) data.sumsToCashRegister = !!sumsToCashRegister;
     if (active !== undefined) data.active = !!active;
 
-    const paymentMethod = await prisma.paymentMethod.update({ where: { id }, data });
+    const updated = await prisma.paymentMethod.updateMany({ where: { id, tenantId: session!.tenantId! }, data });
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: "Forma de pagamento não encontrada." }, { status: 404 });
+    }
+    const paymentMethod = await prisma.paymentMethod.findUnique({ where: { id } });
 
     return NextResponse.json({ success: true, paymentMethod });
   } catch (error: any) {
@@ -97,6 +104,10 @@ export async function PATCH(req: NextRequest) {
 // DELETE /api/cadastros/formas-pagamento?id=... — exclui uma forma de pagamento
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
 
@@ -106,7 +117,7 @@ export async function DELETE(req: NextRequest) {
 
     let deleted;
     try {
-      deleted = await prisma.paymentMethod.deleteMany({ where: { id } });
+      deleted = await prisma.paymentMethod.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     } catch (dbErr: any) {
       if (dbErr?.code === "P2003") {
         return NextResponse.json(

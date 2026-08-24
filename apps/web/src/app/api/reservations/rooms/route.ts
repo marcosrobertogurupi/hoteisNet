@@ -4,8 +4,6 @@ import { supabaseAdmin } from "@/utils/supabaseClient";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // Reexecuta uma operação do Prisma uma vez em caso de falha de conexão com o banco
 // (ex.: reconexão "fria" do pool do Supabase após período ocioso), evitando expor
 // esse tipo de erro transitório ao usuário final.
@@ -88,15 +86,13 @@ function mapStatusToDb(status?: string): string | undefined {
   return map[status] || status;
 }
 
-// GET /api/reservations/rooms — lista todos os quartos com categoria do banco
+// GET /api/reservations/rooms — lista todos os quartos com categoria do tenant da sessão
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const reqTenantId = searchParams.get("tenantId");
-
-    const tenantIdsToSearch = reqTenantId
-      ? [reqTenantId, DEFAULT_TENANT_ID, "TNT-01"]
-      : [DEFAULT_TENANT_ID, "TNT-01"];
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
     const activeStayInclude = {
       where: { isClosed: false },
@@ -110,9 +106,7 @@ export async function GET(req: NextRequest) {
 
     const rooms = await withDbRetry(() =>
       prisma.room.findMany({
-        where: {
-          tenantId: { in: tenantIdsToSearch },
-        },
+        where: { tenantId: session.tenantId! },
         include: {
           category: true,
           checkins: activeStayInclude,
@@ -123,20 +117,6 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    if (!rooms || rooms.length === 0) {
-      // Se não encontrar por tenantId, buscar todos os quartos cadastrados no banco
-      const allRooms = await withDbRetry(() =>
-        prisma.room.findMany({
-          include: { category: true, checkins: activeStayInclude },
-          orderBy: { number: "asc" },
-        })
-      );
-
-      const formatted = allRooms.map((r) => formatRoom(r));
-
-      return NextResponse.json({ success: true, rooms: formatted });
-    }
-
     const formatted = rooms.map((r) => formatRoom(r));
 
     return NextResponse.json({ success: true, rooms: formatted });
@@ -146,12 +126,15 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST /api/reservations/rooms — cria um novo apartamento (UH) no banco de dados
+// POST /api/reservations/rooms — cria um novo apartamento (UH) no banco de dados. Só admin.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const {
-      tenantId,
       numero,
       categoria,
       andar,
@@ -168,7 +151,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Número do quarto é obrigatório." }, { status: 400 });
     }
 
-    const effectiveTenantId = tenantId || DEFAULT_TENANT_ID;
+    const effectiveTenantId = session!.tenantId!;
     const categoryId = await resolveCategoryId(effectiveTenantId, categoria || "Standard");
 
     const created = await prisma.room.create({
@@ -198,12 +181,16 @@ export async function POST(req: NextRequest) {
 // PATCH /api/reservations/rooms — atualiza um apartamento existente no banco de dados (Prisma & Supabase)
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
       roomNumber,
       roomId,
       id,
-      tenantId,
       status,
       notes,
       observacao,
@@ -238,10 +225,11 @@ export async function PATCH(req: NextRequest) {
     if (caracteristicas !== undefined) data.caracteristicas = caracteristicas;
     if (photos !== undefined) data.photos = photos;
     if (categoria !== undefined) {
-      data.categoryId = await resolveCategoryId(tenantId || DEFAULT_TENANT_ID, categoria);
+      data.categoryId = await resolveCategoryId(session.tenantId, categoria);
     }
 
-    // 1. Atualizar no Prisma
+    // 1. Atualizar no Prisma — sempre restrito ao tenant da sessão, senão um número de quarto
+    // comum (ex: "101") podia editar o quarto de outro hotel.
     const updated = await withDbRetry(() =>
       prisma.room.updateMany({
         where: {
@@ -249,6 +237,7 @@ export async function PATCH(req: NextRequest) {
             { number: target },
             { id: target },
           ],
+          tenantId: session.tenantId!,
         },
         data,
       })
@@ -270,17 +259,16 @@ export async function PATCH(req: NextRequest) {
 
     const room = await withDbRetry(() =>
       prisma.room.findFirst({
-        where: { OR: [{ number: target }, { id: target }] },
+        where: { OR: [{ number: target }, { id: target }], tenantId: session.tenantId! },
         include: { category: true, checkins: true },
       })
     );
 
     if (mappedStatus) {
-      const session = await getSessionUser(req);
       await logActivity({
-        tenantId: tenantId || DEFAULT_TENANT_ID,
-        userId: session?.userId,
-        userName: session?.name,
+        tenantId: session.tenantId,
+        userId: session.userId,
+        userName: session.name,
         action: "ROOM_STATUS_CHANGE",
         description: `${session?.name || "Usuário"} alterou o status do quarto ${target} para ${mappedStatus}.`,
         entityType: "ROOM",
@@ -323,7 +311,7 @@ export async function DELETE(req: NextRequest) {
 
     let deleted;
     try {
-      deleted = await prisma.room.deleteMany({ where: { id } });
+      deleted = await prisma.room.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     } catch (dbErr: any) {
       if (dbErr?.code === "P2003") {
         return NextResponse.json(
@@ -345,7 +333,7 @@ export async function DELETE(req: NextRequest) {
     }
 
     await logActivity({
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId: session!.tenantId!,
       userId: session!.userId,
       userName: session!.name,
       action: "ROOM_DELETE",

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
-import { verifyPassword, isAdminRole, getClientIp, getTerminalName } from "@/lib/auth";
+import { getSessionUser, verifyPasswordTimingSafe, isAdminRole, isAccountLocked, lockoutRemainingMinutes, nextFailedLoginState, getClientIp, getTerminalName } from "@/lib/auth";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -9,8 +9,15 @@ const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 // pertencem a um usuário ADMIN/SUPER_ADMIN ativo, sem abrir sessão nem trocar o operador
 // logado no terminal. Usado para liberar ações sensíveis (ex: cortesia de check-in de
 // madrugada) que exigem aprovação de um administrador, mantendo o registro de quem autorizou.
+// Exige uma sessão já autenticada (qualquer usuário do terminal) — não é um endpoint público, para
+// não virar um segundo oráculo de força-bruta contra credenciais de administrador.
 export async function POST(req: NextRequest) {
   try {
+    const callerSession = await getSessionUser(req);
+    if (!callerSession) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { email, password, reason } = body;
 
@@ -19,14 +26,26 @@ export async function POST(req: NextRequest) {
     }
 
     const user = await prisma.user.findUnique({ where: { email: String(email).toLowerCase().trim() } });
+    const validPassword = await verifyPasswordTimingSafe(password, user?.passwordHash);
 
     if (!user || !user.active) {
       return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
     }
 
-    const validPassword = await verifyPassword(password, user.passwordHash);
+    if (isAccountLocked(user.lockedUntil)) {
+      return NextResponse.json(
+        { success: false, error: `Muitas tentativas incorretas. Tente novamente em ${lockoutRemainingMinutes(user.lockedUntil)} minuto(s).` },
+        { status: 429 }
+      );
+    }
+
     if (!validPassword) {
+      const nextState = nextFailedLoginState(user.failedLoginAttempts);
+      await prisma.user.update({ where: { id: user.id }, data: nextState });
       return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
+    }
+    if (user.failedLoginAttempts > 0) {
+      await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
     }
 
     if (!isAdminRole(user.role)) {

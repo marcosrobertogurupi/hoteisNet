@@ -141,19 +141,25 @@ model SaASSubscription {
 }
 
 model User {
-  id           String          @id @default(uuid())
-  tenantId     String?
-  email        String          @unique
-  name         String
-  passwordHash String
-  role         UserRole        @default(RECEPCIONIST)
-  avatarUrl    String?
-  active       Boolean         @default(true)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
-  sentTickets  SupportTicket[] @relation("TicketAuthor")
-  tenant       Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  auditLogs    AuditLog[]
+  id                  String          @id @default(uuid())
+  tenantId            String?
+  email               String          @unique
+  name                String
+  passwordHash        String
+  role                UserRole        @default(RECEPCIONIST)
+  avatarUrl           String?
+  active              Boolean         @default(true)
+  // Incrementado ao desativar o usuário, trocar senha ou mudar o role — invalida instantaneamente
+  // qualquer JWT de sessão já emitido antes da mudança (ver getSessionUser em lib/auth.ts).
+  tokenVersion         Int            @default(0)
+  // Proteção contra força bruta no login (ver checkAndRegisterLoginAttempt em lib/auth.ts).
+  failedLoginAttempts Int             @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  sentTickets         SupportTicket[] @relation("TicketAuthor")
+  tenant              Tenant?         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auditLogs           AuditLog[]
 
   @@map("users")
 }
@@ -458,17 +464,20 @@ model Room {
 // Governanta/camareira responsável pela limpeza dos quartos. Login próprio (WhatsApp + senha),
 // separado do login administrativo (User), usado pelo app mobile de governança.
 model Housekeeper {
-  id                String             @id @default(uuid())
-  tenantId          String
-  name              String
-  whatsapp          String
-  photoUrl          String?
-  passwordHash      String
-  active            Boolean            @default(true)
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  housekeepingTasks HousekeepingTask[]
+  id                  String             @id @default(uuid())
+  tenantId            String
+  name                String
+  whatsapp            String
+  photoUrl            String?
+  passwordHash        String
+  active              Boolean            @default(true)
+  // Proteção contra força bruta no login (ver checkAndRegisterLoginAttempt em lib/auth.ts).
+  failedLoginAttempts Int                @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  tenant              Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  housekeepingTasks   HousekeepingTask[]
 
   @@unique([tenantId, whatsapp])
   @@map("housekeepers")
@@ -1021,6 +1030,11 @@ model UazapiSetting {
   qrCodeUrl     String?
   pairCode      String?
   webhookUrl    String   @default("")
+  // Segredo aleatório por tenant, enviado como query param na URL do webhook registrada na uazapi
+  // e validado em POST /api/uazapi/webhook/[tenantId] antes de processar qualquer evento — sem
+  // isso, qualquer pessoa que soubesse/adivinhasse o tenantId conseguia forjar mensagens de
+  // hóspede e acionar o Agente de IA.
+  webhookSecret String?
   updatedAt     DateTime @updatedAt
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 

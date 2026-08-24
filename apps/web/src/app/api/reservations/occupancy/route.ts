@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser } from "@/lib/auth";
 
 // Quartos nesses status contam como "ocupados" — mesma definição usada no Mapa de
 // Quartos (ver counts.OCCUPIED em apps/web/src/app/app/page.tsx) e no worker de snapshot.
@@ -13,8 +12,13 @@ const OCCUPIED_STATUSES = ["OCCUPIED", "OCCUPIED_CLEANING"];
 // para as últimas N horas (padrão 24), usado nas estatísticas de vacância do hotel.
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    const tenantId = session.tenantId;
+
     const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || DEFAULT_TENANT_ID;
     const hours = Math.min(Math.max(Number(searchParams.get("hours")) || 24, 1), 24 * 30);
 
     const rooms = await prisma.room.findMany({

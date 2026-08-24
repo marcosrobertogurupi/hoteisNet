@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 const MAX_RESULTS = 15;
 
 // GET /api/stock/lookup?code=... — resolve produtos pelo código de barras, código interno ou nome
@@ -11,15 +11,19 @@ const MAX_RESULTS = 15;
 // melhor resultado para manter compatibilidade com o fluxo de leitor de código de barras (Enter).
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || DEFAULT_TENANT_ID;
     const code = (searchParams.get("code") || "").trim();
 
     if (!code) {
       return NextResponse.json({ success: false, error: "Informe o código, código de barras ou nome." }, { status: 400 });
     }
 
-    const tenantFilter = { tenantId: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"] } };
+    const tenantFilter = { tenantId: session.tenantId };
 
     // Um produto pode ter vários códigos de barras vinculados (tabela product_barcodes) — qualquer
     // um deles resolve para o mesmo produto, além do campo legado "barcode" e do id exato.

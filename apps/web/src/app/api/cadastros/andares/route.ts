@@ -1,20 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-// GET /api/cadastros/andares — lista os andares pré-cadastrados pelo assinante (tenant)
+// GET /api/cadastros/andares — lista os andares pré-cadastrados pelo tenant da sessão
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const reqTenantId = searchParams.get("tenantId");
-
-    const tenantIdsToSearch = reqTenantId
-      ? [reqTenantId, DEFAULT_TENANT_ID, "TNT-01"]
-      : [DEFAULT_TENANT_ID, "TNT-01"];
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
     const floors = await prisma.floor.findMany({
-      where: { tenantId: { in: tenantIdsToSearch } },
+      where: { tenantId: session.tenantId },
       orderBy: { name: "asc" },
     });
 
@@ -25,27 +22,29 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST /api/cadastros/andares — cria um novo andar no pré-cadastro do assinante
+// POST /api/cadastros/andares — cria um novo andar no pré-cadastro do tenant da sessão
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
-    const { tenantId, name } = body;
+    const { name } = body;
 
     if (!name || !String(name).trim()) {
       return NextResponse.json({ success: false, error: "O nome do andar é obrigatório." }, { status: 400 });
     }
 
-    const effectiveTenantId = tenantId || DEFAULT_TENANT_ID;
-
     const existing = await prisma.floor.findFirst({
-      where: { tenantId: effectiveTenantId, name: String(name).trim() },
+      where: { tenantId: session!.tenantId!, name: String(name).trim() },
     });
     if (existing) {
       return NextResponse.json({ success: false, error: "Este andar já está cadastrado." }, { status: 409 });
     }
 
     const floor = await prisma.floor.create({
-      data: { tenantId: effectiveTenantId, name: String(name).trim() },
+      data: { tenantId: session!.tenantId!, name: String(name).trim() },
     });
 
     return NextResponse.json({ success: true, floor }, { status: 201 });
@@ -58,6 +57,10 @@ export async function POST(req: NextRequest) {
 // PATCH /api/cadastros/andares — atualiza um andar existente
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const { id, name, active } = body;
 
@@ -74,7 +77,11 @@ export async function PATCH(req: NextRequest) {
     }
     if (active !== undefined) data.active = active;
 
-    const floor = await prisma.floor.update({ where: { id }, data });
+    const updated = await prisma.floor.updateMany({ where: { id, tenantId: session!.tenantId! }, data });
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: "Andar não encontrado." }, { status: 404 });
+    }
+    const floor = await prisma.floor.findUnique({ where: { id } });
 
     return NextResponse.json({ success: true, floor });
   } catch (error: any) {
@@ -86,6 +93,10 @@ export async function PATCH(req: NextRequest) {
 // DELETE /api/cadastros/andares?id=... — exclui um andar do pré-cadastro
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
 
@@ -93,7 +104,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "ID do andar é obrigatório." }, { status: 400 });
     }
 
-    const deleted = await prisma.floor.deleteMany({ where: { id } });
+    const deleted = await prisma.floor.deleteMany({ where: { id, tenantId: session!.tenantId! } });
 
     if (deleted.count === 0) {
       return NextResponse.json({ success: false, error: "Andar não encontrado." }, { status: 404 });

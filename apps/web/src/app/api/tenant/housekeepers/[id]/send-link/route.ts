@@ -3,27 +3,23 @@ import { prisma } from "@/lib/prisma";
 import { sendUazapiText } from "@/lib/uazapi";
 import { resolveAppBaseUrl } from "@/lib/preCheckinLink";
 import { UazapiUnreachableError } from "@/lib/uazapiInstance";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true, name: true, tradeName: true },
-  });
-  return tenant;
-}
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 // POST /api/tenant/housekeepers/[id]/send-link — envia por WhatsApp o link fixo do app de
 // governança (/housekeeping) para a governanta. O link nunca muda entre envios — é sempre a
 // mesma URL pública do SaaS, então pode ser reenviado a qualquer momento sem gerar token novo.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { id } = await params;
-    const body = await req.json().catch(() => ({}));
-    const { tenantId } = body;
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
-    const tenant = await resolveTenantId(tenantId);
+    const { id } = await params;
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: session!.tenantId! },
+      select: { id: true, name: true, tradeName: true },
+    });
     if (!tenant) {
       return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
     }

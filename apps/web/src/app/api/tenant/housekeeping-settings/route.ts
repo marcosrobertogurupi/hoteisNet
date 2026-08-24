@@ -1,32 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 const DEFAULTS = {
   assignmentMode: "RECEPTION" as "RECEPTION" | "QUEUE",
 };
 
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/housekeeping-settings?tenantId=... — como os quartos são atribuídos às
-// governantas: RECEPTION (a recepção/gestor atribui cada quarto manualmente) ou QUEUE (fila geral
-// de quartos sujos, qualquer governanta pode assumir pelo app). Ver HousekeepingSetting no schema.
+// GET /api/tenant/housekeeping-settings — como os quartos são atribuídos às governantas do tenant
+// da sessão: RECEPTION (a recepção/gestor atribui cada quarto manualmente) ou QUEUE (fila geral de
+// quartos sujos, qualquer governanta pode assumir pelo app). Ver HousekeepingSetting no schema.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
 
-    const settings = await prisma.housekeepingSetting.findUnique({ where: { tenantId: resolvedTenantId } });
+    const settings = await prisma.housekeepingSetting.findUnique({ where: { tenantId: session.tenantId } });
 
     return NextResponse.json({
       success: true,
@@ -44,13 +34,13 @@ export async function GET(req: NextRequest) {
 // PATCH /api/tenant/housekeeping-settings — cria/atualiza (upsert) o modo de atribuição.
 export async function PATCH(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { tenantId, assignmentMode } = body;
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    const resolvedTenantId = session!.tenantId!;
 
-    const resolvedTenantId = await resolveTenantId(tenantId);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
+    const body = await req.json();
+    const { assignmentMode } = body;
 
     if (assignmentMode !== undefined && !["RECEPTION", "QUEUE"].includes(assignmentMode)) {
       return NextResponse.json({ success: false, error: "Modo de atribuição inválido." }, { status: 400 });

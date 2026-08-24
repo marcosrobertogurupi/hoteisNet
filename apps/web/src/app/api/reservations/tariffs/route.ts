@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/utils/supabaseClient";
+import { getSessionUser } from "@/lib/auth";
 
-// GET /api/reservations/tariffs — lista todas as tarifas ativas
+// GET /api/reservations/tariffs — lista as tarifas ativas do tenant da sessão
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || "TNT-01";
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    const tenantId = session.tenantId;
 
     const { data: tariffs, error } = await supabaseAdmin
       .from("tariffs")

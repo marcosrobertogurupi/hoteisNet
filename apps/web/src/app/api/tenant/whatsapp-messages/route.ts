@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 const DEFAULTS = {
   reservationConfirmEnabled: true,
@@ -21,26 +20,16 @@ const DEFAULTS = {
   preCheckinFnrhHoursBefore: 3,
 };
 
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
-
-// GET /api/tenant/whatsapp-messages?tenantId=... — devolve a config de mensagens automáticas de
-// WhatsApp do assinante (confirmação de reserva, boas-vindas, previsão de checkout e checkout).
+// GET /api/tenant/whatsapp-messages — devolve a config de mensagens automáticas de WhatsApp do
+// tenant da sessão (confirmação de reserva, boas-vindas, previsão de checkout e checkout).
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const resolvedTenantId = await resolveTenantId(searchParams.get("tenantId"));
-
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
 
-    const settings = await prisma.whatsappMessageSetting.findUnique({ where: { tenantId: resolvedTenantId } });
+    const settings = await prisma.whatsappMessageSetting.findUnique({ where: { tenantId: session.tenantId } });
 
     return NextResponse.json({
       success: true,
@@ -74,8 +63,11 @@ export async function GET(req: NextRequest) {
 // de WhatsApp do assinante.
 export async function PATCH(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { tenantId, ...fields } = body;
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
+    const fields = await req.json();
 
     if (fields.checkoutPrevisionTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(fields.checkoutPrevisionTime)) {
       return NextResponse.json(
@@ -84,10 +76,7 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const resolvedTenantId = await resolveTenantId(tenantId);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
+    const resolvedTenantId = session!.tenantId!;
 
     const allowedKeys = [
       "reservationConfirmEnabled",

@@ -1,8 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
+import { escapeHtml, isBlockedSmtpHost } from "@/lib/htmlEscape";
 
-export async function POST(request: Request) {
+// POST /api/email/test — só admin: usada exclusivamente para validar as próprias credenciais SMTP
+// do tenant a partir da tela de Configurações, nunca para envio arbitrário.
+export async function POST(request: NextRequest) {
   try {
+    const session = await getSessionUser(request);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await request.json();
     const {
       smtpHost = "smtp.gmail.com",
@@ -22,6 +30,10 @@ export async function POST(request: Request) {
       );
     }
 
+    if (isBlockedSmtpHost(smtpHost)) {
+      return NextResponse.json({ success: false, error: "Servidor SMTP inválido." }, { status: 400 });
+    }
+
     const isSecure = smtpSecure === "ssl" || Number(smtpPort) === 465;
 
     // Configura a conexão SMTP com Nodemailer
@@ -31,7 +43,7 @@ export async function POST(request: Request) {
       secure: isSecure,
       auth: smtpUser.trim() ? { user: smtpUser.trim(), pass: smtpPass.trim() } : undefined,
       tls: {
-        rejectUnauthorized: false, // Permite certificados autoassinados em servidores privados
+        rejectUnauthorized: true,
       },
       connectionTimeout: 10000, // 10s timeout
     });
@@ -43,8 +55,9 @@ export async function POST(request: Request) {
     const testTarget = (recipientEmail || smtpUser || fromEmail).trim();
 
     if (testTarget) {
+      const safeFromName = escapeHtml(fromName || "Hoteis.Net SaaS");
       await transporter.sendMail({
-        from: `"${fromName || "Hoteis.Net SaaS"}" <${fromEmail || smtpUser}>`,
+        from: `"${safeFromName}" <${fromEmail || smtpUser}>`,
         to: testTarget,
         subject: "🎉 Teste de Conexão SMTP - Hoteis.Net SaaS",
         html: `
@@ -57,9 +70,9 @@ export async function POST(request: Request) {
               Olá! Este é um <strong>e-mail de teste</strong> enviado com sucesso a partir das suas configurações de SMTP salvas no <strong>Hoteis.Net SaaS</strong>.
             </p>
             <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; margin: 20px 0; font-size: 13px; color: #475569;">
-              <p style="margin: 0 0 8px 0;"><strong>Servidor SMTP:</strong> ${smtpHost}:${smtpPort} (${smtpSecure.toUpperCase()})</p>
-              <p style="margin: 0 0 8px 0;"><strong>Usuário SMTP:</strong> ${smtpUser || "Sem autenticação"}</p>
-              <p style="margin: 0;"><strong>Remetente Configurado:</strong> ${fromName} &lt;${fromEmail}&gt;</p>
+              <p style="margin: 0 0 8px 0;"><strong>Servidor SMTP:</strong> ${escapeHtml(smtpHost)}:${escapeHtml(smtpPort)} (${escapeHtml(String(smtpSecure).toUpperCase())})</p>
+              <p style="margin: 0 0 8px 0;"><strong>Usuário SMTP:</strong> ${escapeHtml(smtpUser || "Sem autenticação")}</p>
+              <p style="margin: 0;"><strong>Remetente Configurado:</strong> ${safeFromName} &lt;${escapeHtml(fromEmail)}&gt;</p>
             </div>
             <p style="color: #10b981; font-weight: bold; font-size: 14px; text-align: center;">
               ✅ Seu servidor de e-mail está pronto para enviar Vouchers, Recibos e Confirmações de Pagamento!

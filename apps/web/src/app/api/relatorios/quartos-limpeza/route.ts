@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 import { getTenantHeaderInfo } from "@/lib/tenantHeader";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 // GET /api/relatorios/quartos-limpeza — quartos vagos pendentes de higienização (VACANT_DIRTY),
 // agrupáveis por andar no front.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || DEFAULT_TENANT_ID;
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
     const rooms = await prisma.room.findMany({
-      where: { tenantId, status: "VACANT_DIRTY", active: true },
+      where: { tenantId: session.tenantId, status: "VACANT_DIRTY", active: true },
       include: { category: true },
     });
 
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest) {
           a.number.localeCompare(b.number, undefined, { numeric: true })
       );
 
-    const hotel = await getTenantHeaderInfo(tenantId);
+    const hotel = await getTenantHeaderInfo(session.tenantId);
 
     return NextResponse.json({ success: true, hotel, rooms: rows, total: rows.length });
   } catch (error: any) {

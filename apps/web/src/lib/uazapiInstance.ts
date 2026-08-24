@@ -2,9 +2,11 @@ import { prisma } from "@/lib/prisma";
 
 // Credenciais legadas usadas antes de existir a tela "Configuração do sistema > API Whatsapp"
 // (Configurações > API Whatsapp). Servem apenas de fallback para tenants que ainda não
-// configuraram sua própria instância uazapi.
-const FALLBACK_SERVER_URL = "https://netservice.uazapi.com";
-const FALLBACK_INSTANCE_TOKEN = "fbe5bfbb-226a-47a2-9d1d-6b657933318c";
+// configuraram sua própria instância uazapi. Nunca hardcoded no código-fonte — um token de API
+// commitado no git fica exposto permanentemente no histórico e, combinado com uma rota sem
+// autenticação, é explorável por qualquer pessoa; deve vir só de variável de ambiente.
+const FALLBACK_SERVER_URL = process.env.UAZAPI_FALLBACK_SERVER_URL || "";
+const FALLBACK_INSTANCE_TOKEN = process.env.UAZAPI_FALLBACK_INSTANCE_TOKEN || "";
 
 export interface UazapiCredentials {
   serverUrl: string;

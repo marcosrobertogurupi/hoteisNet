@@ -779,6 +779,16 @@ export interface PdfResumoConsumptionItem {
   totalPrice: number;
 }
 
+export interface PdfResumoCompanyData {
+  cnpj?: string;
+  companyName?: string;
+  ie?: string;
+  address?: string;
+  neighborhood?: string;
+  city?: string;
+  uf?: string;
+}
+
 export interface PdfResumoData {
   hotelName: string;
   hotelCnpj?: string;
@@ -790,11 +800,13 @@ export interface PdfResumoData {
   prevCheckOutDate: string;
   calculatedUntil?: string;
   diariasCount?: number;
+  companyData?: PdfResumoCompanyData;
   totalDiarias: number;
   totalConsumo: number;
   outrosDebitos: number;
   totalDespesas: number;
   pagamentosAmount: number;
+  totalAFaturar?: number;
   descontos: number;
   saldoAPagar: number;
   consumptionItems?: PdfResumoConsumptionItem[];
@@ -876,6 +888,56 @@ export function generateResumoPdfBase64(data: PdfResumoData): string {
   doc.text(data.calculatedUntil || "-", marginL + 28, bY);
 
   y += box1H + 4;
+
+  // ── EMPRESA CONVENIADA (só quando o hóspede tem empresa vinculada) ────────
+  // Mesmas linhas/rótulos do box "Empresa conveniada" do modal em tela
+  // (ImprimirResumoHospedagemModal.tsx): CNPJ/Empresa, I.E./Logradouro, Bairro/Cidade/U.F. —
+  // sempre as três linhas, mesmo com campo vazio, para o documento não perder a estrutura.
+  if (data.companyData && (data.companyData.cnpj || data.companyData.companyName)) {
+    doc.setFontSize(8.5);
+    const box2H = 22;
+    doc.rect(marginL, y, pageWidth - 20, box2H);
+    let cY = y + 5;
+
+    doc.setFont("helvetica", "bold");
+    doc.text("CNPJ:", marginL + 2, cY);
+    doc.setFont("helvetica", "normal");
+    doc.text(data.companyData.cnpj || "-", marginL + 15, cY);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("Empresa:", marginL + 90, cY);
+    doc.setFont("helvetica", "normal");
+    doc.text((data.companyData.companyName || "-").toUpperCase(), marginL + 105, cY, { maxWidth: 90 });
+
+    cY += 6;
+    doc.setFont("helvetica", "bold");
+    doc.text("I.E.:", marginL + 2, cY);
+    doc.setFont("helvetica", "normal");
+    doc.text(data.companyData.ie || "-", marginL + 12, cY);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("Logradouro:", marginL + 90, cY);
+    doc.setFont("helvetica", "normal");
+    doc.text(data.companyData.address || "-", marginL + 113, cY, { maxWidth: pageWidth - 20 - 113 });
+
+    cY += 6;
+    doc.setFont("helvetica", "bold");
+    doc.text("Bairro:", marginL + 2, cY);
+    doc.setFont("helvetica", "normal");
+    doc.text(data.companyData.neighborhood || "-", marginL + 16, cY, { maxWidth: 70 });
+
+    doc.setFont("helvetica", "bold");
+    doc.text("Cidade:", marginL + 90, cY);
+    doc.setFont("helvetica", "normal");
+    doc.text(data.companyData.city || "-", marginL + 106, cY, { maxWidth: 55 });
+
+    doc.setFont("helvetica", "bold");
+    doc.text("U.F.:", marginL + 165, cY);
+    doc.setFont("helvetica", "normal");
+    doc.text(data.companyData.uf || "-", marginL + 175, cY);
+
+    y += box2H + 4;
+  }
 
   // ── CONSUMO DA HOSPEDAGEM ─────────────────────────────────────────────────
   const consumptions = data.consumptionItems || [];
@@ -960,6 +1022,10 @@ export function generateResumoPdfBase64(data: PdfResumoData): string {
   y += 26;
 
   // ── PAGAMENTOS ────────────────────────────────────────────────────────────
+  // O que foi faturado para a empresa conveniada (Parcelamento, ex.: FATURA) é uma dívida de
+  // natureza diferente do saldo que o próprio hóspede deve pagar no ato — nunca somar os dois como
+  // se tudo fosse pagamento recebido (mesma regra do modal em tela ImprimirResumoHospedagemModal).
+  const totalAFaturar = data.totalAFaturar ?? 0;
   if (y > 240) {
     doc.addPage();
     y = 15;
@@ -968,7 +1034,8 @@ export function generateResumoPdfBase64(data: PdfResumoData): string {
   doc.setFontSize(9);
   doc.text("PAGAMENTOS", marginL, y);
   y += 3;
-  doc.rect(marginL, y, pageWidth - 20, 26);
+  const boxPagH = totalAFaturar > 0 ? 34 : 26;
+  doc.rect(marginL, y, pageWidth - 20, boxPagH);
 
   doc.setFontSize(8);
   fy = y + 5;
@@ -982,17 +1049,38 @@ export function generateResumoPdfBase64(data: PdfResumoData): string {
   doc.setFont("helvetica", "bold");
   doc.text(`R$ ${data.descontos.toFixed(2).replace(".", ",")}`, col2X + 40, fy);
 
+  if (totalAFaturar > 0) {
+    fy += 6;
+    doc.setFont("helvetica", "normal");
+    doc.text("Total a faturar (R$):", col1X, fy);
+    doc.setFont("helvetica", "bold");
+    doc.text(`R$ ${totalAFaturar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col1X + 38, fy);
+  }
+
   fy += 8;
   doc.setLineWidth(0.3);
   doc.line(col1X, fy - 2, marginR - 5, fy - 2);
   doc.setFontSize(10);
-  doc.setFont("helvetica", "bold");
-  doc.text("SALDO A PAGAR (R$):", col1X, fy + 3);
-  doc.setTextColor(200, 0, 0);
-  doc.text(`R$ ${data.saldoAPagar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col1X + 55, fy + 3);
-  doc.setTextColor(0, 0, 0);
 
-  y += 34;
+  // Mesma lógica condicional do modal em tela: se está tudo faturado (nada pendente do próprio
+  // hóspede), mostra só "Total a Faturar"; senão mostra "Saldo a Pagar".
+  if (totalAFaturar > 0) {
+    doc.setFont("helvetica", "bold");
+    doc.text("TOTAL A FATURAR (R$):", col1X, fy + 3);
+    doc.setTextColor(200, 0, 0);
+    doc.text(`R$ ${totalAFaturar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col1X + 58, fy + 3);
+    doc.setTextColor(0, 0, 0);
+  }
+  if (data.saldoAPagar > 0 || totalAFaturar <= 0) {
+    if (totalAFaturar > 0) fy += 7;
+    doc.setFont("helvetica", "bold");
+    doc.text("SALDO A PAGAR (R$):", col1X, fy + 3);
+    doc.setTextColor(200, 0, 0);
+    doc.text(`R$ ${data.saldoAPagar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`, col1X + 55, fy + 3);
+    doc.setTextColor(0, 0, 0);
+  }
+
+  y += boxPagH + 8;
 
   // ── ASSINATURA ────────────────────────────────────────────────────────────
   if (y > 270) {

@@ -1,16 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 import { getTenantUazapiCredentials, normalizeUazapiPhone, fetchUazapi, UazapiUnreachableError } from "@/lib/uazapiInstance";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 // POST /api/uazapi/send-extrato — envia um documento PDF (extrato, resumo, comprovante de
 // consumo, voucher, recibo, etc.) via Uazapi (POST {serverUrl}/send/media, type "document").
 // Apesar do nome histórico ("extrato"), esta rota é genérica: qualquer tela que precise mandar um
-// PDF em anexo por WhatsApp pode chamá-la.
-export async function POST(request: Request) {
+// PDF em anexo por WhatsApp pode chamá-la. Credenciais sempre do tenant da sessão.
+export async function POST(request: NextRequest) {
   try {
+    const session = await getSessionUser(request);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await request.json();
-    const { phone, caption, pdfBase64, filename, tenantId, serverUrl, instanceToken } = body;
+    const { phone, caption, pdfBase64, filename } = body;
 
     if (!phone || !pdfBase64) {
       return NextResponse.json(
@@ -19,10 +23,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const creds =
-      serverUrl && instanceToken
-        ? { serverUrl: String(serverUrl).trim().replace(/\/$/, ""), instanceToken: String(instanceToken).trim() }
-        : await getTenantUazapiCredentials(tenantId || DEFAULT_TENANT_ID);
+    const creds = await getTenantUazapiCredentials(session.tenantId);
 
     const cleanPhone = normalizeUazapiPhone(phone);
     const documentName = filename || "Documento.pdf";

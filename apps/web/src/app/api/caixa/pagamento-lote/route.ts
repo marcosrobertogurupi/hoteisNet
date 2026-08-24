@@ -4,8 +4,6 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // POST /api/caixa/pagamento-lote — grava, em uma única transação, todos os lançamentos de
 // crédito/pagamento pendentes da hospedagem no caixa do operador ativo. Espelha o comportamento
 // do sistema WinDev original (BTN_FinalizarHospedagem): os lançamentos feitos com o botão "+"
@@ -13,8 +11,13 @@ const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 // só então tudo é persistido de uma vez, atomicamente (se um item falhar, nada é gravado).
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
-    const { tenantId, operatorId, operatorName, roomId, stayCheckinId, guestName, payments, discount } = body;
+    const { operatorId, operatorName, roomId, stayCheckinId, guestName, payments, discount } = body;
 
     const hasPayments = Array.isArray(payments) && payments.length > 0;
     const hasDiscountUpdate = discount !== undefined && discount !== null;
@@ -26,15 +29,14 @@ export async function POST(req: NextRequest) {
     const opId = operatorId || "USR-001";
     const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
     const roomTarget = String(roomId || "");
-    const tenantIdsToSearch = [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[];
 
     let stay = stayCheckinId
-      ? await prisma.stayCheckin.findUnique({ where: { id: stayCheckinId } })
+      ? await prisma.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId } })
       : null;
 
     if (!stay && roomTarget) {
       const room = await prisma.room.findFirst({
-        where: { OR: [{ id: roomTarget }, { number: roomTarget }], tenantId: { in: tenantIdsToSearch } },
+        where: { OR: [{ id: roomTarget }, { number: roomTarget }], tenantId: session.tenantId },
       });
       if (room) {
         stay = await prisma.stayCheckin.findFirst({
@@ -53,13 +55,13 @@ export async function POST(req: NextRequest) {
 
       if (hasPayments) {
         let caixa = await tx.cashRegister.findFirst({
-          where: { operatorId: opId, isOpen: true, tenantId: { in: tenantIdsToSearch } },
+          where: { operatorId: opId, isOpen: true, tenantId: session.tenantId! },
         });
 
         if (!caixa) {
           caixa = await tx.cashRegister.create({
             data: {
-              tenantId: tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
+              tenantId: session.tenantId!,
               operatorId: opId,
               operatorName: opName,
               openingBalance: 0,
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
           const desc = p.descricao || `Pagamento de diárias — Quarto ${roomTarget}`;
 
           const { cashTransactionId } = await processPaymentLine(tx, {
-            tenantId: stay?.tenantId || tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
+            tenantId: stay?.tenantId || session.tenantId!,
             cashRegisterId: caixa.id,
             stayCheckinId: stay?.id || "",
             guestId: stay?.primaryGuestId || null,
@@ -127,12 +129,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const session = await getSessionUser(req);
     const totalLote = hasPayments ? payments.reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0) : 0;
     await logActivity({
-      tenantId: session?.tenantId || tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
-      userId: session?.userId,
-      userName: session?.name,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "PAYMENT",
       description: `${session?.name || opName} lançou ${movimentos.length} pagamento(s) totalizando R$ ${totalLote.toFixed(2)} — quarto ${roomTarget}, hóspede ${guestName || "—"}.`,
       entityType: "CASH_TRANSACTION",

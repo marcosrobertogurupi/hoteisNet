@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 // GET /api/cadastros/contas-pagar?status=aberto|pago — lista os títulos de contas a pagar
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
-    const reqTenantId = searchParams.get("tenantId");
     const status = searchParams.get("status");
 
-    const tenantIdsToSearch = reqTenantId
-      ? [reqTenantId, DEFAULT_TENANT_ID, "TNT-01"]
-      : [DEFAULT_TENANT_ID, "TNT-01"];
-
-    const where: Record<string, unknown> = { tenantId: { in: tenantIdsToSearch } };
+    const where: Record<string, unknown> = { tenantId: session.tenantId };
     if (status === "aberto") where.isPaid = false;
     if (status === "pago") where.isPaid = true;
 
@@ -35,8 +34,13 @@ export async function GET(req: NextRequest) {
 // fornecedor e a uma conta do Plano de Contas (equivalente ao BTN_IncCPagar do Win_ContasPagar)
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
-    const { tenantId, supplierId, supplierName, documentNumber, originDocument, accountPlanId, issueDate, dueDate, amount, notes } = body;
+    const { supplierId, supplierName, documentNumber, originDocument, accountPlanId, issueDate, dueDate, amount, notes } = body;
 
     if (!supplierName || !String(supplierName).trim()) {
       return NextResponse.json({ success: false, error: "O fornecedor é obrigatório." }, { status: 400 });
@@ -55,17 +59,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Informe um valor maior que zero." }, { status: 400 });
     }
 
-    const effectiveTenantId = tenantId || DEFAULT_TENANT_ID;
-
-    const accountPlan = await prisma.accountPlan.findUnique({ where: { id: accountPlanId } });
+    const accountPlan = await prisma.accountPlan.findFirst({ where: { id: accountPlanId, tenantId: session.tenantId } });
     if (!accountPlan) {
       return NextResponse.json({ success: false, error: "Plano de contas não encontrado." }, { status: 404 });
     }
 
+    let realSupplierId: string | null = null;
+    if (supplierId) {
+      const supplier = await prisma.supplier.findFirst({ where: { id: supplierId, tenantId: session.tenantId }, select: { id: true } });
+      realSupplierId = supplier?.id || null;
+    }
+
     const payable = await prisma.accountsPayable.create({
       data: {
-        tenantId: effectiveTenantId,
-        supplierId: supplierId || null,
+        tenantId: session.tenantId,
+        supplierId: realSupplierId,
         supplierName: String(supplierName).trim(),
         documentNumber: String(documentNumber).trim(),
         originDocument: originDocument || null,
@@ -88,6 +96,11 @@ export async function POST(req: NextRequest) {
 // PATCH /api/cadastros/contas-pagar — atualiza campos de um título (vencimento, observações)
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { id, dueDate, notes, supplierName } = body;
 
@@ -105,7 +118,11 @@ export async function PATCH(req: NextRequest) {
       data.supplierName = String(supplierName).trim();
     }
 
-    const payable = await prisma.accountsPayable.update({ where: { id }, data });
+    const updated = await prisma.accountsPayable.updateMany({ where: { id, tenantId: session.tenantId }, data });
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: "Título não encontrado." }, { status: 404 });
+    }
+    const payable = await prisma.accountsPayable.findUnique({ where: { id } });
 
     return NextResponse.json({ success: true, payable });
   } catch (error: any) {
@@ -114,13 +131,22 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// DELETE /api/cadastros/contas-pagar?id=... — exclui um título (apenas se ainda não tiver baixas)
+// DELETE /api/cadastros/contas-pagar?id=... — exclui um título (apenas se ainda não tiver baixas). Só admin.
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) {
       return NextResponse.json({ success: false, error: "ID do título é obrigatório." }, { status: 400 });
+    }
+
+    const existing = await prisma.accountsPayable.findFirst({ where: { id, tenantId: session!.tenantId! } });
+    if (!existing) {
+      return NextResponse.json({ success: false, error: "Título não encontrado." }, { status: 404 });
     }
 
     const settlementsCount = await prisma.payableSettlement.count({ where: { accountsPayableId: id } });
@@ -131,7 +157,7 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    const deleted = await prisma.accountsPayable.deleteMany({ where: { id } });
+    const deleted = await prisma.accountsPayable.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     if (deleted.count === 0) {
       return NextResponse.json({ success: false, error: "Título não encontrado." }, { status: 404 });
     }

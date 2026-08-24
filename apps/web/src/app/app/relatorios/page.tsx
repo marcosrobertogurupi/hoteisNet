@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart, ListChecks } from "lucide-react";
+import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart, ListChecks, LogOut } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 const REPORTS = [
@@ -25,6 +25,13 @@ const REPORTS = [
     description: "Relação de quartos ocupados com hóspede, entrada e previsão de saída, somando a quantidade de pessoas no hotel (café da manhã).",
     icon: BedDouble,
     color: "#10B981",
+  },
+  {
+    href: "/app/relatorios/consulta-checkouts",
+    title: "Consulta de Check-outs",
+    description: "Pesquisa hospedagens encerradas por período de data/hora do check-out, com dados completos, impressão de resumo/consumo e envio por e-mail ou WhatsApp.",
+    icon: LogOut,
+    color: "#EF4444",
   },
   {
     href: "/app/relatorios/agente-acoes",

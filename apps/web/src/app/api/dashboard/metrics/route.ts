@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
 // Quartos nesses status contam como "ocupados" — mesma definição usada no Mapa de
 // Quartos e no worker de snapshot (ver apps/worker/src/occupancySnapshot.ts).
@@ -18,8 +17,11 @@ function brDateKey(d: Date): string {
 // nos últimos 30 dias.
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId") || DEFAULT_TENANT_ID;
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    const tenantId = session.tenantId;
 
     const todayBr = dateOnlyBrasilia(new Date());
     const tomorrowBr = new Date(todayBr.getTime() + 24 * 60 * 60 * 1000);

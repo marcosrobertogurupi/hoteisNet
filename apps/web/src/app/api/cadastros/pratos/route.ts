@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const dishes = await prisma.dish.findMany({
-      where: { tenantId: { in: [DEFAULT_TENANT_ID, "TNT-01"] } },
+      where: { tenantId: session.tenantId },
       orderBy: { name: "asc" },
     });
     return NextResponse.json({ success: true, dishes });
@@ -17,8 +21,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
-    const { tenantId, nome, codigo, categoria, preco, descricao } = body;
+    const { nome, codigo, categoria, preco, descricao } = body;
 
     if (!nome || !String(nome).trim()) {
       return NextResponse.json({ success: false, error: "O nome do prato é obrigatório." }, { status: 400 });
@@ -30,7 +38,7 @@ export async function POST(req: NextRequest) {
 
     const dish = await prisma.dish.create({
       data: {
-        tenantId: tenantId || DEFAULT_TENANT_ID,
+        tenantId: session!.tenantId!,
         name: String(nome).trim(),
         code: codigo || null,
         category: categoria || null,
@@ -48,6 +56,10 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const body = await req.json();
     const { id, nome, codigo, categoria, preco, descricao } = body;
 
@@ -62,8 +74,8 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Informe um preço válido." }, { status: 400 });
     }
 
-    const dish = await prisma.dish.update({
-      where: { id },
+    const updated = await prisma.dish.updateMany({
+      where: { id, tenantId: session!.tenantId! },
       data: {
         name: String(nome).trim(),
         code: codigo || null,
@@ -72,6 +84,10 @@ export async function PUT(req: NextRequest) {
         description: descricao || null,
       },
     });
+    if (updated.count === 0) {
+      return NextResponse.json({ success: false, error: "Prato não encontrado." }, { status: 404 });
+    }
+    const dish = await prisma.dish.findUnique({ where: { id } });
 
     return NextResponse.json({ success: true, dish });
   } catch (error: any) {
@@ -82,13 +98,17 @@ export async function PUT(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) {
       return NextResponse.json({ success: false, error: "ID do prato é obrigatório." }, { status: 400 });
     }
 
-    const deleted = await prisma.dish.deleteMany({ where: { id } });
+    const deleted = await prisma.dish.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     if (deleted.count === 0) {
       return NextResponse.json({ success: false, error: "Prato não encontrado." }, { status: 404 });
     }

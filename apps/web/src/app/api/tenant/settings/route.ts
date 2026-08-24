@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser, requireAdmin } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-// GET /api/tenant/settings?tenantId=... — devolve as configurações do assinante (ex: horário de virada de diária)
+// GET /api/tenant/settings — devolve as configurações do tenant da sessão (ex: horário de virada de diária)
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const tenantId = searchParams.get("tenantId");
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
 
-    const tenant = await prisma.tenant.findFirst({
-      where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: session.tenantId },
       select: { id: true, dailyRolloverTime: true, allowNegativeStock: true, breakfastHours: true, maxDiscountPercent: true },
     });
 
@@ -33,11 +34,18 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// PATCH /api/tenant/settings — atualiza configurações do assinante (ex: horário de virada de diária)
+// PATCH /api/tenant/settings — atualiza configurações do tenant da sessão (ex: horário de virada de diária). Só admin.
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    const adminError = requireAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    if (!session!.tenantId) {
+      return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
+    }
+
     const body = await req.json();
-    const { tenantId, dailyRolloverTime, allowNegativeStock, breakfastHours, maxDiscountPercent } = body;
+    const { dailyRolloverTime, allowNegativeStock, breakfastHours, maxDiscountPercent } = body;
 
     if (dailyRolloverTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(dailyRolloverTime)) {
       return NextResponse.json(
@@ -56,17 +64,8 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    const tenant = await prisma.tenant.findFirst({
-      where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-      select: { id: true },
-    });
-
-    if (!tenant) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
-
     await prisma.tenant.update({
-      where: { id: tenant.id },
+      where: { id: session!.tenantId },
       data: {
         ...(dailyRolloverTime !== undefined ? { dailyRolloverTime } : {}),
         ...(allowNegativeStock !== undefined ? { allowNegativeStock: Boolean(allowNegativeStock) } : {}),

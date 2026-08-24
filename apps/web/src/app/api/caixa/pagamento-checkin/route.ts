@@ -4,16 +4,18 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // POST /api/caixa/pagamento-checkin — lança um crédito/pagamento na hospedagem ativa do quarto
 // E, ao mesmo tempo, registra o movimento no caixa aberto do operador ativo (equivalente ao
 // Cai_LanPor/HospedagemPagto.HosP_IDOperador do sistema WinDev original).
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
-      tenantId,
       operatorId,
       operatorName,
       roomId,
@@ -34,17 +36,15 @@ export async function POST(req: NextRequest) {
     const fpg = formaPagamento || "DINHEIRO";
     const roomTarget = String(roomId || "");
 
-    const tenantIdsToSearch = [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[];
-
     // Resolve a hospedagem ativa: usa o stayCheckinId informado se for um ID real do banco,
-    // senão localiza pela hospedagem aberta do quarto (fallback para dados legados/mock).
+    // senão localiza pela hospedagem aberta do quarto — sempre restrito ao tenant da sessão.
     let stay = stayCheckinId
-      ? await prisma.stayCheckin.findUnique({ where: { id: stayCheckinId } })
+      ? await prisma.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId } })
       : null;
 
     if (!stay && roomTarget) {
       const room = await prisma.room.findFirst({
-        where: { OR: [{ id: roomTarget }, { number: roomTarget }], tenantId: { in: tenantIdsToSearch } },
+        where: { OR: [{ id: roomTarget }, { number: roomTarget }], tenantId: session.tenantId },
       });
       if (room) {
         stay = await prisma.stayCheckin.findFirst({
@@ -56,13 +56,13 @@ export async function POST(req: NextRequest) {
 
     // Encontra o caixa aberto do operador ativo; abre automaticamente um novo se não houver nenhum.
     let caixa = await prisma.cashRegister.findFirst({
-      where: { operatorId: opId, isOpen: true, tenantId: { in: tenantIdsToSearch } },
+      where: { operatorId: opId, isOpen: true, tenantId: session.tenantId },
     });
 
     if (!caixa) {
       caixa = await prisma.cashRegister.create({
         data: {
-          tenantId: tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
+          tenantId: session.tenantId,
           operatorId: opId,
           operatorName: opName,
           openingBalance: 0,
@@ -107,11 +107,10 @@ export async function POST(req: NextRequest) {
       saldoContaQuarto = Math.max(0, totalDiarias + totalConsumo - totalPago);
     }
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId: session?.tenantId || tenantIdsToSearch[0] || DEFAULT_TENANT_ID,
-      userId: session?.userId,
-      userName: session?.name,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "PAYMENT",
       description: `${session?.name || opName} lançou pagamento de R$ ${valorNum.toFixed(2)} (${fpg}) — quarto ${roomTarget}, hóspede ${guestName || "—"}.`,
       entityType: "CASH_TRANSACTION",

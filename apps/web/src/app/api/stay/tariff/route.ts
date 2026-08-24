@@ -3,8 +3,6 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // PATCH /api/stay/tariff — grava no banco a tarifa escolhida pelo usuário no modal "Alterar Tarifa
 // da Hospedagem" (aplicar em toda hospedagem / hoje em diante / apenas nos selecionados). O front
 // já resolveu localmente QUAIS diárias mudam para qual modo — aqui só recebemos o resultado final
@@ -12,6 +10,11 @@ const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 // o banco, sem reinterpretar o modo no servidor.
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { stayCheckinId, dailyRates } = body as {
       stayCheckinId?: string;
@@ -35,7 +38,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const stay = await tx.stayCheckin.findUnique({ where: { id: stayCheckinId } });
+      const stay = await tx.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId! } });
       if (!stay) {
         throw new Error(`Hospedagem ${stayCheckinId} não encontrada.`);
       }
@@ -75,11 +78,10 @@ export async function PATCH(req: NextRequest) {
       return updatedStay;
     });
 
-    const session = await getSessionUser(req);
     await logActivity({
-      tenantId: session?.tenantId || DEFAULT_TENANT_ID,
-      userId: session?.userId,
-      userName: session?.name,
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
       action: "TARIFF_CHANGE",
       description: `${session?.name || "Usuário"} alterou a tarifa de ${dailyRates.length} diária(s) da hospedagem ${stayCheckinId}.`,
       entityType: "STAY_CHECKIN",

@@ -1,20 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
-async function resolveTenantId(tenantId: string | null) {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: { in: [tenantId, DEFAULT_TENANT_ID, "TNT-01"].filter(Boolean) as string[] } },
-    select: { id: true },
-  });
-  return tenant?.id || null;
-}
+import { getSessionUser } from "@/lib/auth";
 
 // GET /api/uazapi/messages?stayId=... — lista o histórico de mensagens WhatsApp da hospedagem
-// (enviadas pelo hotel e recebidas do hóspede via webhook), em ordem cronológica.
+// (enviadas pelo hotel e recebidas do hóspede via webhook), em ordem cronológica. Só do tenant da
+// sessão — sem isso, qualquer stayId de outro hotel vazava a conversa (com PII do hóspede).
 export async function GET(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const stayId = searchParams.get("stayId");
     if (!stayId) {
@@ -22,7 +19,7 @@ export async function GET(req: NextRequest) {
     }
 
     const messages = await prisma.whatsappMessage.findMany({
-      where: { stayId },
+      where: { stayId, tenantId: session.tenantId },
       orderBy: { createdAt: "asc" },
     });
 
@@ -41,21 +38,21 @@ export async function GET(req: NextRequest) {
 // send-text / send-extrato antes de chamar este endpoint.
 export async function POST(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
-    const { tenantId, stayId, phone, type, content, filename } = body;
+    const { stayId, phone, type, content, filename } = body;
 
     if (!phone || !type) {
       return NextResponse.json({ success: false, error: "Telefone e tipo são obrigatórios." }, { status: 400 });
     }
 
-    const resolvedTenantId = await resolveTenantId(tenantId || null);
-    if (!resolvedTenantId) {
-      return NextResponse.json({ success: false, error: "Assinante não encontrado." }, { status: 404 });
-    }
-
     const record = await prisma.whatsappMessage.create({
       data: {
-        tenantId: resolvedTenantId,
+        tenantId: session.tenantId,
         stayId: stayId || null,
         phone,
         direction: "OUT",
@@ -84,6 +81,11 @@ export async function POST(req: NextRequest) {
 // hospedagem, chamado quando o operador abre a tela "Mensagens WhatsApp" do quarto.
 export async function PATCH(req: NextRequest) {
   try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { stayId } = body;
     if (!stayId) {
@@ -91,7 +93,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     await prisma.whatsappMessage.updateMany({
-      where: { stayId, direction: "IN", read: false },
+      where: { stayId, tenantId: session.tenantId, direction: "IN", read: false },
       data: { read: true },
     });
 
