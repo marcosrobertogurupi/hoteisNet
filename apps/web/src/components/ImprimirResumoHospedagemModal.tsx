@@ -83,6 +83,10 @@ export const ImprimirResumoHospedagemModal: React.FC<ImprimirResumoHospedagemMod
   const totalAFaturar = roomData.totalAFaturar ?? 0.0;
   const descontos = roomData.descontos ?? 0.0;
   const saldoAPagar = roomData.saldoAPagar ?? totalDespesas - pagamentos - descontos;
+  // Pagamentos (incluindo Total a Faturar) que superam o total de despesas nunca voltam ao
+  // hóspede neste documento — viram saldo de crédito na ficha dele para hospedagens futuras.
+  // Mesma regra e mesmo valor do aviso exibido na tela de check-out (LancarPagamentoHospedagemModal).
+  const creditoGerado = Math.max(0, pagamentos + totalAFaturar - totalDespesas - descontos);
 
   const paymentItems = roomData.paymentItems ?? [];
 
@@ -352,11 +356,23 @@ export const ImprimirResumoHospedagemModal: React.FC<ImprimirResumoHospedagemMod
                   <span>R$ {totalAFaturar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
                 </div>
               )}
-              {(saldoAPagar > 0 || totalAFaturar <= 0) && (
-                <div className={`flex justify-between font-bold text-slate-900 ${totalAFaturar > 0 ? "" : "pt-1 border-t border-slate-400"}`}>
-                  <span>Saldo a pagar..:</span>
-                  <span>R$ {saldoAPagar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+              {creditoGerado > 0.001 ? (
+                <div className="pt-1 border-t border-slate-400 space-y-0.5">
+                  <div className="flex justify-between font-bold text-emerald-700">
+                    <span>Crédito gerado..:</span>
+                    <span>R$ {creditoGerado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-600 italic">
+                    Valor não devolvido ao hóspede — convertido em saldo para hospedagens futuras.
+                  </div>
                 </div>
+              ) : (
+                (saldoAPagar > 0 || totalAFaturar <= 0) && (
+                  <div className={`flex justify-between font-bold text-slate-900 ${totalAFaturar > 0 ? "" : "pt-1 border-t border-slate-400"}`}>
+                    <span>Saldo a pagar..:</span>
+                    <span>R$ {saldoAPagar.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )
               )}
             </div>
           </div>

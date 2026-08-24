@@ -2510,7 +2510,7 @@ export default function TenantDashboardPage() {
                 `⚠️ Não foi possível localizar a hospedagem ativa do Quarto ${room.number}. Checkout NÃO realizado.`,
                 "Falha ao Encerrar Hospedagem"
               );
-              return;
+              return false;
             }
 
             // PATCH /api/stay/checkin é a ÚNICA fonte de verdade para encerrar uma hospedagem:
@@ -2530,7 +2530,7 @@ export default function TenantDashboardPage() {
                   `⚠️ Checkout do Quarto ${room.number} NÃO foi salvo no banco de dados: ${data.error || "erro desconhecido"}. Tente novamente.`,
                   "Falha ao Encerrar Hospedagem"
                 );
-                return;
+                return false;
               }
             } catch (err) {
               console.error("[Checkout] Erro ao encerrar hospedagem no banco de dados:", err);
@@ -2538,7 +2538,7 @@ export default function TenantDashboardPage() {
                 `⚠️ Não foi possível registrar o checkout do Quarto ${room.number} no banco de dados. Tente novamente.`,
                 "Falha ao Encerrar Hospedagem"
               );
-              return;
+              return false;
             }
 
             setRooms(prev => prev.map(r => r.id === room.id ? {
@@ -2555,6 +2555,7 @@ export default function TenantDashboardPage() {
             setCheckoutFarewellRoomId(room.id);
 
             toast.success(`Check-out do Quarto ${room.number} efetuado com sucesso! Quarto encaminhado para Governança (Limpeza).`, "Check-out Concluído");
+            return true;
           }}
         />
       )}

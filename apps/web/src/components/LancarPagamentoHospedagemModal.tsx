@@ -81,7 +81,9 @@ export interface LancarPagamentoHospedagemModalProps {
     observations: ObservationLog[];
   }) => void;
   // Chamado quando o saldo é totalmente quitado e o usuário confirma o check-out do hóspede.
-  onCheckoutConfirmed?: () => void;
+  // Retorna false (ou lança) se o servidor recusar o encerramento (ex.: validação atômica de saldo
+  // devedor no PATCH /api/stay/checkin) — a tela só fecha quando o retorno for true.
+  onCheckoutConfirmed?: () => Promise<boolean> | boolean | void;
   // Chamado ao clicar no "+" de Consumo — abre a tela real de Lançamento de Consumo do Quarto por cima deste modal.
   onOpenConsumo?: () => void;
   // Chamado ao clicar no olho de Total Diárias — abre o Extrato de Hospedagem real por cima deste modal.
@@ -139,14 +141,20 @@ export default function LancarPagamentoHospedagemModal({
   const { operatorId: activeOperatorId, operatorName: activeOperatorName } = useOperator();
 
   // Financial values
-  const totalDiarias = stayData.totalDiarias ?? 0.0;
+  const [totalDiarias, setTotalDiarias] = useState<number>(stayData.totalDiarias ?? 0.0);
+  useEffect(() => {
+    setTotalDiarias(stayData.totalDiarias ?? 0.0);
+  }, [stayData.totalDiarias]);
   const [totalConsumo, setTotalConsumo] = useState<number>(stayData.totalConsumo ?? 0.0);
   // Mantém o Consumo(R$) sincronizado quando a tela de Lançamento de Consumo do Quarto (aberta
   // pelo "+") salva alterações e o pai atualiza os dados reais da hospedagem.
   useEffect(() => {
     setTotalConsumo(stayData.totalConsumo ?? 0.0);
   }, [stayData.totalConsumo]);
-  const outrosDebitos = stayData.outrosDebitos ?? 0.0;
+  const [outrosDebitos, setOutrosDebitos] = useState<number>(stayData.outrosDebitos ?? 0.0);
+  useEffect(() => {
+    setOutrosDebitos(stayData.outrosDebitos ?? 0.0);
+  }, [stayData.outrosDebitos]);
   const outrosDebitosDetail = stayData.outrosDebitosDetail ?? [];
   const [showOutrosDebitosModal, setShowOutrosDebitosModal] = useState<boolean>(false);
   const [desconto, setDesconto] = useState<number>(stayData.desconto || 0.0);
@@ -567,7 +575,12 @@ export default function LancarPagamentoHospedagemModal({
   // Calculations
   const totalPagamentos = payments.reduce((acc, p) => acc + p.amount, 0);
   const totalDespesas = totalDiarias + totalConsumo + outrosDebitos;
-  const saldoAPagar = Math.max(0, totalDespesas - totalPagamentos - desconto);
+  const saldoBruto = totalDespesas - totalPagamentos - desconto;
+  const saldoAPagar = Math.max(0, saldoBruto);
+  // Pagamentos além do débito nunca são devolvidos ao hóspede no check-out — viram saldo de
+  // crédito na ficha dele (Guest.balance, via processPaymentLine) para usar em hospedagens
+  // futuras. Isso precisa ficar explícito para o operador, tanto na tela quanto no aviso final.
+  const creditoGerado = Math.max(0, -saldoBruto);
 
   // Format Helper
   const fmtCurrency = (val: number) => {
@@ -682,8 +695,65 @@ export default function LancarPagamentoHospedagemModal({
       }
       return;
     }
-    onCheckoutConfirmed?.();
+
+    // onCheckoutConfirmed chama o PATCH /api/stay/checkin, que revalida o saldo devedor dentro da
+    // própria transação (fonte de verdade final, à prova de corrida entre terminais). Só fecha
+    // esta tela se o servidor confirmar que o encerramento realmente aconteceu — se ele recusar
+    // (ex.: outro terminal lançou consumo/débito depois que esta tela abriu), a tela permanece
+    // aberta com os dados já atualizados pela consulta acima, para o operador regularizar o saldo.
+    const success = onCheckoutConfirmed ? await onCheckoutConfirmed() : true;
+    if (success === false) return;
+
+    if (creditoGerado > 0.001) {
+      toast.success(
+        `Crédito de ${fmtCurrency(creditoGerado)} convertido em saldo para futuras hospedagens.`,
+        "Crédito Gerado no Check-out"
+      );
+    }
     onClose();
+  };
+
+  // Consulta o estado financeiro REAL da hospedagem no servidor (não confia nos valores que esta
+  // tela carregou ao abrir, que podem estar desatualizados se outro terminal lançou consumo/débito
+  // nesse meio-tempo). Retorna true e libera o check-out somente se os valores atuais no banco
+  // baterem com o que a tela está exibindo; caso contrário, atualiza a tela com os valores reais e
+  // avisa o operador, sem permitir encerrar a hospedagem.
+  const verifyBalanceBeforeCheckout = async (): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/stay/checkin?stayId=${stayData.idHospedagem}`);
+      const data = await res.json();
+      if (!data?.success || !data.stay) return true; // consulta falhou: deixa a validação atômica do servidor decidir no PATCH
+
+      const freshTotalDiarias = Number(data.stay.totalDaily ?? totalDiarias);
+      const freshTotalConsumo = Number(data.stay.totalConsumption ?? totalConsumo);
+      const freshOutrosDebitos = Number(data.stay.otherDebits ?? outrosDebitos);
+
+      const divergiu =
+        Math.abs(freshTotalDiarias - totalDiarias) > 0.009 ||
+        Math.abs(freshTotalConsumo - totalConsumo) > 0.009 ||
+        Math.abs(freshOutrosDebitos - outrosDebitos) > 0.009;
+
+      if (!divergiu) return true;
+
+      setTotalDiarias(freshTotalDiarias);
+      setTotalConsumo(freshTotalConsumo);
+      setOutrosDebitos(freshOutrosDebitos);
+
+      const novoSaldo = Math.max(
+        0,
+        freshTotalDiarias + freshTotalConsumo + freshOutrosDebitos - totalPagamentos - desconto
+      );
+      toast.warning(
+        `O saldo do Quarto ${stayData.roomNumber} mudou desde que esta tela foi aberta — outro terminal lançou consumo ou débito na hospedagem.\n\n` +
+        `Saldo devedor atualizado: ${fmtCurrency(novoSaldo)}.\n\n` +
+        `Confira os valores atualizados na tela e tente o check-out novamente.`,
+        "Saldo Divergente — Check-out Bloqueado"
+      );
+      return false;
+    } catch (err) {
+      console.warn("[LancarPagamentoHospedagemModal] Falha ao verificar saldo antes do check-out:", err);
+      return true; // consulta falhou: deixa a validação atômica do servidor decidir no PATCH
+    }
   };
 
   // Save Credit / Check-out Button Handler — grava no caixa, em uma única transação, todos os
@@ -696,6 +766,14 @@ export default function LancarPagamentoHospedagemModal({
   // débito pendente.
   const handleSaveCredit = async () => {
     if (isSaving) return; // evita duplo envio por cliques repetidos enquanto a gravação está em andamento
+
+    // Antes de qualquer coisa em modo check-out, confirma no servidor que o saldo devedor que esta
+    // tela está exibindo ainda é o real — evita fechar a hospedagem (ou lançar um pagamento achando
+    // que vai zerar o saldo) com base em consumo/débito lançado por outro terminal nesse meio-tempo.
+    if (isCheckoutMode) {
+      const balanceOk = await verifyBalanceBeforeCheckout();
+      if (!balanceOk) return;
+    }
 
     const pendingPayments = payments.filter((p) => !p.caixaMovimentoId);
     const discountChanged = desconto !== (stayData.desconto ?? 0.0);
@@ -1312,11 +1390,22 @@ export default function LancarPagamentoHospedagemModal({
               {/* Saldo a pagar (R$) Yellow Box - WinDev Focal Point */}
               <div className="space-y-2">
                 <h4 className="font-extrabold text-sm text-blue-700 dark:text-blue-400">
-                  Saldo a pagar (R$)
+                  {creditoGerado > 0.001 ? "Crédito (R$)" : "Saldo a pagar (R$)"}
                 </h4>
-                <div className="bg-yellow-300 dark:bg-yellow-400/90 text-red-600 font-extrabold text-2xl p-3 rounded-lg text-right shadow-inner font-mono border-2 border-yellow-400">
-                  {fmtCurrency(saldoAPagar)}
+                <div
+                  className={`font-extrabold text-2xl p-3 rounded-lg text-right shadow-inner font-mono border-2 ${
+                    creditoGerado > 0.001
+                      ? "bg-green-300 dark:bg-green-400/90 text-green-800 border-green-400"
+                      : "bg-yellow-300 dark:bg-yellow-400/90 text-red-600 border-yellow-400"
+                  }`}
+                >
+                  {fmtCurrency(creditoGerado > 0.001 ? creditoGerado : saldoAPagar)}
                 </div>
+                {creditoGerado > 0.001 && (
+                  <p className="text-xs font-semibold text-green-700 dark:text-green-400">
+                    Esse valor não é devolvido ao hóspede no check-out — vira saldo de crédito para hospedagens futuras.
+                  </p>
+                )}
 
                 <button
                   onClick={handleSaveCredit}
