@@ -35,8 +35,24 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
 
+    // Mapa de Reservas só precisa do horizonte operacional: hoje até 6 meses à frente. Reservas já
+    // finalizadas (passado) nunca aparecem aqui — só no relatório dedicado — o que evita que a
+    // resposta cresça sem limite conforme o hotel acumula histórico. A exceção é status CHECKED_IN:
+    // uma hospedagem em andamento continua aparecendo mesmo que o checkOutDate original (antes de
+    // diárias extras por checkout atrasado) já tenha passado.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const sixMonthsAhead = new Date(startOfToday);
+    sixMonthsAhead.setMonth(sixMonthsAhead.getMonth() + 6);
+
     const reservations = await prisma.reservation.findMany({
-      where: { room: { tenantId: session.tenantId } },
+      where: {
+        room: { tenantId: session.tenantId },
+        OR: [
+          { status: "CHECKED_IN" },
+          { checkOutDate: { gte: startOfToday }, checkInDate: { lte: sixMonthsAhead } },
+        ],
+      },
       include: {
         room: {
           include: { category: true },

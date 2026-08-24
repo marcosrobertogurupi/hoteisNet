@@ -1,0 +1,71 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
+
+// GET /api/reservations/rooms/status — versão enxuta de /api/reservations/rooms usada pelo
+// polling de 3s do Mapa de Quartos. Traz só os campos que realmente mudam em tempo real (status,
+// hóspede ativo, consumo, mensagens não lidas) — nunca dados completos de categoria/CPF/telefone/
+// fotos, que só mudam via cadastro e já chegam pela carga inicial da tela via
+// /api/reservations/rooms. Isso existe para conter o volume de saída de dados do banco: o
+// endpoint completo tem include profundo (categoria inteira + hóspede inteiro) repetido a cada
+// tick, o que gerava a maior parte do egress do Supabase durante os testes.
+export async function GET(req: NextRequest) {
+  try {
+    const session = await getSessionUser(req);
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+
+    const rooms = await prisma.room.findMany({
+      where: { tenantId: session.tenantId },
+      select: {
+        id: true,
+        number: true,
+        floor: true,
+        status: true,
+        notes: true,
+        active: true,
+        category: { select: { name: true, dailyPrice: true } },
+        checkins: {
+          where: { isClosed: false },
+          orderBy: { checkInDate: "desc" },
+          take: 1,
+          select: {
+            primaryGuest: { select: { fullName: true } },
+            expectedCheckOut: true,
+            totalConsumption: true,
+            _count: { select: { whatsappMessages: { where: { direction: "IN", read: false } } } },
+          },
+        },
+      },
+      orderBy: { number: "asc" },
+    });
+
+    const formatted = rooms.map((r) => {
+      const activeStay = r.checkins[0];
+      return {
+        id: r.id,
+        number: r.number,
+        floor: r.floor || "Térreo",
+        status: r.status,
+        notes: r.notes || "",
+        active: r.active,
+        category: r.category.name,
+        ratePerNight: Number(r.category.dailyPrice),
+        activeStay: activeStay
+          ? {
+              guestName: activeStay.primaryGuest?.fullName || null,
+              expectedCheckOut: activeStay.expectedCheckOut,
+              totalConsumption: Number(activeStay.totalConsumption),
+              unreadWhatsappCount: activeStay._count?.whatsappMessages ?? 0,
+            }
+          : null,
+      };
+    });
+
+    return NextResponse.json({ success: true, rooms: formatted });
+  } catch (error: any) {
+    console.error("[GET /api/reservations/rooms/status] Erro ao buscar status dos quartos:", error);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}

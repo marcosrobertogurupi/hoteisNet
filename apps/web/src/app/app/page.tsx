@@ -268,7 +268,7 @@ export default function TenantDashboardPage() {
   const syncRoomsFromDatabase = useCallback(async () => {
     try {
       const [res, housekeepingRes] = await Promise.all([
-        fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`),
+        fetch(`/api/reservations/rooms/status`),
         fetch(`/api/tenant/housekeeping-tasks`).catch(() => null),
       ]);
 
