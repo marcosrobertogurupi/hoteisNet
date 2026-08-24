@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
-import { getSessionUser, verifyPasswordTimingSafe, isAdminRole, isAccountLocked, lockoutRemainingMinutes, nextFailedLoginState, getClientIp, getTerminalName } from "@/lib/auth";
+import { getSessionUser, verifyPasswordTimingSafe, isAdminRole, isAccountLocked, nextFailedLoginState, getClientIp, getTerminalName } from "@/lib/auth";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
+const GENERIC_AUTH_ERROR = "E-mail ou senha inválidos.";
 
 // POST /api/auth/verify-admin — autorização pontual ("step-up"): confirma que e-mail+senha
 // pertencem a um usuário ADMIN/SUPER_ADMIN ativo, sem abrir sessão nem trocar o operador
@@ -29,14 +30,11 @@ export async function POST(req: NextRequest) {
     const validPassword = await verifyPasswordTimingSafe(password, user?.passwordHash);
 
     if (!user || !user.active) {
-      return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
+      return NextResponse.json({ success: false, error: GENERIC_AUTH_ERROR }, { status: 401 });
     }
 
     if (isAccountLocked(user.lockedUntil)) {
-      return NextResponse.json(
-        { success: false, error: `Muitas tentativas incorretas. Tente novamente em ${lockoutRemainingMinutes(user.lockedUntil)} minuto(s).` },
-        { status: 429 }
-      );
+      return NextResponse.json({ success: false, error: GENERIC_AUTH_ERROR }, { status: 401 });
     }
 
     if (!validPassword) {

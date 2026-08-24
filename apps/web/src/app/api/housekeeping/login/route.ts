@@ -1,16 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { verifyPasswordTimingSafe, isAccountLocked, lockoutRemainingMinutes, nextFailedLoginState } from "@/lib/auth";
+import { verifyPasswordTimingSafe, isAccountLocked, nextFailedLoginState, getClientIp } from "@/lib/auth";
 import {
   createHousekeeperSessionToken,
   HOUSEKEEPER_SESSION_COOKIE,
   HOUSEKEEPER_SESSION_COOKIE_MAX_AGE,
 } from "@/lib/housekeeperAuth";
+import { checkRateLimit } from "@/lib/rateLimit";
+
+const GENERIC_AUTH_ERROR = "WhatsApp ou senha inválidos.";
 
 // POST /api/housekeeping/login — login do app mobile de governança, por WhatsApp + senha
 // (a governanta não tem e-mail). Emite cookie de sessão próprio, separado do login administrativo.
 export async function POST(req: NextRequest) {
   try {
+    const rate = checkRateLimit(`housekeeping-login:${getClientIp(req)}`, { max: 5, windowMs: 60_000 });
+    if (!rate.allowed) {
+      return NextResponse.json(
+        { success: false, error: "Muitas tentativas. Tente novamente em instantes." },
+        { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } }
+      );
+    }
+
     const body = await req.json();
     const { whatsapp, password } = body;
 
@@ -25,14 +36,13 @@ export async function POST(req: NextRequest) {
     const validPassword = await verifyPasswordTimingSafe(password, housekeeper?.passwordHash);
 
     if (!housekeeper || !housekeeper.active) {
-      return NextResponse.json({ success: false, error: "WhatsApp ou senha inválidos." }, { status: 401 });
+      return NextResponse.json({ success: false, error: GENERIC_AUTH_ERROR }, { status: 401 });
     }
 
+    // Mensagem genérica igual à de credencial inválida mesmo com a conta bloqueada — evita
+    // que o status revele a um atacante que aquele WhatsApp está cadastrado.
     if (isAccountLocked(housekeeper.lockedUntil)) {
-      return NextResponse.json(
-        { success: false, error: `Muitas tentativas incorretas. Tente novamente em ${lockoutRemainingMinutes(housekeeper.lockedUntil)} minuto(s).` },
-        { status: 429 }
-      );
+      return NextResponse.json({ success: false, error: GENERIC_AUTH_ERROR }, { status: 401 });
     }
 
     if (!validPassword) {

@@ -6,18 +6,29 @@ import {
   verifyPasswordTimingSafe,
   createSessionToken,
   isAccountLocked,
-  lockoutRemainingMinutes,
   nextFailedLoginState,
   SESSION_COOKIE,
   SESSION_COOKIE_MAX_AGE,
   TERMINAL_COOKIE,
   getClientIp,
 } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/rateLimit";
+
+const GENERIC_AUTH_ERROR = "E-mail ou senha inválidos.";
 
 // POST /api/auth/login — autentica por e-mail/senha, emite o cookie de sessão (JWT httpOnly)
 // e o cookie de terminal (IP/hostname resolvidos automaticamente, usados depois na auditoria).
 export async function POST(req: NextRequest) {
   try {
+    const ip = getClientIp(req);
+    const rate = checkRateLimit(`login:${ip}`, { max: 5, windowMs: 60_000 });
+    if (!rate.allowed) {
+      return NextResponse.json(
+        { success: false, error: "Muitas tentativas. Tente novamente em instantes." },
+        { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } }
+      );
+    }
+
     const body = await req.json();
     const { email, password } = body;
 
@@ -32,14 +43,13 @@ export async function POST(req: NextRequest) {
     const validPassword = await verifyPasswordTimingSafe(password, user?.passwordHash);
 
     if (!user || !user.active) {
-      return NextResponse.json({ success: false, error: "E-mail ou senha inválidos." }, { status: 401 });
+      return NextResponse.json({ success: false, error: GENERIC_AUTH_ERROR }, { status: 401 });
     }
 
+    // Mensagem genérica igual à de credencial inválida mesmo com a conta bloqueada — do
+    // contrário o status 429 com detalhe de bloqueio revela a um atacante que o e-mail existe.
     if (isAccountLocked(user.lockedUntil)) {
-      return NextResponse.json(
-        { success: false, error: `Muitas tentativas de login incorretas. Tente novamente em ${lockoutRemainingMinutes(user.lockedUntil)} minuto(s).` },
-        { status: 429 }
-      );
+      return NextResponse.json({ success: false, error: GENERIC_AUTH_ERROR }, { status: 401 });
     }
 
     if (!validPassword) {
@@ -76,7 +86,6 @@ export async function POST(req: NextRequest) {
 
     // Terminal identificado automaticamente pelo servidor (IP de quem logou, com hostname via
     // DNS reverso quando a rede permitir) — nunca digitado pelo usuário.
-    const ip = getClientIp(req);
     const terminalLabel = await resolveTerminalLabel(ip);
 
     res.cookies.set(TERMINAL_COOKIE, terminalLabel, {
