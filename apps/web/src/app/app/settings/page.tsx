@@ -43,6 +43,7 @@ import {
   ListChecks,
   UserCheck,
   Percent,
+  FileSignature,
 } from "lucide-react";
 
 export default function SubscriberSettingsPage() {
@@ -132,6 +133,10 @@ export default function SubscriberSettingsPage() {
   // Percentual máximo de desconto que um operador comum pode aplicar no check-in sem
   // autorização de administrador — acima disso, o modal de check-in exige senha de admin.
   const [maxDiscountPercentInput, setMaxDiscountPercentInput] = useState(20);
+
+  // Exige preenchimento + assinatura da FNRH pelo hóspede antes de liberar o check-in (reserva
+  // ou avulso) — ver CheckinHospedagemModal.tsx e POST /api/stay/checkin.
+  const [fnrhMandatoryInput, setFnrhMandatoryInput] = useState(false);
 
   // Mensagens automáticas de WhatsApp para o hóspede (confirmação de reserva, boas-vindas no
   // check-in, previsão de check-out e check-out) — persistidas no Tenant e lidas pelo worker
@@ -399,6 +404,9 @@ export default function SubscriberSettingsPage() {
         if (data.success && typeof data.settings?.maxDiscountPercent === "number") {
           setMaxDiscountPercentInput(data.settings.maxDiscountPercent);
         }
+        if (data.success && typeof data.settings?.fnrhMandatoryBeforeCheckin === "boolean") {
+          setFnrhMandatoryInput(data.settings.fnrhMandatoryBeforeCheckin);
+        }
       })
       .catch(() => {});
 
@@ -489,6 +497,7 @@ export default function SubscriberSettingsPage() {
           allowNegativeStock: allowNegativeStockInput,
           breakfastHours: breakfastHoursInput,
           maxDiscountPercent: maxDiscountPercentInput,
+          fnrhMandatoryBeforeCheckin: fnrhMandatoryInput,
         }),
       });
       const data = await res.json();
@@ -1226,6 +1235,38 @@ export default function SubscriberSettingsPage() {
             <p>Desconto maior que isso → exige senha de administrador.</p>
           </div>
         </div>
+      </div>
+
+      {/* SECTION 3.6.6: FNRH Obrigatória no Check-in */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-500">
+            <FileSignature className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">FNRH Obrigatória no Check-in</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Exige que o hóspede preencha e assine a FNRH (pré-check-in) antes de o check-in poder ser efetivado.
+            </p>
+          </div>
+        </div>
+
+        <label className="flex items-start gap-3 cursor-pointer p-3 rounded-xl border border-slate-800 hover:bg-slate-800/40 transition-colors">
+          <input
+            type="checkbox"
+            checked={fnrhMandatoryInput}
+            onChange={(e) => setFnrhMandatoryInput(e.target.checked)}
+            className="w-4 h-4 mt-0.5 rounded text-teal-600 focus:ring-teal-500"
+          />
+          <div>
+            <span className="text-sm font-bold block">Exigir FNRH preenchida e assinada antes do check-in</span>
+            <span className={`text-xs ${theme.textMuted}`}>
+              {fnrhMandatoryInput
+                ? "Ativado: o botão \"Efetivar Check-in\" (por reserva ou avulso) fica bloqueado até o hóspede preencher e assinar a FNRH pelo link enviado via WhatsApp."
+                : "Desativado: o check-in continua liberado normalmente, independente da FNRH ter sido enviada ou preenchida."}
+            </span>
+          </div>
+        </label>
       </div>
 
       {/* SECTION 3.7: Governança de Quartos — Modo de Atribuição de Limpeza */}

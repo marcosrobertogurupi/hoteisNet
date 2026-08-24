@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { UserCheck, FileCheck, Sparkles, CheckCircle2, Loader2, AlertCircle, Eraser } from "lucide-react";
+import { validateCPF } from "@/lib/documentValidation";
 
 // Valores alinhados aos domínios oficiais da API do SNRHos (GET /dominios/fnrh/motivos_viagem e
 // /dominios/fnrh/meios_transporte) — enviados sem tradução na Fase 2 (transmissão ao governo).
@@ -204,6 +205,16 @@ export default function SelfCheckinPage() {
     nextDestinationState: "",
   });
   const [signature, setSignature] = useState<string | null>(null);
+  const [step1Error, setStep1Error] = useState("");
+
+  const goToStep2 = () => {
+    if (!validateCPF(form.cpf)) {
+      setStep1Error("Informe um CPF válido (obrigatório para a FNRH).");
+      return;
+    }
+    setStep1Error("");
+    setStep(2);
+  };
 
   const setField = useCallback((key: keyof typeof form, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -447,8 +458,14 @@ export default function SelfCheckinPage() {
               </div>
             </div>
 
+            {step1Error && (
+              <p className="text-[#EF4444] text-xs flex items-center gap-1">
+                <AlertCircle className="w-3.5 h-3.5" /> {step1Error}
+              </p>
+            )}
+
             <button
-              onClick={() => setStep(2)}
+              onClick={goToStep2}
               className="w-full py-3 bg-[#0284C7] hover:bg-[#0369A1] text-white font-bold text-sm rounded-xl transition-colors shadow-lg shadow-[#0284C7]/20"
             >
               Continuar para FNRH Legal →

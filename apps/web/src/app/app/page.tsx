@@ -660,6 +660,8 @@ export default function TenantDashboardPage() {
             tariffName: r.tariffName || "Tarifa Padrão",
             company: r.company || undefined,
             notes: r.notes || undefined,
+            precheckinSent: r.preCheckinSent || false,
+            fnrhCompleted: r.fnrhCompleted || false,
           }));
         setSelecaoReservaList(roomReservations);
       }
@@ -1799,6 +1801,9 @@ export default function TenantDashboardPage() {
             ratePerNight: reservaParaCheckin?.dailyRate || activeRoom.ratePerNight || 170,
           }}
           reservationData={reservaParaCheckin ? {
+            id: reservaParaCheckin.id,
+            precheckinSent: reservaParaCheckin.precheckinSent,
+            fnrhCompleted: reservaParaCheckin.fnrhCompleted,
             reservationNumber: reservaParaCheckin.reservationNumber || reservaParaCheckin.id,
             guestName: reservaParaCheckin.guestName,
             cpf: reservaParaCheckin.cpf || reservaParaCheckin.guestCpf,
@@ -1828,7 +1833,7 @@ export default function TenantDashboardPage() {
             // marca o quarto OCCUPIED e sincroniza a Reservation de origem para CHECKED_IN —
             // tudo dentro da mesma transação de banco (ver POST /api/stay/checkin). Se qualquer
             // etapa falhar, nada é persistido, e a UI só reflete o estado depois de confirmado.
-            const targetResId = reservaParaCheckin?.id || todayReservationsByRoom[activeRoom.number]?.[0]?.id || null;
+            const targetResId = checkinData.reservationId || reservaParaCheckin?.id || todayReservationsByRoom[activeRoom.number]?.[0]?.id || null;
 
             let checkinSaved = false;
             try {

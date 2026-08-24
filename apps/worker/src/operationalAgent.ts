@@ -68,6 +68,17 @@ type DetectedIssue = {
   description: string;
 };
 
+// Traduz o erro técnico bruto da transmissão ao SNRHos (JSON de API, código HTTP, trace_id...) para
+// uma frase que faça sentido para a recepção/gerência do hotel — esse texto vai tanto para o alerta
+// de WhatsApp (inclusive no fallback quando a IA de redação falha, ver composeAlertMessage) quanto
+// para o sino de alerta dentro do sistema, então nunca pode vazar detalhe técnico bruto.
+function friendlySnrhosFailureReason(rawError: string | null): string {
+  if (rawError && /401|senha inv|usu[aá]rio ou senha/i.test(rawError)) {
+    return "o acesso ao sistema do governo (SNRHos) está com usuário ou senha incorretos — atualize as credenciais em Configurações";
+  }
+  return "houve uma falha ao transmitir os dados ao sistema do governo (SNRHos) e as tentativas automáticas se esgotaram";
+}
+
 async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   const issues: DetectedIssue[] = [];
   const now = new Date();
@@ -81,7 +92,7 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
     issues.push({
       issueType: "SNRHOS_STUCK",
       entityId: record.id,
-      description: `FNRH de ${record.guest.fullName} travada no envio ao SNRHos (${record.snrhosAttempts} tentativas, erro: ${record.snrhosLastError || "desconhecido"}).`,
+      description: `Ficha de registro de ${record.guest.fullName} não foi enviada: ${friendlySnrhosFailureReason(record.snrhosLastError)}.`,
     });
   }
 
@@ -135,7 +146,7 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
     issues.push({
       issueType: "WHATSAPP_DISCONNECTED",
       entityId: tenantId,
-      description: `A instância de WhatsApp do hotel está desconectada (status: ${uazapi.status}).`,
+      description: `O WhatsApp do hotel está desconectado — é preciso reconectar em Configurações para continuar enviando mensagens automáticas.`,
     });
   }
 
@@ -216,7 +227,7 @@ async function maybeResetSnrhosAttempts(tenantId: string, fnrhRecordId: string):
     },
   });
 
-  return "Dei mais uma chance de reenvio automático para a FNRH travada no SNRHos.";
+  return "Tentei enviar a ficha de registro pendente novamente de forma automática.";
 }
 
 // Executa as ações autônomas seguras (modo AUTONOMOUS_LIMITED) para os problemas novos detectados,

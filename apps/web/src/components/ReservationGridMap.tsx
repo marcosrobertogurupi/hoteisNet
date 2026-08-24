@@ -24,7 +24,8 @@ import {
   Mail,
   MessageSquare,
   Printer,
-  FileText
+  FileText,
+  PhoneCall
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
@@ -32,6 +33,7 @@ import LancarReservaModal from "@/components/LancarReservaModal";
 import VisualizarReservaModal from "@/components/VisualizarReservaModal";
 import { generateReservaPdfBase64 } from "@/utils/pdfGenerator";
 import { isReservationExpired, getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
+import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
 
 export interface ReservationItem {
   id: string;
@@ -51,6 +53,7 @@ export interface ReservationItem {
   company?: string;
   notes?: string;
   precheckinSent?: boolean;
+  fnrhCompleted?: boolean;
 }
 
 export interface RoomDefinition {
@@ -449,6 +452,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
       company: r.tariffName || r.company || undefined,
       notes: r.notes || undefined,
       precheckinSent: r.preCheckinSent || false,
+      fnrhCompleted: r.fnrhCompleted || false,
     };
   }, []);
 
@@ -624,6 +628,40 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
       const targetPhone = cleanPhone.startsWith("55") ? cleanPhone : `55${cleanPhone}`;
       const captionMsg = `Olá, *${target.guestName}*!\nSegue a confirmação da sua reserva no *Hotel* (Reserva ${target.id}).`;
       window.open(`https://wa.me/${targetPhone}?text=${encodeURIComponent(captionMsg)}`, "_blank");
+    }
+  };
+
+  // Action Handler: Enviar Link de Pré-Check-in (FNRH) pelo WhatsApp
+  const [sendingPreCheckinId, setSendingPreCheckinId] = useState<string | null>(null);
+  const handleSendPreCheckinLink = async (res?: ReservationItem | null) => {
+    const target = res || reservations.find(r => r.id === selectedReservationId);
+    if (!target) {
+      toast.info("Selecione uma reserva no mapa para enviar o link de pré-check-in.");
+      return;
+    }
+    if (!target.phone) {
+      toast.warning("A reserva não possui um telefone/WhatsApp cadastrado.");
+      return;
+    }
+
+    setSendingPreCheckinId(target.id);
+    try {
+      const response = await fetch("/api/uazapi/send-precheckin-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reservationId: target.id }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        toast.success(`✓ Link de pré-check-in de ${target.guestName} enviado com sucesso via WhatsApp!`);
+        setReservations(prev => prev.map(r => (r.id === target.id ? { ...r, precheckinSent: true } : r)));
+      } else {
+        toast.warning(data.error || "Não foi possível enviar o link de pré-check-in.");
+      }
+    } catch (err) {
+      toast.warning("Erro de conexão ao enviar o link de pré-check-in.");
+    } finally {
+      setSendingPreCheckinId(null);
     }
   };
 
@@ -1252,7 +1290,26 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
             Enviar Voucher WhatsApp
           </button>
 
-          {/* 5. EXCLUIR RESERVA */}
+          {/* 5. ENVIAR LINK PRÉ-CHECK-IN (FNRH) */}
+          <button
+            onClick={() => handleSendPreCheckinLink()}
+            disabled={!selectedReservationId || sendingPreCheckinId === selectedReservationId}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border ${
+              selectedReservationId
+                ? "bg-teal-600 hover:bg-teal-700 text-white border-teal-500 shadow-md shadow-teal-600/20"
+                : "bg-slate-900/40 text-slate-600 border-slate-800 cursor-not-allowed"
+            }`}
+            title="Enviar link de pré-check-in (FNRH) por WhatsApp para o hóspede"
+          >
+            <PhoneCall className="w-4 h-4" />
+            {sendingPreCheckinId === selectedReservationId
+              ? "Enviando..."
+              : reservations.find(r => r.id === selectedReservationId)?.precheckinSent
+              ? "Reenviar Pré-Check-in"
+              : "Enviar Pré-Check-in"}
+          </button>
+
+          {/* 6. EXCLUIR RESERVA */}
           <button
             onClick={() => handleOpenExcluirModal()}
             disabled={!selectedReservationId}
@@ -1743,6 +1800,37 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
                               {formatDateBr(res.checkOutDate)} {res.checkOutTime}
                             </div>
                           </div>
+
+                          {/* Envio de FNRH direto na reserva — mesma ação do toolbar/menu de contexto,
+                              mas sem precisar selecionar a reserva antes. */}
+                          {!isHospedagem && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSendPreCheckinLink(res);
+                              }}
+                              disabled={sendingPreCheckinId === res.id}
+                              title="Enviar/reenviar FNRH via WhatsApp"
+                              className={`mt-1 px-1.5 py-0.5 rounded text-[8px] font-bold border flex items-center gap-1 truncate transition-colors disabled:opacity-60 ${
+                                res.fnrhCompleted
+                                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                                  : res.precheckinSent
+                                  ? "bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25"
+                                  : "bg-slate-700/50 text-slate-300 border-slate-600 hover:bg-slate-600/60"
+                              }`}
+                            >
+                              <WhatsAppIcon className="w-2.5 h-2.5 shrink-0" />
+                              <span className="truncate">
+                                {sendingPreCheckinId === res.id
+                                  ? "Enviando..."
+                                  : res.fnrhCompleted
+                                  ? "FNRH OK"
+                                  : res.precheckinSent
+                                  ? "Reenviar FNRH"
+                                  : "Enviar FNRH"}
+                              </span>
+                            </button>
+                          )}
 
                           {/* Badge de alerta: expira em breve (menos de 2 horas) */}
                           {(() => {

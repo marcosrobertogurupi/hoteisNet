@@ -75,6 +75,9 @@ model Tenant {
   // de administrador (ShieldCheck/AdminAuthorizationModal). Configurável pelo próprio assinante em
   // Configurações — acima desse percentual, exige senha de admin, igual à cortesia de madrugada.
   maxDiscountPercent      Decimal                 @default(20) @db.Decimal(5, 2)
+  // Exige preenchimento + assinatura da FNRH pelo hóspede antes de liberar o check-in (reserva ou
+  // avulso). Configurável pelo assinante em Configurações — default false preserva o comportamento atual.
+  fnrhMandatoryBeforeCheckin Boolean              @default(false)
   accountPlans            AccountPlan[]
   aiAgentSettings         AIAgentSetting?
   aiUsageLogs             AIUsageLog[]

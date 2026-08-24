@@ -53,6 +53,8 @@ export interface ReservaItemQuarto {
   observations?: any[];
   payments?: any[];
   roomNumber?: string;
+  precheckinSent?: boolean;
+  fnrhCompleted?: boolean;
 }
 
 interface SelecaoReservaQuartoModalProps {

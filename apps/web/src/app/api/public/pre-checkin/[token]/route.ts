@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { supabaseAdmin } from "@/utils/supabaseClient";
 import { validatePreCheckinToken } from "@/lib/preCheckinLink";
+import { validateCPF } from "@/lib/documentValidation";
 
 // Rota pública (sem sessão — fora do matcher de middleware.ts) usada pela tela self-checkin/[token]
 // para o hóspede abrir o link recebido via WhatsApp e preencher a FNRH antes de chegar ao hotel.
@@ -103,10 +104,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
 
       const tenantId = link.reservation.room.tenantId;
+      // CPF é obrigatório e validado (dígito verificador) no momento do preenchimento da FNRH —
+      // é a chave usada na consulta ao Hub de Desenvolvedor do governo, então um CPF incorreto
+      // aqui quebra essa integração mais adiante.
       const cpfDigits = String(body.cpf || "").replace(/\D/g, "");
-      const cpf = cpfDigits.length === 11 ? cpfDigits : null;
+      if (cpfDigits.length !== 11 || !validateCPF(cpfDigits)) {
+        throw new Error("INVALID_CPF");
+      }
+      const cpf = cpfDigits;
 
-      let guest = cpf ? await tx.guest.findFirst({ where: { tenantId, cpf } }) : null;
+      let guest = await tx.guest.findFirst({ where: { tenantId, cpf } });
 
       const guestData = {
         tenantId,
@@ -191,6 +198,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   } catch (error: any) {
     if (error.message === "ALREADY_COMPLETED") {
       return NextResponse.json({ success: false, error: "Este pré-check-in já foi confirmado." }, { status: 409 });
+    }
+    if (error.message === "INVALID_CPF") {
+      return NextResponse.json({ success: false, error: "Informe um CPF válido para concluir a FNRH." }, { status: 400 });
     }
     if (typeof error.message === "string" && error.message.startsWith("TOKEN_")) {
       const reason = error.message.replace("TOKEN_", "") as "NOT_FOUND" | "EXPIRED" | "REVOKED";

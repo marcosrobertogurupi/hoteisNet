@@ -32,6 +32,7 @@ import { useOperator } from "@/context/OperatorContext";
 import DateRangeCalendarPicker from "@/components/DateRangeCalendarPicker";
 import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
 import { validateCPF, validateCNPJ, formatCPF, formatCNPJ } from "@/lib/documentValidation";
+import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
 
 export interface VerifiedPhone {
   id: string;
@@ -104,6 +105,9 @@ export interface CheckinHospedagemModalProps {
     ratePerNight?: number;
   };
   reservationData?: {
+    id?: string;
+    precheckinSent?: boolean;
+    fnrhCompleted?: boolean;
     reservationNumber?: string;
     origin?: string;
     guestName?: string;
@@ -270,6 +274,14 @@ export default function CheckinHospedagemModal({
   const [guestName, setGuestName] = useState(reservationData?.guestName || "");
   const [phone, setPhone] = useState(reservationData?.phone || "");
 
+  // FNRH obrigatória antes do check-in (Tenant.fnrhMandatoryBeforeCheckin, ver Configurações).
+  // fnrhReservationId é a reserva usada para anexar o link — a de origem (reservationData.id) ou
+  // uma criada sob demanda para o check-in avulso (POST /api/stay/checkin/draft-reservation).
+  const [fnrhMandatory, setFnrhMandatory] = useState<boolean>(false);
+  const [fnrhReservationId, setFnrhReservationId] = useState<string | null>(null);
+  const [fnrhStatus, setFnrhStatus] = useState<"NOT_SENT" | "PENDING" | "COMPLETED">("NOT_SENT");
+  const [sendingFnrh, setSendingFnrh] = useState<boolean>(false);
+
   // Refs para prevenir reset indevido de campos durante re-renders (ex: polling do mapa de quartos)
   const prevIsOpenRef = useRef<boolean>(false);
   const prevRoomNumberRef = useRef<string | null>(null);
@@ -435,6 +447,8 @@ export default function CheckinHospedagemModal({
       setEarlyArrivalCourtesyAuthorized(false);
       setEarlyArrivalAuthorizedBy(null);
       setAdminAuthPurpose(null);
+      setFnrhReservationId(reservationData.id || null);
+      setFnrhStatus(reservationData.fnrhCompleted ? "COMPLETED" : reservationData.precheckinSent ? "PENDING" : "NOT_SENT");
 
       // Observações da reserva
       if (Array.isArray(reservationData.observations) && reservationData.observations.length > 0) {
@@ -509,6 +523,8 @@ export default function CheckinHospedagemModal({
       setEarlyArrivalCourtesyAuthorized(false);
       setEarlyArrivalAuthorizedBy(null);
       setAdminAuthPurpose(null);
+      setFnrhReservationId(null);
+      setFnrhStatus("NOT_SENT");
 
       if (roomData?.category) {
         const catUpper = roomData.category.toUpperCase();
@@ -542,9 +558,140 @@ export default function CheckinHospedagemModal({
         if (data.success && typeof data.settings?.maxDiscountPercent === "number") {
           setMaxDiscountPercent(data.settings.maxDiscountPercent);
         }
+        if (data.success && typeof data.settings?.fnrhMandatoryBeforeCheckin === "boolean") {
+          setFnrhMandatory(data.settings.fnrhMandatoryBeforeCheckin);
+        }
       })
       .catch(() => {});
   }, [isOpen]);
+
+  // Polling do status da FNRH enquanto aguarda o hóspede preencher e assinar pelo link enviado —
+  // é um polling interno deste modal (esperando um evento assíncrono externo), não o polling de
+  // fundo do Mapa de Quartos/Reservas, então continua ativo mesmo com o modal aberto.
+  useEffect(() => {
+    if (!isOpen || !fnrhMandatory || fnrhStatus !== "PENDING" || !fnrhReservationId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/uazapi/send-precheckin-link?reservationId=${fnrhReservationId}`);
+        const data = await res.json();
+        if (data.success && data.fnrhCompleted) {
+          setFnrhStatus("COMPLETED");
+        }
+      } catch {
+        // Falha de rede pontual — tenta de novo no próximo ciclo.
+      }
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [isOpen, fnrhMandatory, fnrhStatus, fnrhReservationId]);
+
+  const handleSendFnrh = async () => {
+    if (!validateCPF(docNumber)) {
+      toast.warning("Informe um CPF válido do hóspede antes de enviar a FNRH.", "CPF Obrigatório");
+      return;
+    }
+    if (!phone.trim()) {
+      toast.warning("Informe o telefone/WhatsApp do hóspede antes de enviar a FNRH.", "Telefone Obrigatório");
+      return;
+    }
+    setSendingFnrh(true);
+    try {
+      let targetReservationId = fnrhReservationId;
+      if (!targetReservationId) {
+        const draftRes = await fetch("/api/stay/checkin/draft-reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roomNumber: roomData.number,
+            guestName,
+            documentNumber: docNumber,
+            phone,
+            checkInDate: dtChegadaLocal,
+            checkOutDate: dtSaidaLocal,
+          }),
+        });
+        const draftData = await draftRes.json();
+        if (!draftData.success) {
+          toast.error(draftData.error || "Não foi possível preparar o envio da FNRH.", "Erro ao Enviar FNRH");
+          return;
+        }
+        targetReservationId = draftData.reservationId;
+        setFnrhReservationId(targetReservationId);
+      }
+
+      const sendRes = await fetch("/api/uazapi/send-precheckin-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reservationId: targetReservationId }),
+      });
+      const sendData = await sendRes.json();
+      if (sendData.success) {
+        setFnrhStatus("PENDING");
+        toast.success("Link da FNRH enviado! Aguardando o hóspede preencher e assinar.", "FNRH Enviada");
+      } else {
+        toast.error(sendData.error || "Não foi possível enviar a FNRH.", "Erro ao Enviar FNRH");
+      }
+    } catch {
+      toast.error("Não foi possível enviar a FNRH. Tente novamente.", "Erro ao Enviar FNRH");
+    } finally {
+      setSendingFnrh(false);
+    }
+  };
+
+  // Preenchimento Assistido no Balcão: mesma FNRH, mas sem depender do celular/WhatsApp do
+  // hóspede — o atendente abre o formulário aqui mesmo, no dispositivo da recepção, para o
+  // hóspede preencher/assinar ao vivo (cenário previsto pelo MTur para quem não tem/domina
+  // celular, ex.: hóspede idoso). CPF continua obrigatório (chave de consulta ao Hub do governo);
+  // telefone não é exigido aqui porque não há envio de WhatsApp.
+  const [sendingAssistedFnrh, setSendingAssistedFnrh] = useState(false);
+  const handleAssistedFnrh = async () => {
+    if (!validateCPF(docNumber)) {
+      toast.warning("Informe um CPF válido do hóspede antes de gerar a FNRH assistida.", "CPF Obrigatório");
+      return;
+    }
+    setSendingAssistedFnrh(true);
+    try {
+      let targetReservationId = fnrhReservationId;
+      if (!targetReservationId) {
+        const draftRes = await fetch("/api/stay/checkin/draft-reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roomNumber: roomData.number,
+            guestName,
+            documentNumber: docNumber,
+            phone: phone || undefined,
+            checkInDate: dtChegadaLocal,
+            checkOutDate: dtSaidaLocal,
+          }),
+        });
+        const draftData = await draftRes.json();
+        if (!draftData.success) {
+          toast.error(draftData.error || "Não foi possível preparar a FNRH assistida.", "Erro na FNRH Assistida");
+          return;
+        }
+        targetReservationId = draftData.reservationId;
+        setFnrhReservationId(targetReservationId);
+      }
+
+      const linkRes = await fetch("/api/stay/checkin/assisted-fnrh-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reservationId: targetReservationId }),
+      });
+      const linkData = await linkRes.json();
+      if (linkData.success) {
+        setFnrhStatus("PENDING");
+        window.open(linkData.url, "_blank", "noopener,noreferrer");
+        toast.success("Formulário da FNRH aberto em nova aba para preenchimento assistido.", "FNRH Assistida");
+      } else {
+        toast.error(linkData.error || "Não foi possível gerar a FNRH assistida.", "Erro na FNRH Assistida");
+      }
+    } catch {
+      toast.error("Não foi possível gerar a FNRH assistida. Tente novamente.", "Erro na FNRH Assistida");
+    } finally {
+      setSendingAssistedFnrh(false);
+    }
+  };
 
   // WhatsApp active verification & Meta username state
   const [whatsappPhone, setWhatsappPhone] = useState<string>("");
@@ -1148,6 +1295,14 @@ export default function CheckinHospedagemModal({
       return;
     }
 
+    if (fnrhMandatory && fnrhStatus !== "COMPLETED") {
+      toast.error(
+        "A ficha FNRH precisa ser preenchida e assinada pelo hóspede antes de efetivar o check-in.\n\nEnvie o link pelo botão \"Enviar FNRH\" e aguarde a confirmação.",
+        "FNRH Pendente"
+      );
+      return;
+    }
+
     if (discountNeedsAuth) {
       toast.error(
         `O desconto informado (${discountPercent.toFixed(1)}%) é maior que o limite de ${maxDiscountPercent}% permitido sem autorização, definido em Configurações.\n\nPeça a um administrador para autorizar (ícone de escudo ao lado do campo de desconto).`,
@@ -1226,6 +1381,7 @@ export default function CheckinHospedagemModal({
 
     const payload = {
       roomId: roomData.number,
+      reservationId: reservationData?.id || fnrhReservationId || null,
       documentType: docType,
       documentNumber: docNumber,
       guestName: guestName.toUpperCase(),
@@ -1729,6 +1885,58 @@ export default function CheckinHospedagemModal({
                 <button onClick={() => setHubMessage(null)} className="text-slate-400 hover:text-slate-600 shrink-0"><X className="w-3.5 h-3.5" /></button>
               </div>
             )}
+
+            {/* FNRH — sempre disponível para envio/preenchimento assistido. Só BLOQUEIA o check-in
+                (ver handleSubmit) quando fnrhMandatory está ativado em Configurações; quando
+                desativado, é só um lembrete neutro e o hóspede pode assinar depois do check-in. */}
+            <div className={`p-2.5 rounded-lg border font-medium text-[11px] flex items-center justify-between gap-2 ${
+                fnrhStatus === "COMPLETED"
+                  ? isDark ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" : "bg-emerald-50 border-emerald-300 text-emerald-800"
+                  : fnrhStatus === "PENDING"
+                  ? isDark ? "bg-amber-500/15 border-amber-500/30 text-amber-300" : "bg-amber-50 border-amber-300 text-amber-800"
+                  : !fnrhMandatory
+                  ? isDark ? "bg-slate-800/60 border-slate-700 text-slate-300" : "bg-slate-100 border-slate-300 text-slate-700"
+                  : isDark ? "bg-red-500/15 border-red-500/30 text-red-300" : "bg-red-50 border-red-300 text-red-800"
+              }`}>
+                <span className="flex items-center gap-1.5">
+                  {fnrhStatus === "COMPLETED" ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  )}
+                  {fnrhStatus === "COMPLETED"
+                    ? "FNRH preenchida e assinada."
+                    : fnrhStatus === "PENDING"
+                    ? "Aguardando o hóspede preencher e assinar a FNRH..."
+                    : fnrhMandatory
+                    ? "FNRH obrigatória: envie o link antes de efetivar o check-in."
+                    : "FNRH ainda não enviada (opcional — pode ser feita antes ou depois do check-in)."}
+                </span>
+                {fnrhStatus !== "COMPLETED" && (
+                  <div className="shrink-0 flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleSendFnrh}
+                      disabled={sendingFnrh || !hubGuestSaved}
+                      title={!hubGuestSaved ? "Cadastre o hóspede antes de enviar a FNRH" : "Enviar FNRH via WhatsApp"}
+                      className="px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[11px] font-bold flex items-center gap-1.5 transition-colors"
+                    >
+                      <WhatsAppIcon className="w-3 h-3" />
+                      {sendingFnrh ? "Enviando..." : fnrhStatus === "PENDING" ? "Reenviar" : "Enviar FNRH"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAssistedFnrh}
+                      disabled={sendingAssistedFnrh || !hubGuestSaved}
+                      title={!hubGuestSaved ? "Cadastre o hóspede antes de gerar a FNRH" : "Abrir a FNRH aqui no balcão para o hóspede preencher e assinar (sem depender do celular dele)"}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[11px] font-bold flex items-center gap-1.5 transition-colors"
+                    >
+                      <UserCheck className="w-3 h-3" />
+                      {sendingAssistedFnrh ? "Abrindo..." : "Preencher Assistido"}
+                    </button>
+                  </div>
+                )}
+              </div>
 
             {/* AUTO-REGISTERED GUEST DATA PANEL */}
             {hubGuestSaved && showGuestData && (

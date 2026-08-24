@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { CalendarDays, Plus, Layers, Search, PhoneCall, Building2, CheckCircle2, Clock, LayoutGrid, List, RefreshCw } from "lucide-react";
+import { CalendarDays, Plus, Layers, Search, Building2, CheckCircle2, Clock, LayoutGrid, List, RefreshCw } from "lucide-react";
 import ReservationGridMap from "@/components/ReservationGridMap";
 import LancarReservaModal from "@/components/LancarReservaModal";
 import ReservasMultiplasModal from "@/components/ReservasMultiplasModal";
 import { useTheme } from "@/context/ThemeContext";
 import { isReservationExpired } from "@/utils/reservationTolerance";
 import LoadingOverlay from "@/components/LoadingOverlay";
+import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
 
 export default function TenantReservationsPage() {
   const { defaultCheckInTime, reservationToleranceHours } = useTheme();
@@ -281,7 +282,7 @@ export default function TenantReservationsPage() {
                           disabled={sendingLinkId === r.id}
                           className="px-3 py-1 bg-[#38BDF8]/15 hover:bg-[#38BDF8]/30 disabled:opacity-50 disabled:cursor-not-allowed text-[#38BDF8] border border-[#38BDF8]/30 rounded text-xs transition-colors flex items-center gap-1 font-medium"
                         >
-                          <PhoneCall className="w-3 h-3" /> {sendingLinkId === r.id ? "Enviando..." : r.preCheckinSent ? "Reenviar Link" : "Disparar Wpp Uazapi"}
+                          <WhatsAppIcon className="w-3 h-3 text-[#25D366]" /> {sendingLinkId === r.id ? "Enviando..." : r.preCheckinSent ? "Reenviar Link" : "Enviar FNRH"}
                         </button>
                       </td>
                     </tr>

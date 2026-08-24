@@ -12,7 +12,14 @@ export async function GET(req: NextRequest) {
 
     const tenant = await prisma.tenant.findUnique({
       where: { id: session.tenantId },
-      select: { id: true, dailyRolloverTime: true, allowNegativeStock: true, breakfastHours: true, maxDiscountPercent: true },
+      select: {
+        id: true,
+        dailyRolloverTime: true,
+        allowNegativeStock: true,
+        breakfastHours: true,
+        maxDiscountPercent: true,
+        fnrhMandatoryBeforeCheckin: true,
+      },
     });
 
     if (!tenant) {
@@ -26,6 +33,7 @@ export async function GET(req: NextRequest) {
         allowNegativeStock: tenant.allowNegativeStock,
         breakfastHours: tenant.breakfastHours,
         maxDiscountPercent: Number(tenant.maxDiscountPercent),
+        fnrhMandatoryBeforeCheckin: tenant.fnrhMandatoryBeforeCheckin,
       },
     });
   } catch (error: any) {
@@ -45,7 +53,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { dailyRolloverTime, allowNegativeStock, breakfastHours, maxDiscountPercent } = body;
+    const { dailyRolloverTime, allowNegativeStock, breakfastHours, maxDiscountPercent, fnrhMandatoryBeforeCheckin } = body;
 
     if (dailyRolloverTime !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(dailyRolloverTime)) {
       return NextResponse.json(
@@ -71,6 +79,7 @@ export async function PATCH(req: NextRequest) {
         ...(allowNegativeStock !== undefined ? { allowNegativeStock: Boolean(allowNegativeStock) } : {}),
         ...(breakfastHours !== undefined ? { breakfastHours: breakfastHours || null } : {}),
         ...(maxDiscountPercent !== undefined ? { maxDiscountPercent: Number(maxDiscountPercent) } : {}),
+        ...(fnrhMandatoryBeforeCheckin !== undefined ? { fnrhMandatoryBeforeCheckin: Boolean(fnrhMandatoryBeforeCheckin) } : {}),
       },
     });
 

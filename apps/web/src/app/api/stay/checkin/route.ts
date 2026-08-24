@@ -249,6 +249,11 @@ export async function POST(req: NextRequest) {
         throw new Error(`Quarto ${roomTarget} não encontrado.`);
       }
 
+      const tenantSettings = await tx.tenant.findUnique({
+        where: { id: room.tenantId },
+        select: { fnrhMandatoryBeforeCheckin: true },
+      });
+
       // Trava a linha do quarto pelo resto da transação: impede que dois check-ins quase
       // simultâneos no mesmo quarto leiam "sem hospedagem aberta" ao mesmo tempo e ambos
       // avancem — o segundo espera aqui até o primeiro terminar (commit ou rollback).
@@ -336,6 +341,20 @@ export async function POST(req: NextRequest) {
           orderBy: { checkInDate: "asc" },
         });
         targetReservationId = match?.id || null;
+      }
+
+      // FNRH obrigatória (Tenant.fnrhMandatoryBeforeCheckin, ver Configurações): valida aqui —
+      // dentro da própria transação, não só na UI — que o hóspede já preencheu e assinou a ficha
+      // antes de permitir a hospedagem, igual ao bloqueio de saldo devedor no checkout.
+      if (tenantSettings?.fnrhMandatoryBeforeCheckin) {
+        const fnrhRecord = targetReservationId
+          ? await tx.fNRHRecord.findFirst({ where: { reservationId: targetReservationId } })
+          : null;
+        if (!fnrhRecord) {
+          throw new Error(
+            "A ficha FNRH deve ser preenchida e assinada pelo hóspede antes de efetivar o check-in. Utilize o botão \"Enviar FNRH\" e aguarde a confirmação."
+          );
+        }
       }
 
       if (targetReservationId) {
@@ -444,6 +463,15 @@ export async function POST(req: NextRequest) {
       });
 
       await tx.room.update({ where: { id: room.id }, data: { status: "OCCUPIED" } });
+
+      // Vincula a(s) FNRH já preenchida(s) desta reserva à hospedagem física que acabou de nascer —
+      // stayCheckinId só passa a existir a partir do check-in de fato (ver comentário no schema).
+      if (targetReservationId) {
+        await tx.fNRHRecord.updateMany({
+          where: { reservationId: targetReservationId, stayCheckinId: null },
+          data: { stayCheckinId: stay.id },
+        });
+      }
 
       // Efetiva os pagamentos/adiantamentos lançados na grade local do modal de check-in — até
       // aqui eles existiam SOMENTE na tela (nada era salvo no banco enquanto o check-in não fosse
