@@ -8,7 +8,12 @@ import { buildGuestSupportTools } from "@/lib/aiAgent/tools";
 // exige cartão de crédito cadastrado na conta Vercel para liberar até o crédito gratuito, e o
 // assinante não deve depender disso. O controle de cota/custo por tenant continua 100% no nosso
 // próprio AIUsageLog (ver apps/web/src/lib/aiAgent/usage.ts), independente do provider escolhido.
-export const AI_AGENT_MODEL = google("gemini-3.7-flash");
+//
+// gemini-3.7-flash (usado antes) trava indefinidamente em generateContent — confirmado em
+// produção e com curl direto à API do Google (POST nunca retorna, nem erro nem timeout do lado do
+// Google), enquanto gemini-2.5-flash responde normalmente em ~1s com a mesma chave. Trocado até o
+// 3.7-flash normalizar do lado do Google.
+export const AI_AGENT_MODEL = google("gemini-2.5-flash");
 
 // A cada chamada do agente injetamos a data/hora atual de Brasília no prompt — sem isso o modelo
 // não tem noção de "hoje" e não consegue resolver "amanhã", "depois de amanhã", "sexta que vem"

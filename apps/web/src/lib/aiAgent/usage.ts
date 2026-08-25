@@ -39,10 +39,10 @@ export async function hasAiQuotaAvailable(tenantId: string): Promise<boolean> {
   return !blocked && remaining > 0;
 }
 
-// Preço aproximado do gemini-3.7-flash via AI Gateway, em USD por token — usado só para o registro
+// Preço do gemini-2.5-flash (tier pago, texto), em USD por token — usado só para o registro
 // de custo em AIUsageLog (telemetria), não afeta o bloqueio por cota (que é em tokens, não em $).
-const INPUT_COST_PER_TOKEN = 0.15 / 1_000_000;
-const OUTPUT_COST_PER_TOKEN = 0.6 / 1_000_000;
+const INPUT_COST_PER_TOKEN = 0.3 / 1_000_000;
+const OUTPUT_COST_PER_TOKEN = 2.5 / 1_000_000;
 
 export async function logAiUsage(params: {
   tenantId: string;

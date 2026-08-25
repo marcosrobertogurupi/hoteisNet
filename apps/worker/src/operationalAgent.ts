@@ -11,12 +11,17 @@ async function generateSummaryText(prompt: string): Promise<string> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY não configurada.");
 
+  // gemini-3.7-flash trava indefinidamente em generateContent (confirmado direto com curl e em
+  // produção) — trocado para gemini-2.5-flash, mesma razão do agente de atendimento (ver
+  // apps/web/src/lib/aiAgent/agent.ts). AbortSignal.timeout aqui é defesa adicional: sem ele, uma
+  // trava do provedor prende o worker (cron a cada 15min) até o fetch nunca resolver.
   const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }),
+      signal: AbortSignal.timeout(45_000),
     }
   );
   if (!response.ok) throw new Error(`Gemini respondeu ${response.status}: ${await response.text()}`);

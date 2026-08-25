@@ -154,9 +154,12 @@ Também foi aplicada em produção (23/08/2026, via `supabase db push`) uma migr
 
 ### 3.9. Agentes de IA (Atendimento WhatsApp + Operacional) ✅ (parcialmente — ver ressalvas)
 Plano completo e detalhado em `PLANO_AGENTE_IA.md`. Dois agentes autônomos via Vercel AI SDK
-(`ToolLoopAgent`), modelo `gemini-3.7-flash` pelo **provider direto do Google**
+(`ToolLoopAgent`), modelo `gemini-2.5-flash` pelo **provider direto do Google**
 (`GOOGLE_GENERATIVE_AI_API_KEY` — o Vercel AI Gateway está bloqueado até se cadastrar um cartão de
-crédito na conta Vercel; o código já está pronto para trocar de volta).
+crédito na conta Vercel; o código já está pronto para trocar de volta). **Nota:** era
+`gemini-3.7-flash` até 25/08/2026 — trocado porque esse modelo passou a travar indefinidamente em
+`generateContent` (confirmado com curl direto à API do Google, sem erro nem timeout do lado deles),
+enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash normalizar.
 * **Agente de Atendimento ✅** (`apps/web/src/lib/aiAgent/`): tools `check_availability`,
   `get_reservation_by_phone`, `get_guest_by_cpf` (cadastro do hotel → fallback Hub do
   Desenvolvedor), `list_room_categories`, `get_hotel_info`, `search_knowledge_base`,
