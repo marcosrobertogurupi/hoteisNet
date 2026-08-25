@@ -334,7 +334,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
 
   const syncGridRooms = useCallback(async () => {
     try {
-      const res = await fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`);
+      const res = await fetch(`/api/reservations/rooms/status`);
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.rooms) || data.rooms.length === 0) return;
 
