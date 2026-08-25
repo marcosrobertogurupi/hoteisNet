@@ -25,7 +25,8 @@ import {
   Sparkles,
   LayoutDashboard,
   Receipt,
-  Wallet
+  Wallet,
+  FileCheck2
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
@@ -77,6 +78,10 @@ export default function Sidebar() {
   const financeiroNavItems = [
     { href: "/app/cadastros/contas-receber", label: "Contas a Receber", icon: Receipt, iconColor: isSidebarLight ? "text-amber-600" : "text-[#F59E0B]" },
     { href: "/app/cadastros/contas-pagar", label: "Contas a Pagar", icon: Wallet, iconColor: isSidebarLight ? "text-rose-600" : "text-[#F43F5E]" },
+  ];
+
+  const adminTasksNavItems = [
+    { href: "/app/tarefas-administrativas/fnrh", label: "Controle de FNRH", icon: FileCheck2, iconColor: isSidebarLight ? "text-emerald-600" : "text-[#10B981]" },
   ];
 
   const secondaryNavItems = [
@@ -264,6 +269,58 @@ export default function Sidebar() {
 
               <div className="space-y-1.5">
                 {financeiroNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = pathname === item.href;
+
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all group ${
+                        isActive
+                          ? isSidebarLight
+                            ? "bg-[#0284C7] text-white font-bold shadow-md"
+                            : theme.isDark
+                              ? "bg-[#0284C7] text-white font-bold shadow-md"
+                              : "bg-white text-[#34598F] font-bold shadow-md"
+                          : isSidebarLight
+                            ? "text-slate-700 hover:text-slate-900 hover:bg-slate-100 font-medium"
+                            : "text-slate-100 hover:text-white hover:bg-white/15 font-medium"
+                      }`}
+                      title={!isExpanded ? item.label : undefined}
+                    >
+                      <Icon className={`w-5 h-5 shrink-0 ${item.iconColor ? item.iconColor : isActive ? (isSidebarLight ? "text-white" : theme.isDark ? "text-white" : "text-[#34598F]") : ""}`} />
+
+                      <span className={`transition-all duration-200 whitespace-nowrap overflow-hidden ${
+                        isExpanded ? "opacity-100 max-w-xs" : "opacity-0 max-w-0"
+                      }`}>
+                        {item.label}
+                      </span>
+
+                      {/* Tooltip on collapsed hover */}
+                      {!isExpanded && (
+                        <div className="absolute left-full ml-3 px-2.5 py-1.5 bg-slate-900 text-white text-xs font-medium rounded-lg shadow-xl border border-slate-700 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
+                          {item.label}
+                        </div>
+                      )}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Section Divider & Tarefas administrativas */}
+            <div className="pt-3 border-t border-slate-500/30 my-2">
+              <span className={`px-3 text-[10px] font-bold uppercase tracking-wider block mb-1.5 transition-all ${
+                isSidebarLight ? "text-slate-500" : "text-slate-200/80"
+              } ${
+                isExpanded ? "opacity-100 max-h-5" : "opacity-0 max-h-0 overflow-hidden"
+              }`}>
+                Tarefas administrativas
+              </span>
+
+              <div className="space-y-1.5">
+                {adminTasksNavItems.map((item) => {
                   const Icon = item.icon;
                   const isActive = pathname === item.href;
 

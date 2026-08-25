@@ -234,3 +234,128 @@ export async function registrarHospedagem(
     linkPrecheckin: reserva?.link_precheckin || null,
   };
 }
+
+// Traduz o erro técnico bruto de uma tentativa de transmissão (JSON de API, código HTTP...) para
+// uma frase que faça sentido pra quem está gerenciando a tela de Controle de FNRH — usado tanto ao
+// gravar um erro novo (transmitFnrhRecord) quanto ao exibir erros antigos já salvos em
+// snrhosLastError por execuções anteriores do pipeline automático (apps/worker/src/snrhosTransmit.ts).
+export function friendlyFnrhFailureReason(rawError: string | null | undefined): string | null {
+  if (!rawError) return null;
+  if (/401|senha inv|usu[aá]rio ou senha/i.test(rawError)) {
+    return "Usuário ou senha do SNRHos incorretos — atualize as credenciais em Configurações.";
+  }
+  if (/hóspede sem cpf/i.test(rawError)) {
+    return "Hóspede sem CPF nem passaporte cadastrado.";
+  }
+  if (/inalcançável|timeout|rede indispon/i.test(rawError)) {
+    return "Não foi possível conectar ao SNRHos. Tente novamente em alguns minutos.";
+  }
+  return "O SNRHos recusou o envio desta ficha. Confira os dados do hóspede e tente novamente.";
+}
+
+// Prazo legal de transmissão da FNRH (Portaria MTur nº 177/2011, reafirmado pela FNRH Digital —
+// Portaria MTur nº 41/2025): cada ficha deve ser enviada em tempo real ou, no limite, até o 3º dia
+// útil (quarta-feira) da semana seguinte à semana em que ocorreu a hospedagem (check-in de
+// segunda a domingo de uma semana -> prazo até a quarta-feira da semana seguinte). Ancorado no
+// fuso de Brasília, independente do fuso do processo Node (mesma técnica de dateOnlyBrasilia em
+// src/lib/brasiliaDate.ts). deadlineExclusive é o instante em que o prazo efetivamente vence (início
+// da quinta-feira) — comparar "agora < deadlineExclusive" para saber se ainda está no prazo.
+export function computeFnrhLegalDeadline(checkInDate: Date): { deadline: Date; deadlineExclusive: Date } {
+  const brDateStr = checkInDate.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const [y, m, d] = brDateStr.split("-").map(Number);
+  const anchored = new Date(Date.UTC(y, m - 1, d, 3, 0, 0)); // meia-noite BRT do dia do check-in
+  const dow = anchored.getUTCDay(); // 0=domingo..6=sábado
+  const diffToMonday = dow === 0 ? 6 : dow - 1;
+  const weekMonday = new Date(anchored);
+  weekMonday.setUTCDate(weekMonday.getUTCDate() - diffToMonday);
+  const deadline = new Date(weekMonday);
+  deadline.setUTCDate(deadline.getUTCDate() + 9); // +7 dias (semana seguinte) + 2 dias (segunda -> quarta)
+  const deadlineExclusive = new Date(deadline);
+  deadlineExclusive.setUTCDate(deadlineExclusive.getUTCDate() + 1); // vence a partir do início da quinta-feira
+  return { deadline, deadlineExclusive };
+}
+
+// Dispara manualmente a transmissão de UMA ficha FNRH pendente ao SNRHos — usado pela tela
+// Tarefas administrativas > Controle de FNRH (envio individual e, em sequência no cliente, envio
+// em lote por período). tenantId sempre vem da sessão autenticada de quem chama (nunca do body),
+// e é revalidado contra o dono da reserva antes de transmitir qualquer coisa.
+export async function transmitFnrhRecord(tenantId: string, fnrhRecordId: string): Promise<{ success: boolean; error?: string }> {
+  const settings = await prisma.sNRHosSetting.findUnique({ where: { tenantId } });
+  if (!settings || !settings.enabled) {
+    return { success: false, error: "A transmissão ao SNRHos não está habilitada em Configurações." };
+  }
+
+  const record = await prisma.fNRHRecord.findFirst({
+    where: { id: fnrhRecordId, reservation: { room: { tenantId } } },
+    include: { guest: true, reservation: true },
+  });
+  if (!record || !record.reservation) {
+    return { success: false, error: "Ficha não encontrada." };
+  }
+  if (record.transmittedSNRHos) {
+    return { success: true };
+  }
+
+  const guest = record.guest;
+  if (!guest.cpf && !guest.passport) {
+    const error = "Hóspede sem CPF nem passaporte cadastrado.";
+    await prisma.fNRHRecord.update({ where: { id: record.id }, data: { snrhosAttempts: { increment: 1 }, snrhosLastError: error } });
+    return { success: false, error };
+  }
+
+  try {
+    const payload = await buildHospedagemRegistrarPayload({
+      reservationNumber: record.reservation.reservationNumber || record.reservation.id,
+      checkInDate: record.reservation.checkInDate,
+      checkOutDate: record.reservation.checkOutDate,
+      adults: record.reservation.adults || 1,
+      children: record.reservation.children || 0,
+      guest: {
+        fullName: guest.fullName,
+        cpf: guest.cpf,
+        passport: guest.passport,
+        birthDate: guest.birthDate,
+        gender: guest.gender,
+        nationality: guest.nationality,
+        raceColor: guest.raceColor,
+        disability: guest.disability,
+        disabilityType: guest.disabilityType,
+        email: guest.email,
+        phone: guest.phone,
+        country: guest.country,
+        zipCode: guest.zipCode,
+        street: guest.street,
+        number: guest.number,
+        neighborhood: guest.neighborhood,
+        city: guest.city,
+        state: guest.state,
+      },
+      fnrh: { travelReason: record.travelReason, transportMode: record.transportMode },
+    });
+
+    const result = await registrarHospedagem(
+      { environment: settings.environment, apiUsername: settings.apiUsername, apiPassword: settings.apiPassword, cpfSolicitante: settings.cpfSolicitante },
+      payload
+    );
+
+    await prisma.fNRHRecord.update({
+      where: { id: record.id },
+      data: {
+        transmittedSNRHos: true,
+        transmittedAt: new Date(),
+        snrhosReservaId: result.reservaId || null,
+        snrhosHospedeId: result.hospedeId || null,
+        snrhosPessoaId: result.pessoaId || null,
+        snrhosLastError: null,
+      },
+    });
+    return { success: true };
+  } catch (err: any) {
+    const friendly = friendlyFnrhFailureReason(err?.message || String(err)) || "Falha inesperada ao transmitir a ficha.";
+    await prisma.fNRHRecord.update({
+      where: { id: record.id },
+      data: { snrhosAttempts: { increment: 1 }, snrhosLastError: friendly },
+    });
+    return { success: false, error: friendly };
+  }
+}

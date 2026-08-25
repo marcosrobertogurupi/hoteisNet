@@ -79,21 +79,74 @@ function friendlySnrhosFailureReason(rawError: string | null): string {
   return "houve uma falha ao transmitir os dados ao sistema do governo (SNRHos) e as tentativas automáticas se esgotaram";
 }
 
+// Prazo legal de transmissão da FNRH (Portaria MTur nº 177/2011, reafirmado pela FNRH Digital —
+// Portaria MTur nº 41/2025): cada ficha deve ser enviada em tempo real ou, no limite, até o 3º dia
+// útil (quarta-feira) da semana seguinte à semana em que ocorreu a hospedagem. Devolve o instante
+// em que o prazo efetivamente vence (início da quinta-feira seguinte, em Brasília) — duplicado do
+// equivalente em apps/web/src/lib/snrhosClient.ts (mesmo padrão de duplicação do restante deste
+// arquivo, já que o worker não importa código de apps/web).
+function computeFnrhDeadlineExclusive(checkInDate: Date): Date {
+  const brDateStr = checkInDate.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const [y, m, d] = brDateStr.split("-").map(Number);
+  const anchored = new Date(Date.UTC(y, m - 1, d, 3, 0, 0));
+  const dow = anchored.getUTCDay();
+  const diffToMonday = dow === 0 ? 6 : dow - 1;
+  const weekMonday = new Date(anchored);
+  weekMonday.setUTCDate(weekMonday.getUTCDate() - diffToMonday);
+  const deadline = new Date(weekMonday);
+  deadline.setUTCDate(deadline.getUTCDate() + 9); // +7 dias (semana seguinte) + 2 dias (segunda -> quarta)
+  const deadlineExclusive = new Date(deadline);
+  deadlineExclusive.setUTCDate(deadlineExclusive.getUTCDate() + 1);
+  return deadlineExclusive;
+}
+
+// Quanto tempo antes do prazo legal vencer o agente já deve avisar a equipe (ver
+// computeFnrhDeadlineExclusive acima) — pedido explícito do assinante, mesmo valor usado tanto
+// para o aviso de "vence em breve" quanto mantido para fichas que já passaram do prazo (não some
+// da lista de alertas só porque a janela dos 48h ficou pra trás).
+const FNRH_DEADLINE_WARNING_HOURS = 48;
+
 async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   const issues: DetectedIssue[] = [];
   const now = new Date();
 
-  // 1) FNRH travada na transmissão ao SNRHos (já esgotou as tentativas automáticas).
-  const stuckFnrh = await prisma.fNRHRecord.findMany({
-    where: { transmittedSNRHos: false, snrhosAttempts: { gte: 5 }, reservation: { room: { tenantId } } },
-    include: { guest: { select: { fullName: true } } },
+  // 1) FNRH pendente de envio ao SNRHos — dois motivos independentes de alerta, que podem disparar
+  // juntos para o mesmo registro: (a) já esgotou as tentativas automáticas (SNRHOS_STUCK) e/ou
+  // (b) o prazo legal de transmissão está a menos de FNRH_DEADLINE_WARNING_HOURS de vencer ou já
+  // venceu (SNRHOS_DEADLINE_NEAR, ver computeFnrhDeadlineExclusive).
+  const pendingFnrh = await prisma.fNRHRecord.findMany({
+    where: { transmittedSNRHos: false, reservation: { room: { tenantId } } },
+    include: { guest: { select: { fullName: true } }, reservation: { select: { checkInDate: true } } },
   });
-  for (const record of stuckFnrh) {
-    issues.push({
-      issueType: "SNRHOS_STUCK",
-      entityId: record.id,
-      description: `Ficha de registro de ${record.guest.fullName} não foi enviada: ${friendlySnrhosFailureReason(record.snrhosLastError)}.`,
-    });
+  for (const record of pendingFnrh) {
+    if (record.snrhosAttempts >= 5) {
+      issues.push({
+        issueType: "SNRHOS_STUCK",
+        entityId: record.id,
+        description: `Ficha de registro de ${record.guest.fullName} não foi enviada: ${friendlySnrhosFailureReason(record.snrhosLastError)}.`,
+      });
+    }
+
+    if (record.reservation) {
+      const deadlineExclusive = computeFnrhDeadlineExclusive(record.reservation.checkInDate);
+      const hoursLeft = (deadlineExclusive.getTime() - now.getTime()) / (60 * 60 * 1000);
+      if (hoursLeft <= FNRH_DEADLINE_WARNING_HOURS) {
+        const deadlineLabel = new Date(deadlineExclusive.getTime() - 24 * 60 * 60 * 1000).toLocaleDateString("pt-BR", {
+          timeZone: "America/Sao_Paulo",
+          day: "2-digit",
+          month: "2-digit",
+        });
+        const urgency =
+          hoursLeft <= 0
+            ? `já passou do prazo legal de envio (venceria em ${deadlineLabel})`
+            : `vence em ${deadlineLabel} — restam menos de 48 horas`;
+        issues.push({
+          issueType: "SNRHOS_DEADLINE_NEAR",
+          entityId: record.id,
+          description: `Ficha de registro de ${record.guest.fullName} ainda não foi enviada ao governo e o prazo legal ${urgency}.`,
+        });
+      }
+    }
   }
 
   // 2) Reserva confirmada com check-in próximo e link de pré-check-in ainda não enviado.
