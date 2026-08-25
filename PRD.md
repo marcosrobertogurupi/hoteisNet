@@ -168,6 +168,11 @@ crédito na conta Vercel; o código já está pronto para trocar de volta).
   reais de `Room.photos` via `sendUazapiImage`) e `list_services`. Ligado ao webhook da uazapi
   (`api/uazapi/webhook/[tenantId]`), com guarda para não responder por cima de um humano que
   respondeu a mesma conversa nos últimos 30min e checagem de cota/bloqueio antes de gastar tokens.
+  **Timeout defensivo ✅:** `agent.generate` aborta em 45s (bem antes do limite de 300s da função na
+  Vercel) — sem isso, uma trava no provedor de IA (confirmado em produção: conta do Gemini com
+  faturamento pendente no Google AI Studio) deixava o hóspede sem nenhuma resposta por 5 minutos.
+  Em qualquer falha do agente (timeout incluído), o hóspede recebe um aviso de instabilidade e a
+  recepção é acionada via `HumanEscalation`, mesmo dedupe por telefone do fluxo normal.
   **Interpretação de mídia ✅:** o agente também é acionado para mensagens de imagem/áudio/PDF
   recebidas do hóspede — baixa/descriptografa o anexo (`downloadUazapiMedia`) e envia os bytes como
   dado inline (base64) para o Gemini interpretar de verdade; outros tipos de anexo viram um

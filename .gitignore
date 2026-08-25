@@ -51,3 +51,5 @@ node_modules/
 PROJETO WINDEV/
 .vercel
 supabase/.temp/
+
+.env*

@@ -131,7 +131,11 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
         escalationReason = reason;
       }
     );
-    const result = await agent.generate({ messages });
+    // Timeout defensivo: sem isso, uma trava na chamada ao provedor de IA (já visto acontecer com
+    // a API do Gemini) deixa a função presa até o limite de 300s da Vercel, e o hóspede fica sem
+    // nenhuma resposta nem escalação — pior caso possível. Aborta bem antes desse limite para o
+    // catch abaixo ter tempo de avisar o hóspede e acionar a recepção.
+    const result = await agent.generate({ messages, timeout: 45_000 });
 
     if (escalationReason) {
       console.log(`[runGuestSupportAgent] escalado para humano — tenant=${tenantId} phone=${phone} motivo=${escalationReason}`);
@@ -164,6 +168,38 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
     }
   } catch (error) {
     console.error("[runGuestSupportAgent] Erro:", error);
+    // Mesma lógica de dedupe da escalação normal (ver acima) — nunca deixa o hóspede sem nenhuma
+    // resposta: se o agente falhou ou travou (ex: timeout do provedor de IA), avisa e aciona a
+    // recepção, em vez de simplesmente não responder nada.
+    try {
+      const alreadyPending = await prisma.humanEscalation.findFirst({
+        where: { tenantId, source: "SUPPORT_AGENT", guestPhone: phone, resolved: false },
+      });
+      if (!alreadyPending) {
+        await prisma.humanEscalation.create({
+          data: { tenantId, source: "SUPPORT_AGENT", reason: "Falha técnica no agente de atendimento.", guestPhone: phone },
+        });
+        const sent = await sendUazapiText(
+          phone,
+          "Estou com uma instabilidade técnica no momento. Já avisei nossa recepção e alguém vai continuar seu atendimento por aqui em breve.",
+          tenantId
+        );
+        if (sent) {
+          await prisma.whatsappMessage.create({
+            data: {
+              tenantId,
+              phone,
+              direction: "OUT",
+              type: "text",
+              content: "Estou com uma instabilidade técnica no momento. Já avisei nossa recepção e alguém vai continuar seu atendimento por aqui em breve.",
+              sentBy: "AI",
+            },
+          });
+        }
+      }
+    } catch (fallbackError) {
+      console.error("[runGuestSupportAgent] Erro no fallback de falha:", fallbackError);
+    }
   }
 }
 
