@@ -288,6 +288,31 @@ export default function TenantDashboardPage() {
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.rooms)) return;
 
+      // Reservas que chegam hoje (selos de overbooking / "próximo check-in") — agora vêm junto
+      // com o polling de 3s, então a badge aparece/some sozinha quando outro terminal faz o
+      // check-in, cancela ou remarca a reserva. Antes era buscado uma única vez no carregamento
+      // da tela e nunca mais atualizava.
+      if (Array.isArray(data.todayReservations)) {
+        const byRoom: Record<string, { id?: string; guestName: string; checkInTime: string; reservationNumber?: string }[]> = {};
+        for (const r of data.todayReservations) {
+          const roomNum = String(r.roomNumber ?? "");
+          if (!roomNum) continue;
+          if (!byRoom[roomNum]) byRoom[roomNum] = [];
+          byRoom[roomNum].push({
+            id: r.id,
+            guestName: r.guestName || "Hóspede",
+            checkInTime: r.checkInTime || "14:00",
+            reservationNumber: r.reservationNumber || r.id,
+          });
+        }
+        // Só troca o estado (e re-renderiza) quando o conjunto de reservas de hoje realmente muda —
+        // o polling roda a cada 3s e na esmagadora maioria dos ciclos nada mudou.
+        setTodayReservationsByRoom((prev) => {
+          const next = JSON.stringify(byRoom);
+          return next === JSON.stringify(prev) ? prev : byRoom;
+        });
+      }
+
       setRooms((prevRooms) => {
         const prevMap = new Map(prevRooms.map((r) => [r.number, r]));
 
@@ -462,33 +487,10 @@ export default function TenantDashboardPage() {
     return () => clearInterval(rolloverInterval);
   }, [syncRoomsFromDatabase]);
 
-  // ─── Reservas do Dia (Apenas para sinais visuais de overbooking / próximos check-ins) ─
-  useEffect(() => {
-    const todayStr = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-    fetch(`/api/reservations?tenantId=TNT-01`)
-      .then(r => r.json())
-      .then(data => {
-        if (!data.success || !Array.isArray(data.reservations)) return;
-        const byRoom: Record<string, { id?: string; guestName: string; checkInTime: string; reservationNumber?: string; }[]> = {};
-        for (const res of data.reservations) {
-          // Reservas canceladas, já com hóspede em casa (CHECKED_IN) ou já finalizadas (CHECKED_OUT) não são "check-ins pendentes hoje"
-          if (res.status === "CANCELLED" || res.status === "CHECKED_IN" || res.status === "CHECKED_OUT") continue;
-          const checkInDate = (res.checkInDate || "").split("T")[0];
-          if (checkInDate !== todayStr) continue;
-          const roomNum = res.rooms?.number ? String(res.rooms.number) : (res.roomDescription?.match(/\d+/)?.[0] || "");
-          if (!roomNum) continue;
-          if (!byRoom[roomNum]) byRoom[roomNum] = [];
-          byRoom[roomNum].push({
-            id: res.id,
-            guestName: res.guestName || "Hóspede",
-            checkInTime: res.checkInTime || "14:00",
-            reservationNumber: res.reservationNumber || res.id,
-          });
-        }
-        setTodayReservationsByRoom(byRoom);
-      })
-      .catch(err => console.warn("[MapaQuartos] Erro ao buscar reservas do dia:", err));
-  }, []);
+  // As "Reservas do Dia" (selos visuais de overbooking / próximos check-ins) agora são atualizadas
+  // dentro de syncRoomsFromDatabase, no mesmo polling de 3s do Mapa de Quartos — ver
+  // /api/reservations/rooms/status. Não há mais busca única no carregamento da tela, que ficava
+  // desatualizada quando outro terminal fazia o check-in / cancelava a reserva.
 
   // Close context menu on outside click
   useEffect(() => {

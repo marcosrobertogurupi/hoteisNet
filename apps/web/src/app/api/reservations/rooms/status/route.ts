@@ -63,7 +63,46 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({ success: true, rooms: formatted });
+    // Reservas que chegam HOJE e ainda estão pendentes de check-in — usadas só para os selos
+    // visuais de overbooking / "próximo check-in" nos cards do Mapa de Quartos. Consulta
+    // deliberadamente enxuta (poucos campos, só o dia de hoje) para não pesar no polling de 3s:
+    // um hotel tem no máximo algumas dezenas de chegadas por dia. Antes isso vinha de uma chamada
+    // separada a /api/reservations, que baixava a lista inteira de 6 meses no carregamento da tela.
+    //
+    // "Hoje" é ancorado no fuso de Brasília (America/Sao_Paulo), não no fuso do processo — em
+    // produção (Vercel) o servidor roda em UTC, então usar new Date() cru faria o "hoje" virar às
+    // 21h no horário local. A janela é [meia-noite, meia-noite+1d) em UTC sobre a data-calendário
+    // de Brasília, o que casa tanto com reservas gravadas como UTC-meia-noite quanto com as que
+    // têm horário real (ex: 14:00 BRT gravado como 17:00Z).
+    const todaySpStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const dayStart = new Date(`${todaySpStr}T00:00:00.000Z`);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+    const todayArrivals = await prisma.reservation.findMany({
+      where: {
+        room: { tenantId: session.tenantId },
+        status: { notIn: ["CANCELLED", "CHECKED_IN", "CHECKED_OUT"] },
+        checkInDate: { gte: dayStart, lt: dayEnd },
+      },
+      select: {
+        id: true,
+        guestName: true,
+        reservationNumber: true,
+        room: { select: { number: true } },
+      },
+      // Ordem estável: quando um quarto tem mais de uma reserva para hoje (overbooking), o card
+      // mostra a primeira da lista — que deve ser a chegada mais cedo.
+      orderBy: [{ checkInDate: "asc" }, { id: "asc" }],
+    });
+
+    const todayReservations = todayArrivals.map((r) => ({
+      id: r.id,
+      roomNumber: r.room.number,
+      guestName: r.guestName || "Hóspede",
+      reservationNumber: r.reservationNumber || r.id,
+    }));
+
+    return NextResponse.json({ success: true, rooms: formatted, todayReservations });
   } catch (error: any) {
     console.error("[GET /api/reservations/rooms/status] Erro ao buscar status dos quartos:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
