@@ -123,6 +123,7 @@ model Tenant {
   vehicles                Vehicle[]
   whatsappMessageSettings WhatsappMessageSetting?
   whatsappMessages        WhatsappMessage[]
+  conversationMemories    ConversationMemory[]
 
   @@map("tenants")
 }
@@ -269,6 +270,11 @@ model RoomCategory {
   capacity    Int     @default(1)
   description String?
   active      Boolean @default(true)
+  // LODGING = quarto de hospedagem normal. EVENT_SPACE = auditório, sala de reunião, espaço para
+  // palestras etc. — NÃO é vendido como diária pelo agente de atendimento (ver
+  // apps/web/src/lib/aiAgent/tools.ts): fica de fora da disponibilidade de quartos e qualquer
+  // pedido de reserva desse tipo é encaminhado para a recepção.
+  kind        RoomCategoryKind @default(LODGING)
   tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rooms       Room[]
 
@@ -1180,6 +1186,29 @@ model WhatsappMessage {
   @@map("whatsapp_messages")
 }
 
+// Memória de longo prazo de uma conversa do agente de atendimento por WhatsApp (uma linha por
+// tenant + telefone do hóspede). O histórico cru em WhatsappMessage continua sendo a fonte da
+// verdade; aqui fica só a compressão das mensagens que já saíram da janela enviada ao modelo:
+// `summary` guarda as nuances em texto e `state` o estado estruturado da negociação (datas,
+// valores acordados, exigências, pendências). Atualizado por um "refold" periódico — ver
+// apps/web/src/lib/aiAgent/conversationMemory.ts.
+model ConversationMemory {
+  id                String    @id @default(uuid())
+  tenantId          String
+  phone             String
+  summary           String    @default("")
+  state             Json?
+  // createdAt da última WhatsappMessage já incorporada ao resumo — é o cursor do refold: só
+  // mensagens posteriores a isso ainda contam como "não resumidas".
+  summarizedThrough DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phone])
+  @@map("conversation_memories")
+}
+
 model EmailSetting {
   id                        String   @id @default(uuid())
   tenantId                  String   @unique
@@ -1424,6 +1453,11 @@ enum RoomStatus {
   VACANT_DIRTY
   OCCUPIED
   MAINTENANCE
+}
+
+enum RoomCategoryKind {
+  LODGING
+  EVENT_SPACE
 }
 
 enum HousekeepingTaskStatus {

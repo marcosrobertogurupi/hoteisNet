@@ -11,11 +11,12 @@ interface Categoria {
   id: string;
   name: string;
   description: string;
+  kind: "LODGING" | "EVENT_SPACE";
 }
 
 const TENANT_ID = "tenant-hoteisnet-demo";
 
-const EMPTY_FORM = { name: "", description: "" };
+const EMPTY_FORM = { name: "", description: "", kind: "LODGING" as "LODGING" | "EVENT_SPACE" };
 
 export default function CategoriasApartamentoPage() {
   const { theme } = useTheme();
@@ -39,6 +40,7 @@ export default function CategoriasApartamentoPage() {
           id: c.id,
           name: c.name,
           description: c.description || "",
+          kind: c.kind === "EVENT_SPACE" ? "EVENT_SPACE" : "LODGING",
         }))
       );
     } catch (err) {
@@ -63,6 +65,7 @@ export default function CategoriasApartamentoPage() {
     setForm({
       name: c.name,
       description: c.description,
+      kind: c.kind,
     });
     setIsFormOpen(true);
   };
@@ -81,6 +84,7 @@ export default function CategoriasApartamentoPage() {
           tenantId: editingId ? undefined : TENANT_ID,
           name: form.name,
           description: form.description,
+          kind: form.kind,
         }),
       });
       const result = await res.json();
@@ -196,6 +200,20 @@ export default function CategoriasApartamentoPage() {
                 className={inputClass}
               />
             </div>
+            <div className="space-y-1.5">
+              <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Finalidade</label>
+              <select
+                value={form.kind}
+                onChange={(e) => setForm({ ...form, kind: e.target.value as "LODGING" | "EVENT_SPACE" })}
+                className={inputClass}
+              >
+                <option value="LODGING">Hospedagem (quarto/UH vendido por diária)</option>
+                <option value="EVENT_SPACE">Espaço de eventos (auditório, sala de reunião)</option>
+              </select>
+              <p className={`text-[10px] ${isDark ? "text-slate-500" : "text-slate-400"}`}>
+                Espaços de eventos não são oferecidos como quarto no atendimento automático pelo WhatsApp — pedidos de reserva são encaminhados para a recepção.
+              </p>
+            </div>
             <div className="flex items-center gap-3 pt-1">
               <button
                 onClick={handleSave}
@@ -245,7 +263,16 @@ export default function CategoriasApartamentoPage() {
                 <tr key={c.id} className={`transition ${isDark ? "hover:bg-slate-800/40" : "hover:bg-slate-50"}`}>
                   <td className="px-5 py-4">
                     <div className="space-y-0.5">
-                      <span className={`font-bold block ${isDark ? "text-white" : "text-slate-900"}`}>{c.name}</span>
+                      <span className={`font-bold inline-flex items-center gap-2 ${isDark ? "text-white" : "text-slate-900"}`}>
+                        {c.name}
+                        {c.kind === "EVENT_SPACE" && (
+                          <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full border ${
+                            isDark ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-amber-50 text-amber-700 border-amber-200"
+                          }`}>
+                            EVENTOS
+                          </span>
+                        )}
+                      </span>
                       {c.description && (
                         <span className={`text-[10px] block ${isDark ? "text-slate-400" : "text-slate-500"}`}>{c.description}</span>
                       )}

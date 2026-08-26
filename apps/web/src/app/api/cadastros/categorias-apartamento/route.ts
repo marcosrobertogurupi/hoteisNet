@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await req.json();
-    const { name, dailyPrice, capacity, description } = body;
+    const { name, dailyPrice, capacity, description, kind } = body;
 
     if (!name || !String(name).trim()) {
       return NextResponse.json({ success: false, error: "O nome da categoria é obrigatório." }, { status: 400 });
@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
         dailyPrice: dailyPrice ?? 0,
         capacity: capacity ?? 2,
         description: description || null,
+        kind: kind === "EVENT_SPACE" ? "EVENT_SPACE" : "LODGING",
       },
     });
 
@@ -69,13 +70,14 @@ export async function PATCH(req: NextRequest) {
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await req.json();
-    const { id, name, dailyPrice, capacity, description, active } = body;
+    const { id, name, dailyPrice, capacity, description, active, kind } = body;
 
     if (!id) {
       return NextResponse.json({ success: false, error: "ID da categoria é obrigatório." }, { status: 400 });
     }
 
     const data: Record<string, unknown> = {};
+    if (kind !== undefined) data.kind = kind === "EVENT_SPACE" ? "EVENT_SPACE" : "LODGING";
     if (name !== undefined) {
       if (!String(name).trim()) {
         return NextResponse.json({ success: false, error: "O nome da categoria é obrigatório." }, { status: 400 });

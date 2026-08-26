@@ -39,15 +39,44 @@ async function resolveTariff(client: { tariff: typeof prisma.tariff }, tenantId:
   );
 }
 
-async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date, adults: number) {
-  const rooms = await prisma.room.findMany({
-    where: { tenantId, active: true },
-    include: { category: true },
-  });
-  const roomIds = rooms.map((r) => r.id);
-  if (roomIds.length === 0) return [];
+// Nº máximo de quartos listados por categoria na resposta de disponibilidade — o suficiente para o
+// hóspede escolher um quarto/andar específico sem inflar o prompt (e o custo) do modelo.
+const MAX_ROOMS_LISTED_PER_CATEGORY = 8;
 
-  const [overlappingReservations, openStays, tariff] = await Promise.all([
+// Normaliza um nome de andar para comparação tolerante ("2", "2º Andar", "segundo andar",
+// "Segundo" batem entre si). Sem isso o hóspede que diz "segundo andar" nunca casa com o valor
+// cadastrado no quarto (que vem do cadastro de Andares, texto livre).
+const FLOOR_WORD_TO_NUMBER: Record<string, string> = {
+  terreo: "0", terrea: "0", subsolo: "-1",
+  primeiro: "1", primeira: "1", segundo: "2", segunda: "2", terceiro: "3", terceira: "3",
+  quarto: "4", quarta: "4", quinto: "5", quinta: "5", sexto: "6", sexta: "6",
+  setimo: "7", setima: "7", oitavo: "8", oitava: "8", nono: "9", nona: "9", decimo: "10", decima: "10",
+};
+function stripDiacritics(s: string): string {
+  return s.normalize("NFD").replace(/\p{Diacritic}/gu, "");
+}
+function normalizeFloorKey(raw: string): string {
+  const clean = stripDiacritics(raw)
+    .toLowerCase()
+    .replace(/andar|pavimento|piso|º|°|ª/g, "")
+    .trim();
+  const digits = clean.match(/-?\d+/)?.[0];
+  if (digits) return digits;
+  for (const [word, num] of Object.entries(FLOOR_WORD_TO_NUMBER)) {
+    if (clean.includes(word)) return num;
+  }
+  return clean;
+}
+function floorMatches(roomFloor: string | null | undefined, query: string): boolean {
+  if (!roomFloor) return normalizeFloorKey(query) === "0"; // quarto sem andar = térreo (ver formatRoom)
+  return normalizeFloorKey(roomFloor) === normalizeFloorKey(query);
+}
+
+// Conjunto de ids de quartos ocupados (reserva ativa/futura ou hospedagem em aberto) que se
+// sobrepõem ao período pedido. Reaproveitado por checkAvailability e pelas tools de quarto/andar.
+async function busyRoomIdsForPeriod(roomIds: string[], checkIn: Date, checkOut: Date): Promise<Set<string>> {
+  if (roomIds.length === 0) return new Set();
+  const [overlappingReservations, openStays] = await Promise.all([
     prisma.reservation.findMany({
       where: {
         roomId: { in: roomIds },
@@ -61,16 +90,38 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
       where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut }, expectedCheckOut: { gt: checkIn } },
       select: { roomId: true },
     }),
+  ]);
+  return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...openStays.map((s) => s.roomId)]);
+}
+
+async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date, adults: number) {
+  const rooms = await prisma.room.findMany({
+    where: { tenantId, active: true },
+    include: { category: true },
+  });
+
+  // Categorias EVENT_SPACE (auditório, sala de reunião) nunca entram na disponibilidade de quartos —
+  // são devolvidas à parte para o agente saber explicar que não são hospedagem.
+  const lodgingRooms = rooms.filter((r) => r.category.kind !== "EVENT_SPACE");
+  const espacosEventos = Array.from(
+    new Map(
+      rooms.filter((r) => r.category.kind === "EVENT_SPACE").map((r) => [r.categoryId, { nome: r.category.name, descricao: r.category.description }])
+    ).values()
+  );
+
+  const roomIds = lodgingRooms.map((r) => r.id);
+  if (roomIds.length === 0) return { disponibilidade: [], espacosEventos };
+
+  const [busyRoomIds, tariff] = await Promise.all([
+    busyRoomIdsForPeriod(roomIds, checkIn, checkOut),
     resolveTariff(prisma, tenantId, adults),
   ]);
 
-  const busyRoomIds = new Set<string>([
-    ...overlappingReservations.map((r) => r.roomId),
-    ...openStays.map((s) => s.roomId),
-  ]);
-
-  const byCategory = new Map<string, { categoria: string; capacidade: number; precoDiaria: number; quartosDisponiveis: number }>();
-  for (const room of rooms) {
+  const byCategory = new Map<
+    string,
+    { categoria: string; capacidade: number; precoDiaria: number; quartosDisponiveis: number; quartos: Array<{ numero: string; andar: string; bloco: string | null; caracteristicas: string[] }> }
+  >();
+  for (const room of lodgingRooms) {
     if (busyRoomIds.has(room.id)) continue;
     const key = room.categoryId;
     const entry = byCategory.get(key) ?? {
@@ -78,11 +129,95 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
       capacidade: room.category.capacity,
       precoDiaria: tariff ? Number(tariff.price) : Number(room.category.dailyPrice),
       quartosDisponiveis: 0,
+      quartos: [],
     };
     entry.quartosDisponiveis += 1;
+    if (entry.quartos.length < MAX_ROOMS_LISTED_PER_CATEGORY) {
+      entry.quartos.push({
+        numero: room.number,
+        andar: room.floor || "Térreo",
+        bloco: room.bloco || null,
+        caracteristicas: room.caracteristicas || [],
+      });
+    }
     byCategory.set(key, entry);
   }
-  return Array.from(byCategory.values());
+  return { disponibilidade: Array.from(byCategory.values()), espacosEventos };
+}
+
+// Consulta um quarto específico pelo número, para o período pedido. Usada quando o hóspede pede um
+// quarto pelo número ("queria o 207"). O tenantId vem sempre do closure — o número vindo do modelo
+// é sempre revalidado contra o tenant antes de qualquer uso (regra 4 do CLAUDE.md).
+async function checkRoomByNumber(tenantId: string, roomNumber: string, checkIn: Date, checkOut: Date, adults: number) {
+  const room = await prisma.room.findFirst({
+    where: { tenantId, active: true, number: roomNumber.trim() },
+    include: { category: true },
+  });
+  if (!room) return { encontrado: false, motivo: `Não há um quarto com o número ${roomNumber} neste hotel.` };
+
+  if (room.category.kind === "EVENT_SPACE") {
+    return {
+      encontrado: true,
+      ehEspacoEventos: true,
+      numero: room.number,
+      categoria: room.category.name,
+      motivo: `${room.category.name} é um espaço para eventos/reuniões, não um quarto de hospedagem. Encaminhe para a recepção se o hóspede quiser reservá-lo.`,
+    };
+  }
+
+  const busy = await busyRoomIdsForPeriod([room.id], checkIn, checkOut);
+  const tariff = await resolveTariff(prisma, tenantId, adults);
+  return {
+    encontrado: true,
+    ehEspacoEventos: false,
+    numero: room.number,
+    categoria: room.category.name,
+    andar: room.floor || "Térreo",
+    bloco: room.bloco || null,
+    caracteristicas: room.caracteristicas || [],
+    capacidade: room.category.capacity,
+    disponivel: !busy.has(room.id),
+    precoDiaria: tariff ? Number(tariff.price) : Number(room.category.dailyPrice),
+  };
+}
+
+// Lista quartos de hospedagem por andar, para o período pedido. Se `andar` vier vazio, agrupa todos
+// os andares. Casa "segundo andar" / "2º andar" / "2" com o valor cadastrado no quarto.
+async function listRoomsByFloor(tenantId: string, andar: string | undefined, checkIn: Date, checkOut: Date, adults: number) {
+  const rooms = await prisma.room.findMany({
+    where: { tenantId, active: true },
+    include: { category: true },
+  });
+  const lodgingRooms = rooms.filter((r) => r.category.kind !== "EVENT_SPACE");
+  const filtered = andar && andar.trim() ? lodgingRooms.filter((r) => floorMatches(r.floor, andar)) : lodgingRooms;
+
+  if (filtered.length === 0) {
+    const andaresConhecidos = Array.from(new Set(lodgingRooms.map((r) => r.floor || "Térreo")));
+    return { encontrados: 0, andaresConhecidos, motivo: andar ? `Nenhum quarto encontrado no andar "${andar}".` : "Nenhum quarto cadastrado." };
+  }
+
+  const [busy, tariff] = await Promise.all([
+    busyRoomIdsForPeriod(filtered.map((r) => r.id), checkIn, checkOut),
+    resolveTariff(prisma, tenantId, adults),
+  ]);
+
+  const byFloor = new Map<string, Array<{ numero: string; categoria: string; disponivel: boolean; caracteristicas: string[] }>>();
+  for (const room of filtered) {
+    const key = room.floor || "Térreo";
+    const list = byFloor.get(key) ?? [];
+    list.push({
+      numero: room.number,
+      categoria: room.category.name,
+      disponivel: !busy.has(room.id),
+      caracteristicas: room.caracteristicas || [],
+    });
+    byFloor.set(key, list);
+  }
+  return {
+    encontrados: filtered.length,
+    precoDiaria: tariff ? Number(tariff.price) : null,
+    andares: Array.from(byFloor.entries()).map(([andar, quartos]) => ({ andar, quartos })),
+  };
 }
 
 async function findReservationsByPhone(tenantId: string, phone: string) {
@@ -120,13 +255,14 @@ async function findReservationsByPhone(tenantId: string, phone: string) {
 async function listRoomCategories(tenantId: string) {
   const categories = await prisma.roomCategory.findMany({
     where: { tenantId, active: true },
-    select: { name: true, capacity: true, dailyPrice: true, description: true },
+    select: { name: true, capacity: true, dailyPrice: true, description: true, kind: true },
   });
   return categories.map((c) => ({
     categoria: c.name,
     capacidade: c.capacity,
     precoDiariaReferencia: Number(c.dailyPrice),
     descricao: c.description,
+    tipo: c.kind === "EVENT_SPACE" ? "espaco_eventos" : "hospedagem",
   }));
 }
 
@@ -213,16 +349,39 @@ const DEFAULT_CHECK_OUT_TIME = "12:00";
 async function createReservationForAgent(
   tenantId: string,
   guestPhone: string,
-  params: { checkIn: Date; checkOut: Date; categoryName: string; guestName: string; guestCpf?: string; adults: number }
+  params: { checkIn: Date; checkOut: Date; categoryName?: string; roomNumber?: string; guestName: string; guestCpf?: string; adults: number }
 ) {
-  const [agentSetting, category] = await Promise.all([
+  // Se o hóspede pediu um quarto específico pelo número, é o quarto que manda — a categoria é
+  // derivada dele, não do que o modelo passou. O número vem do modelo, então é revalidado contra o
+  // tenant aqui (regra 4 do CLAUDE.md: id de recurso vindo do cliente nunca é usado cru).
+  const requestedRoom = params.roomNumber?.trim()
+    ? await prisma.room.findFirst({ where: { tenantId, active: true, number: params.roomNumber.trim() }, include: { category: true } })
+    : null;
+  if (params.roomNumber?.trim() && !requestedRoom) {
+    return { sucesso: false, erro: `Não há um quarto com o número ${params.roomNumber} neste hotel.` };
+  }
+
+  const [agentSetting, categoryByName] = await Promise.all([
     prisma.aIAgentSetting.findUnique({ where: { tenantId }, select: { autoConfirmReservations: true } }),
-    prisma.roomCategory.findFirst({ where: { tenantId, active: true, name: { equals: params.categoryName, mode: "insensitive" } } }),
+    params.categoryName
+      ? prisma.roomCategory.findFirst({ where: { tenantId, active: true, name: { equals: params.categoryName, mode: "insensitive" } } })
+      : Promise.resolve(null),
   ]);
+  const category = requestedRoom?.category ?? categoryByName;
   if (!category) return { sucesso: false, erro: "Categoria de apartamento não encontrada." };
 
+  if (category.kind === "EVENT_SPACE") {
+    return {
+      sucesso: false,
+      precisaEscalar: true,
+      erro: `${category.name} é um espaço para eventos/reuniões, não um quarto — a reserva desse tipo de espaço passa pela recepção. Use escalate_to_human.`,
+    };
+  }
+
   const result = await prisma.$transaction(async (tx) => {
-    const rooms = await tx.room.findMany({ where: { tenantId, categoryId: category.id, active: true } });
+    const rooms = requestedRoom
+      ? await tx.room.findMany({ where: { tenantId, id: requestedRoom.id, active: true } })
+      : await tx.room.findMany({ where: { tenantId, categoryId: category.id, active: true } });
     let freeRoom: (typeof rooms)[number] | null = null;
     for (const room of rooms) {
       const [conflict, openStay] = await Promise.all([
@@ -236,7 +395,14 @@ async function createReservationForAgent(
         break;
       }
     }
-    if (!freeRoom) return { sucesso: false as const, erro: "Não há mais quartos livres nessa categoria para o período pedido." };
+    if (!freeRoom) {
+      return {
+        sucesso: false as const,
+        erro: requestedRoom
+          ? `O quarto ${requestedRoom.number} não está livre no período pedido. Ofereça outro quarto da mesma categoria (${category.name}).`
+          : "Não há mais quartos livres nessa categoria para o período pedido.",
+      };
+    }
 
     const tariff = await resolveTariff(tx, tenantId, params.adults);
     if (!tariff) {
@@ -476,7 +642,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
   return {
     check_availability: tool({
       description:
-        "Verifica quartos disponíveis por período e o preço real da diária para a quantidade de adultos informada. Use sempre que o hóspede perguntar sobre disponibilidade, preço de diária ou quiser reservar.",
+        "Verifica quartos disponíveis por período e o preço real da diária para a quantidade de adultos informada. Use sempre que o hóspede perguntar sobre disponibilidade, preço de diária ou quiser reservar. O retorno traz, por categoria, a lista de quartos livres com número, andar, bloco e características — dá para responder sobre um quarto ou andar específico a partir disso. `espacosEventos` lista espaços que NÃO são hospedagem (auditório, sala de reunião): nunca ofereça como quarto/diária.",
       inputSchema: z.object({
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
         checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
@@ -491,8 +657,51 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
         if (isPastDateStr(checkIn)) {
           return { erro: `Data de check-in (${checkIn}) já passou. Confira o ano — a data de hoje está no início destas instruções.` };
         }
-        const disponibilidade = await checkAvailability(tenantId, inDate, outDate, adults);
-        return { disponibilidade };
+        return await checkAvailability(tenantId, inDate, outDate, adults);
+      },
+    }),
+
+    check_room_by_number: tool({
+      description:
+        "Consulta um quarto específico pelo número, para um período. Use quando o hóspede pedir um quarto pelo número ('queria o 207', 'o mesmo da última vez, 305'). Devolve categoria, andar, bloco, características, capacidade, se está disponível no período e o preço da diária. Se `ehEspacoEventos` for true, não é quarto de hospedagem — encaminhe para a recepção.",
+      inputSchema: z.object({
+        roomNumber: z.string().describe("Número do quarto exatamente como o hóspede falou (ex: '207')"),
+        checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
+        checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
+        adults: z.number().int().min(1).default(1).describe("Quantidade de adultos — o preço da diária depende disso"),
+      }),
+      execute: async ({ roomNumber, checkIn, checkOut, adults }) => {
+        const inDate = new Date(checkIn);
+        const outDate = new Date(checkOut);
+        if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
+          return { erro: "Datas inválidas. checkOut deve ser depois de checkIn." };
+        }
+        if (isPastDateStr(checkIn)) {
+          return { erro: `Data de check-in (${checkIn}) já passou. Confira o ano — a data de hoje está no início destas instruções.` };
+        }
+        return await checkRoomByNumber(tenantId, roomNumber, inDate, outDate, adults);
+      },
+    }),
+
+    list_rooms_by_floor: tool({
+      description:
+        "Lista os quartos de hospedagem de um andar (ou de todos os andares, se `andar` for omitido), para um período, indicando quais estão livres. Use quando o hóspede perguntar por andar ('o que tem no segundo andar?', 'algo no térreo?'). Casa '2', '2º andar', 'segundo andar' com o cadastro. Se não achar o andar, o retorno traz `andaresConhecidos` para você oferecer as opções reais.",
+      inputSchema: z.object({
+        andar: z.string().optional().describe("Andar como o hóspede falou (ex: 'segundo andar', '2', 'térreo'). Omita para listar todos."),
+        checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
+        checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
+        adults: z.number().int().min(1).default(1).describe("Quantidade de adultos — o preço da diária depende disso"),
+      }),
+      execute: async ({ andar, checkIn, checkOut, adults }) => {
+        const inDate = new Date(checkIn);
+        const outDate = new Date(checkOut);
+        if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
+          return { erro: "Datas inválidas. checkOut deve ser depois de checkIn." };
+        }
+        if (isPastDateStr(checkIn)) {
+          return { erro: `Data de check-in (${checkIn}) já passou. Confira o ano — a data de hoje está no início destas instruções.` };
+        }
+        return await listRoomsByFloor(tenantId, andar, inDate, outDate, adults);
       },
     }),
 
@@ -517,7 +726,8 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
     }),
 
     list_room_categories: tool({
-      description: "Lista as categorias de apartamento do hotel, com capacidade e preço de referência.",
+      description:
+        "Lista as categorias de apartamento do hotel, com capacidade e preço de referência. O campo `tipo` diz se é 'hospedagem' ou 'espaco_eventos' — categorias 'espaco_eventos' (auditório, sala de reunião) nunca devem ser oferecidas como quarto.",
       inputSchema: z.object({}),
       execute: async () => ({ categorias: await listRoomCategories(tenantId) }),
     }),
@@ -545,16 +755,17 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     create_reservation: tool({
       description:
-        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando confirmação da recepção — informe o resultado exato que a tool devolver, não invente. O retorno inclui horarioCheckIn/horarioCheckOut — sempre informe os dois horários na confirmação, junto com as datas.",
+        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Informe `roomNumber` quando o hóspede tiver pedido um quarto específico pelo número — a reserva sai nesse quarto exato; se ele não estiver livre a tool avisa e você oferece outro. Sem `roomNumber`, o sistema escolhe um quarto livre da categoria. Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando a recepção — informe o resultado exato que a tool devolver, não invente. Se o retorno tiver precisaEscalar:true (ex: categoria é espaço de eventos), use escalate_to_human. O retorno inclui horarioCheckIn/horarioCheckOut — sempre informe os dois horários na confirmação, junto com as datas.",
       inputSchema: z.object({
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
         checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
-        categoryName: z.string().describe("Nome da categoria de apartamento, exatamente como retornado por check_availability/list_room_categories"),
+        categoryName: z.string().optional().describe("Nome da categoria de apartamento, como retornado por check_availability/list_room_categories. Opcional se roomNumber for informado."),
+        roomNumber: z.string().optional().describe("Número de um quarto específico pedido pelo hóspede (ex: '207'). Quando informado, a categoria é derivada do próprio quarto."),
         guestName: z.string().describe("Nome completo do hóspede"),
         guestCpf: z.string().optional().describe("CPF do hóspede, se já identificado"),
         adults: z.number().int().min(1).default(1),
       }),
-      execute: async ({ checkIn, checkOut, categoryName, guestName, guestCpf, adults }) => {
+      execute: async ({ checkIn, checkOut, categoryName, roomNumber, guestName, guestCpf, adults }) => {
         const inDate = new Date(checkIn);
         const outDate = new Date(checkOut);
         if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
@@ -563,7 +774,10 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
         if (isPastDateStr(checkIn)) {
           return { sucesso: false, erro: `Data de check-in (${checkIn}) já passou. Confira o ano — a data de hoje está no início destas instruções.` };
         }
-        return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, guestName, guestCpf, adults });
+        if (!categoryName && !roomNumber) {
+          return { sucesso: false, erro: "Informe categoryName ou roomNumber." };
+        }
+        return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, roomNumber, guestName, guestCpf, adults });
       },
     }),
 

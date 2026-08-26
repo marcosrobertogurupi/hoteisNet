@@ -35,7 +35,10 @@ Use essa referência para resolver qualquer data relativa que o hóspede mencion
 Regras:
 - Responda sempre em português do Brasil, de forma cordial, direta e objetiva (o hóspede está no WhatsApp, evite textos longos).
 - Use as tools disponíveis para responder com dados reais — nunca invente disponibilidade, preço, reserva ou informação do hotel.
-- Se o hóspede quiser saber sobre disponibilidade ou preço, pergunte as datas de entrada e saída e a quantidade de adultos (se não tiver informado) e use a tool check_availability — o preço da diária depende do número de adultos, então nunca chame sem esse dado.
+- Se o hóspede quiser saber sobre disponibilidade ou preço, pergunte as datas de entrada e saída e a quantidade de adultos (se não tiver informado) e use a tool check_availability — o preço da diária depende do número de adultos, então nunca chame sem esse dado. O retorno de check_availability já traz, por categoria, os quartos livres com número, andar, bloco e características.
+- Se o hóspede pedir um quarto específico pelo número ("queria o 207", "o mesmo da última vez"), use check_room_by_number para ver se aquele quarto está livre no período. Se estiver, você PODE reservar exatamente esse quarto — passe roomNumber para create_reservation. Se não estiver livre, ofereça outro quarto da mesma categoria.
+- Se o hóspede perguntar por andar ("o que tem no segundo andar?", "algo no térreo?"), use list_rooms_by_floor. Se o andar pedido não existir, ofereça os andares que a tool devolver em andaresConhecidos.
+- Espaços de eventos (auditório, sala de reunião, sala de palestras) NÃO são quartos de hospedagem — nunca os ofereça como diária nem tente reservá-los pelo sistema. Aparecem em check_availability dentro de espacosEventos e em list_room_categories com tipo "espaco_eventos". Se o hóspede quiser um desses espaços, use escalate_to_human para a recepção tratar.
 - Se o hóspede quiser confirmar ou consultar uma reserva existente, use get_reservation_by_phone com o telefone da conversa.
 - Se o hóspede pedir para ver fotos de um quarto/categoria, use send_photo — ela já envia as fotos direto pelo WhatsApp, você só precisa confirmar no texto que enviou.
 - Antes de criar uma reserva nova, confirme com o hóspede: categoria, datas e quantidade de adultos. Para identificar o hóspede, peça só o CPF — nunca peça para ele digitar o nome completo. Use get_guest_by_cpf com o CPF informado: ela já busca no cadastro do hotel e, se não achar, na base pública, e devolve o nome completo. Repita esse nome de volta para o hóspede confirmar ("é isso, [nome]?") em vez de pedir que ele digite. Só peça o nome completo manualmente se get_guest_by_cpf não encontrar nada (encontrado: false). Só então use create_reservation.
@@ -61,6 +64,10 @@ export type GuestSupportAgentOptions = {
   agentDisplayName?: string | null;
   tonePreset?: string | null;
   adminSystemPromptExtra?: string | null;
+  // Bloco de memória de longo prazo da conversa (resumo rolante + estado da negociação) — montado
+  // por apps/web/src/lib/aiAgent/conversationMemory.ts a partir das mensagens que já saíram da
+  // janela crua enviada ao modelo.
+  conversationMemo?: string | null;
 };
 
 export function buildGuestSupportAgent(
@@ -73,6 +80,7 @@ export function buildGuestSupportAgent(
   if (options.agentDisplayName) parts.push(`Seu nome é "${options.agentDisplayName}" — apresente-se assim quando fizer sentido.`);
   parts.push(TONE_PRESET_TEXT[options.tonePreset || "PROFISSIONAL"] || TONE_PRESET_TEXT.PROFISSIONAL);
   if (options.adminSystemPromptExtra) parts.push(`Instruções adicionais definidas pela administração do hotel:\n${options.adminSystemPromptExtra}`);
+  if (options.conversationMemo) parts.push(options.conversationMemo);
 
   return new ToolLoopAgent({
     model: AI_AGENT_MODEL,

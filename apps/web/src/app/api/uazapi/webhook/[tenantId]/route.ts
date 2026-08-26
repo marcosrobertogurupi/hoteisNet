@@ -14,6 +14,7 @@ function isValidWebhookSecret(received: string | null, expected: string | null):
 }
 import { sendUazapiText, downloadUazapiMedia, fetchAsBase64 } from "@/lib/uazapi";
 import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
+import { prepareConversationContext } from "@/lib/aiAgent/conversationMemory";
 import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
 
 type AgentMessageContent = string | Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: string }>;
@@ -79,17 +80,26 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
     });
     if (recentHumanReply) return;
 
+    // Memória de longo prazo da conversa: prepara o bloco de resumo/estado (comprimindo as
+    // mensagens antigas via um refold, se for hora) e decide quais mensagens vão CRUAS no prompt.
+    // Assim o agente acompanha uma negociação que se arrasta por dias sem que o começo da conversa
+    // saia da janela — ver apps/web/src/lib/aiAgent/conversationMemory.ts.
+    const { memoryPrompt, rawWindowMessageIds } = await prepareConversationContext(tenantId, phone);
+    const rawWindowIdSet = new Set(rawWindowMessageIds);
+
     // Inclui mídia recebida do hóspede (IN) além de texto — mídia enviada pelo próprio hotel (OUT,
     // ex: PDF de extrato) fica de fora do histórico, não é conversacional o suficiente para valer
     // reprocessar. O agente interpreta foto/áudio/PDF de verdade (ver buildMediaContent); outros
     // tipos de anexo viram um placeholder de texto para o agente não travar nem inventar conteúdo.
+    // Carregamos um teto generoso e filtramos pela janela crua definida pela memória — o que sobrou
+    // já está resumido no bloco de memória acima. Linhas curtas, poucos campos: egress irrelevante.
     const history = await prisma.whatsappMessage.findMany({
       where: { tenantId, phone, OR: [{ type: "text" }, { direction: "IN", type: "media" }] },
       orderBy: { createdAt: "desc" },
-      take: 10,
+      take: 80,
       select: { id: true, direction: true, type: true, content: true, mediaUrl: true, mimeType: true, externalId: true },
     });
-    const ordered = history.reverse();
+    const ordered = history.reverse().filter((m) => rawWindowIdSet.size === 0 || rawWindowIdSet.has(m.id));
     const latestId = ordered.length > 0 ? ordered[ordered.length - 1].id : null;
 
     const messages: Array<{ role: "user" | "assistant"; content: AgentMessageContent }> = [];
@@ -126,6 +136,7 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
         agentDisplayName: setting.agentDisplayName,
         tonePreset: setting.tonePreset,
         adminSystemPromptExtra: setting.systemPromptExtra,
+        conversationMemo: memoryPrompt,
       },
       (reason) => {
         escalationReason = reason;

@@ -160,11 +160,18 @@ crédito na conta Vercel; o código já está pronto para trocar de volta). **No
 `gemini-3.7-flash` até 25/08/2026 — trocado porque esse modelo passou a travar indefinidamente em
 `generateContent` (confirmado com curl direto à API do Google, sem erro nem timeout do lado deles),
 enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash normalizar.
-* **Agente de Atendimento ✅** (`apps/web/src/lib/aiAgent/`): tools `check_availability`,
+* **Agente de Atendimento ✅** (`apps/web/src/lib/aiAgent/`): tools `check_availability`
+  (devolve, por categoria, os quartos livres com número/andar/bloco/características e separa em
+  `espacosEventos` as categorias que não são hospedagem — ver `RoomCategory.kind` abaixo),
+  `check_room_by_number` (o hóspede pede um quarto pelo número — "queria o 207" — e o agente
+  confere disponibilidade/andar/características daquele quarto no período), `list_rooms_by_floor`
+  (responde "o que tem no segundo andar?", casando "2"/"2º andar"/"segundo andar" com o cadastro),
   `get_reservation_by_phone`, `get_guest_by_cpf` (cadastro do hotel → fallback Hub do
   Desenvolvedor), `list_room_categories`, `get_hotel_info`, `search_knowledge_base`,
   `create_reservation` (transação atômica, guardrail `autoConfirmReservations` decidido em código,
-  nunca pelo modelo), `cancel_reservation` (soft-cancel, `status=CANCELLED`, nunca apaga a linha;
+  nunca pelo modelo; aceita `roomNumber` opcional — revalidado contra o tenant, regra 4 do
+  CLAUDE.md — para reservar o quarto exato pedido pelo hóspede; recusa categorias `EVENT_SPACE`,
+  encaminhando para a recepção), `cancel_reservation` (soft-cancel, `status=CANCELLED`, nunca apaga a linha;
   gated por `AIAgentSetting.allowAgentCancelReservation`, default desligado; nunca cancela
   `CHECKED_IN` — escala pra recepção), `resend_fnrh_link` (reenvia o link de pré-check-in sob
   demanda, reaproveitando `sendPreCheckinLink`), `escalate_to_human`, `send_photo` (envia fotos
@@ -252,6 +259,27 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   check-out (14:00/12:00, mesmo padrão já assumido no resto do sistema — a tela de Configurações só
   persiste esse horário no localStorage do navegador, não em campo do banco, então o agente
   server-side usa o mesmo fallback fixo).
+* **`RoomCategory.kind` (LODGING/EVENT_SPACE) ✅** (achado em teste real via WhatsApp): antes o
+  AUDITÓRIO — que é espaço para reuniões/palestras, não quarto — era listado como categoria
+  vendável e recebia uma "diária" da `Tariff` (que é por nº de adultos, sem `categoryId`). Agora
+  cada categoria tem uma finalidade escolhida no cadastro (`app/cadastros/categorias-apartamento`,
+  campo "Finalidade"); categorias `EVENT_SPACE` ficam fora de `check_availability`/`check_room_by_number`
+  e `create_reservation` as recusa e manda escalar para a recepção. Também exposto em
+  `list_room_categories` como `tipo: "espaco_eventos"`.
+* **Memória de conversa — resumo rolante + estado estruturado ✅** (`ConversationMemory`,
+  `apps/web/src/lib/aiAgent/conversationMemory.ts`): o agente recebia só as últimas ~10 mensagens
+  cruas, então numa negociação de reserva que se arrastava por dias o começo da conversa (datas,
+  valores combinados, exigências) saía da janela e o agente repetia pergunta. Agora, além das
+  últimas 16 mensagens cruas, o prompt leva um bloco de memória por tenant+telefone: um `summary`
+  em texto (nuances) e um `state` JSON da negociação (datas, adultos/crianças, categoria/quarto de
+  interesse, valor negociado, condições acordadas, exigências, pendências, reserva criada). O
+  histórico cru em `WhatsappMessage` continua sendo a fonte da verdade — a `ConversationMemory` é
+  só a compressão do que já saiu da janela. Quando há mais que 16+12 mensagens não resumidas, um
+  "refold" dobra as mais antigas via **uma** chamada `generateObject` (mesmo modelo do agente,
+  `feature: "whatsapp_guest_support_summary"` no `AIUsageLog`), a cada ~12 turnos, nunca a cada
+  resposta. Falha no refold nunca trava o turno (cai para memória antiga + janela cheia). Redis
+  (padrão de "chat memory" do n8n) foi descartado: o Postgres já é a fonte da verdade, adicionar
+  infra não traria ganho.
 
 ### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡 (parcialmente — ver ressalva)
 * `admin/tenants` (tela separada, não usada) e `admin/support` são **mocks de UI**: dados fixos em React state, nenhuma chamada de API. `admin/ai-telemetry` também é mock (não confundir com a seção real de IA dentro de `admin/page.tsx`, ver abaixo).
