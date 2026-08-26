@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<security_audit_report project="HoteisNet PMS SaaS" generated_at="2026-08-23T21:56:00-03:00">
+  <summary>
+    <overall_status>ACTION_REQUIRED</overall_status>
+    <high_critical_count>3</high_critical_count>
+    <medium_count>2</medium_count>
+    <low_info_count>2</low_info_count>
+    <description>
+      Relatório estruturado de análise de segurança para execução e remediação automatizada/assistida no Claude Code.
+    </description>
+  </summary>
+
+  <findings>
+    <!-- Finding 1 -->
+    <finding id="VULN-001" severity="CRITICAL">
+      <title>SSRF e Endpoints Desprotegidos no Servidor Fastify (apps/api)</title>
+      <category>A01:2021 - Broken Access Control / A10:2021 - Server-Side Request Forgery (SSRF)</category>
+      <affected_files>
+        <file path="apps/api/src/index.ts" lines="82-148" />
+        <file path="apps/api/src/routes/admin.ts" lines="5-138" />
+      </affected_files>
+      <description>
+        A rota POST /api/uazapi/send-extrato aceita o parâmetro serverUrl arbitrário fornecido no payload da requisição sem validação de whitelist, disparando um fetch server-side. Isso permite que um atacante atinja redes internas (ex: 169.254.169.254 ou localhost). Além disso, as rotas administrativas em apps/api não possuem middleware de autenticação/autorização JWT.
+      </description>
+      <remediation_plan>
+        <step order="1">Verificar se o workspace apps/api ainda é necessário ou se já foi totalmente migrado para Next.js Route Handlers (apps/web/src/app/api).</step>
+        <step order="2">Se legado/obsoleto, desativar o serviço ou remover o build do Turborepo.</step>
+        <step order="3">Caso mantido, aplicar whitelist estrita de domínios em serverUrl e implementar autenticação JWT obrigatória em todos os endpoints.</step>
+      </remediation_plan>
+    </finding>
+
+    <!-- Finding 2 -->
+    <finding id="VULN-002" severity="HIGH">
+      <title>Next.js Middleware não intercepta rotas /api/* (Fail-Open)</title>
+      <category>A01:2021 - Broken Access Control</category>
+      <affected_files>
+        <file path="apps/web/src/middleware.ts" lines="29-31" />
+      </affected_files>
+      <description>
+        O middleware está configurado com matcher apenas para ["/app/:path*", "/admin/:path*"]. Como resultado, requisições HTTP diretas para /api/* não passam pela barreira central de autenticação do middleware. A proteção atual depende exclusivamente de cada desenvolvedor chamar getSessionUser() manualmente em cada arquivo de rota, gerando risco de exposição indevida caso um novo endpoint seja criado sem essa verificação manual.
+      </description>
+      <remediation_plan>
+        <step order="1">Incluir "/api/:path*" no matcher do middleware.ts.</step>
+        <step order="2">Definir uma lista explícita de rotas públicas permitidas (ex: /api/auth/login, /api/public/*, /api/uazapi/webhook/*).</step>
+        <step order="3">Bloquear com 401 Unauthorized qualquer requisição a outras rotas /api/* que não possua cookie/sessão válida.</step>
+      </remediation_plan>
+    </finding>
+
+    <!-- Finding 3 -->
+    <finding id="VULN-003" severity="HIGH">
+      <title>Exposição de Chave Anon do Supabase sem Garantia de RLS Ativo no Banco</title>
+      <category>A01:2021 - Broken Access Control</category>
+      <affected_files>
+        <file path="apps/web/src/utils/supabaseClient.ts" lines="8-11" />
+        <file path="supabase/migrations" />
+      </affected_files>
+      <description>
+        A variável NEXT_PUBLIC_SUPABASE_ANON_KEY é embutida no bundle do frontend. Caso qualquer tabela no PostgreSQL não tenha Row Level Security (RLS) devidamente habilitado e configurado para filtrar por tenantId, um usuário mal-intencionado pode efetuar consultas diretas à API REST do Supabase (PostgREST) e vazar dados de outros hotéis.
+      </description>
+      <remediation_plan>
+        <step order="1">Criar migração SQL garantindo `ALTER TABLE &lt;tabela&gt; ENABLE ROW LEVEL SECURITY;` para todas as tabelas.</step>
+        <step order="2">Definir políticas de RLS restritivas para bloquear acesso anônimo/direto via PostgREST ou assegurar que toda a lógica de dados passe exclusivamente por Prisma / Backend autenticado.</step>
+      </remediation_plan>
+    </finding>
+
+    <!-- Finding 4 -->
+    <finding id="VULN-004" severity="MEDIUM">
+      <title>Enumeração de Contas e Ausência de Rate Limiting por IP no Login</title>
+      <category>A07:2021 - Identification and Authentication Failures</category>
+      <affected_files>
+        <file path="apps/web/src/app/api/auth/login/route.ts" lines="38-43" />
+      </affected_files>
+      <description>
+        O endpoint de login retorna erro 429 específico com mensagem de bloqueio apenas quando a conta existe no banco e atingiu tentativas máximas. Isso permite que um atacante mapeie e-mails válidos no sistema. Além disso, a ausência de limitação por endereço IP permite ataques de força bruta massivos e DoS por sobrecarga de CPU (cálculo de Bcrypt).
+      </description>
+      <remediation_plan>
+        <step order="1">Padronizar a resposta para 401 "E-mail ou senha inválidos" mesmo quando a conta estiver temporariamente bloqueada.</step>
+        <step order="2">Implementar middleware ou biblioteca de Rate Limiting por IP (ex: máx. 5 requisições de login por minuto por IP).</step>
+      </remediation_plan>
+    </finding>
+
+    <!-- Finding 5 -->
+    <finding id="VULN-005" severity="MEDIUM">
+      <title>Armazenamento de Assinaturas Digitais e Privacidade LGPD</title>
+      <category>A04:2021 - Insecure Design / LGPD Compliance</category>
+      <affected_files>
+        <file path="apps/web/src/app/api/public/pre-checkin/[token]/route.ts" lines="152-160" />
+      </affected_files>
+      <description>
+        Assinaturas de pré-check-in são enviadas para o bucket `fnrh-signatures`. Se o bucket estiver configurado como público no Supabase Storage, links de assinaturas de hóspedes podem ser acessados sem controle de acesso, violando dados pessoais sensíveis.
+      </description>
+      <remediation_plan>
+        <step order="1">Configurar o bucket `fnrh-signatures` como estritamente Privado.</step>
+        <step order="2">Gerar Signed URLs de curta duração (5-15 min) sob demanda quando o operador visualizar a FNRH no sistema.</step>
+      </remediation_plan>
+    </finding>
+
+    <!-- Finding 6 -->
+    <finding id="VULN-006" severity="LOW">
+      <title>Ausência de Security Headers HTTP Globais</title>
+      <category>A05:2021 - Security Misconfiguration</category>
+      <affected_files>
+        <file path="apps/web/next.config.mjs" />
+      </affected_files>
+      <description>
+        O Next.js não está configurado para emitir cabeçalhos de segurança padrão como X-Frame-Options (proteção contra Clickjacking), X-Content-Type-Options (MIME sniffing) e Strict-Transport-Security (HSTS).
+      </description>
+      <remediation_plan>
+        <step order="1">Adicionar configuração `headers()` no next.config.mjs injetando X-Frame-Options: DENY, X-Content-Type-Options: nosniff, Referrer-Policy e HSTS.</step>
+      </remediation_plan>
+    </finding>
+
+    <!-- Finding 7 -->
+    <finding id="VULN-007" severity="LOW">
+      <title>Uso de DEFAULT_TENANT_ID como Fallback Silencioso</title>
+      <category>A01:2021 - Broken Access Control</category>
+      <affected_files>
+        <file path="apps/web/src/app/api/users/route.ts" lines="6" />
+      </affected_files>
+      <description>
+        Diversas rotas utilizam fallback para `DEFAULT_TENANT_ID = "tenant-hoteisnet-demo"` quando a sessão não tem tenantId explícito. Isso pode causar mutações acidentais na base de testes ou operações anômalas se a sessão estiver inconsistente.
+      </description>
+      <remediation_plan>
+        <step order="1">Substituir fallbacks silenciosos por rejeição explícita (403 Forbidden: "Tenant não associado à sessão").</step>
+      </remediation_plan>
+    </finding>
+  </findings>
+
+  <recommended_actions_order>
+    <action priority="1" target="apps/api">Desativar ou proteger o backend Fastify legado contra SSRF e rotas públicas.</action>
+    <action priority="2" target="apps/web/src/middleware.ts">Proteger rotas /api/* de forma centralizada no middleware do Next.js.</action>
+    <action priority="3" target="supabase/migrations">Garantir RLS ativo em todas as tabelas multi-tenant.</action>
+    <action priority="4" target="apps/web/next.config.mjs">Configurar Security Headers (HSTS, CSP, X-Frame-Options).</action>
+    <action priority="5" target="apps/web/src/app/api/auth/login">Adicionar Rate Limiting por IP e mitigar enumeração de contas.</action>
+  </recommended_actions_order>
+</security_audit_report>
