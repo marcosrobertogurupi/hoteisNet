@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
+import { cpfMatchVariants, formatCPF, validateCPF } from "@/lib/documentValidation";
 
 // GET /api/cadastros/hospedes/[id]
 export async function GET(
@@ -63,6 +64,55 @@ export async function PUT(
       return NextResponse.json({ error: "Hóspede não encontrado" }, { status: 404 });
     }
 
+    // CPF: normaliza para o formato com máscara ANTES de gravar (a edição gravava o valor cru do
+    // corpo, gerando cadastros iguais com formatação diferente) e valida o dígito verificador.
+    let cpfToSave: string | null | undefined = undefined; // undefined = não mexer no CPF atual
+    if (body.cpf !== undefined) {
+      const cpfDigits = String(body.cpf || "").replace(/\D/g, "");
+      const cpfUnchanged = cpfDigits === String(existing.cpf || "").replace(/\D/g, "");
+      // Só valida o dígito verificador quando o CPF de fato mudou — assim editar outros campos
+      // de um cadastro antigo com CPF incompleto/legado não passa a ser bloqueado.
+      if (!cpfUnchanged && cpfDigits && (cpfDigits.length !== 11 || !validateCPF(cpfDigits))) {
+        return NextResponse.json({ error: "CPF inválido." }, { status: 400 });
+      }
+      cpfToSave = cpfDigits.length === 11 ? formatCPF(cpfDigits) : (cpfUnchanged ? existing.cpf : null);
+
+      // Nunca deixar dois hóspedes do mesmo tenant com o mesmo CPF. A rota de criação já checava
+      // isso; a de edição não checava nada — bastava digitar o CPF de outro hóspede e salvar.
+      // Só checa quando o CPF mudou: se não mudou, um choque aqui seria um cadastro duplicado
+      // pré-existente, e não faz sentido travar toda edição do restante da ficha por causa disso.
+      if (cpfToSave && !cpfUnchanged) {
+        const clash = await prisma.guest.findFirst({
+          where: {
+            tenantId: session.tenantId,
+            id: { not: id },
+            cpf: { in: cpfMatchVariants(cpfToSave) },
+          },
+          select: { id: true, fullName: true },
+        });
+        if (clash) {
+          return NextResponse.json(
+            { error: `Este CPF já pertence ao hóspede "${clash.fullName}". Um mesmo CPF não pode ter dois cadastros.` },
+            { status: 409 }
+          );
+        }
+      }
+    }
+
+    // companyId recebido do cliente é revalidado contra o tenant da sessão antes de gravar —
+    // sem isso dava para vincular o hóspede a uma empresa conveniada de outro hotel.
+    let companyIdToSave: string | null | undefined = undefined;
+    if (body.companyId !== undefined) {
+      companyIdToSave = null;
+      if (body.companyId) {
+        const company = await prisma.company.findFirst({
+          where: { id: body.companyId, tenantId: session.tenantId },
+          select: { id: true },
+        });
+        companyIdToSave = company?.id ?? null;
+      }
+    }
+
     // updateMany (não update por id puro) repete o filtro de tenant também na escrita real — sem
     // isso, a checagem de existência acima não bastava para proteger contra IDOR: bastaria acertar
     // um id de hóspede de outro tenant que passasse a checagem (ex.: se ela fosse removida/burlada
@@ -71,7 +121,7 @@ export async function PUT(
       where: { id, tenantId: session.tenantId },
       data: {
         fullName: body.fullName ? body.fullName.trim().toUpperCase() : existing.fullName,
-        cpf: body.cpf !== undefined ? body.cpf || null : existing.cpf,
+        cpf: cpfToSave !== undefined ? cpfToSave : existing.cpf,
         passport: body.passport !== undefined ? body.passport || null : existing.passport,
         birthDate: body.birthDate ? new Date(body.birthDate) : existing.birthDate,
         gender: body.gender || existing.gender,
@@ -86,7 +136,7 @@ export async function PUT(
         city: body.city !== undefined ? body.city || null : existing.city,
         state: body.state !== undefined ? body.state || null : existing.state,
         country: body.country || existing.country,
-        companyId: body.companyId !== undefined ? body.companyId || null : existing.companyId,
+        companyId: companyIdToSave !== undefined ? companyIdToSave : existing.companyId,
       },
     });
 

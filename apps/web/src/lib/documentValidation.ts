@@ -51,6 +51,15 @@ export function formatCPF(val: string): string {
     .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
 }
 
+// Um mesmo CPF pode ter sido gravado com máscara ("000.000.000-00") ou só com dígitos
+// ("00000000000") por rotas diferentes ao longo do tempo. Nas buscas de duplicidade, casar
+// pelos dois formatos evita cadastrar o mesmo hóspede duas vezes só porque a formatação diferia.
+export function cpfMatchVariants(val: string | null | undefined): string[] {
+  const digits = (val || "").replace(/\D/g, "");
+  if (digits.length !== 11) return val ? [val] : [];
+  return [digits, formatCPF(digits)];
+}
+
 export function formatCNPJ(val: string): string {
   const clean = val.replace(/\D/g, "").slice(0, 14);
   return clean

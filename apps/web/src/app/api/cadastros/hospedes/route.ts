@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-
-function formatCPF(v: string) {
-  const c = v.replace(/\D/g, "");
-  if (c.length !== 11) return v;
-  return `${c.slice(0,3)}.${c.slice(3,6)}.${c.slice(6,9)}-${c.slice(9,11)}`;
-}
+import { cpfMatchVariants, formatCPF, validateCPF } from "@/lib/documentValidation";
 
 // GET /api/cadastros/hospedes
 // Suporta query params: q (busca por nome/cpf/email), page, pageSize, tenantId
@@ -130,19 +125,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Nome completo é obrigatório" }, { status: 400 });
     }
 
+    const cpfDigits = String(cpf || "").replace(/\D/g, "");
+    if (cpfDigits && (cpfDigits.length !== 11 || !validateCPF(cpfDigits))) {
+      return NextResponse.json({ error: "CPF inválido." }, { status: 400 });
+    }
+    const formattedCpf = cpfDigits.length === 11 ? formatCPF(cpfDigits) : null;
+
     // Sem @@unique em Guest.cpf (um mesmo CPF pode legitimamente existir em tenants diferentes),
     // então a proteção contra duplicata é feita aqui: se já existe um cadastro com este CPF neste
     // tenant, devolve o existente em vez de criar outro — importante agora que a consulta ao Hub
     // do Desenvolvedor no check-in chama este endpoint assim que encontra o CPF, podendo ser
-    // chamada mais de uma vez para o mesmo hóspede.
-    const formattedCpf = cpf ? formatCPF(cpf) : null;
+    // chamada mais de uma vez para o mesmo hóspede. Compara pelos dois formatos de gravação
+    // (com e sem máscara) — ver cpfMatchVariants — senão a duplicata passa só por diferença de
+    // formatação.
     if (formattedCpf) {
       const existing = await prisma.guest.findFirst({
-        where: { tenantId: session.tenantId, cpf: formattedCpf },
+        where: { tenantId: session.tenantId, cpf: { in: cpfMatchVariants(formattedCpf) } },
       });
       if (existing) {
         return NextResponse.json({ success: true, ...existing, alreadyExisted: true }, { status: 200 });
       }
+    }
+
+    // companyId recebido do cliente precisa ser de uma empresa do mesmo tenant — senão o cadastro
+    // ficaria vinculado a uma empresa conveniada de outro hotel.
+    let safeCompanyId: string | null = null;
+    if (companyId) {
+      const company = await prisma.company.findFirst({
+        where: { id: companyId, tenantId: session.tenantId },
+        select: { id: true },
+      });
+      safeCompanyId = company?.id ?? null;
     }
 
     const newGuest = await prisma.guest.create({
@@ -164,7 +177,7 @@ export async function POST(request: NextRequest) {
         city: city || null,
         state: state || null,
         country: country || "Brasil",
-        companyId: companyId || null,
+        companyId: safeCompanyId,
         motherName: motherName || null,
         fatherName: fatherName || null,
         fullAddress: fullAddress || null,

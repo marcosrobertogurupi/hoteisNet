@@ -5,7 +5,7 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { sendUazapiText } from "@/lib/uazapi";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 import { processPaymentLine } from "@/lib/paymentProcessing";
-import { validateCPF, validateCNPJ } from "@/lib/documentValidation";
+import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
@@ -282,7 +282,7 @@ export async function POST(req: NextRequest) {
       const cpf = documentType === "CPF" && cpfDigits.length === 11 ? formatCPF(cpfDigits) : null;
 
       let guest = cpf
-        ? await tx.guest.findFirst({ where: { tenantId: room.tenantId, cpf } })
+        ? await tx.guest.findFirst({ where: { tenantId: room.tenantId, cpf: { in: cpfMatchVariants(cpf) } } })
         : null;
 
       if (!guest) {
