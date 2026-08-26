@@ -164,7 +164,7 @@ export default function TenantAppLayout({
             <h1 className="text-lg font-semibold tracking-tight">Hoteis.Net SaaS que trabalha por você</h1>
             {isSettingsPage && (
               <span className={`px-2.5 py-0.5 rounded-full text-xs font-mono ${theme.badgeBg}`}>
-                WhatsApp Uazapi: Conectado
+                WhatsApp: Conectado
               </span>
             )}
           </div>

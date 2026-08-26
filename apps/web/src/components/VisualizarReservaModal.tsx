@@ -270,7 +270,7 @@ export const VisualizarReservaModal: React.FC<VisualizarReservaModalProps> = ({
 
       const data = await res.json();
       if (data.success) {
-        toast.success(`✓ Voucher enviado com sucesso via WhatsApp Uazapi para ${reservation.phone}!`);
+        toast.success(`✓ Voucher enviado com sucesso via WhatsApp para ${reservation.phone}!`);
       } else {
         console.warn("Uazapi não respondeu com sucesso. Abrindo link direto do WhatsApp Web...", data);
         const cleanPhone = reservation.phone.replace(/\D/g, "");

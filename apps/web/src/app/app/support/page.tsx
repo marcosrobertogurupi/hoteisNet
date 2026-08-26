@@ -17,8 +17,8 @@ export default function TenantSupportPage() {
     },
     {
       id: "TKT-1045",
-      subject: "Como configurar nova chave de integração na API Uazapi?",
-      category: "WhatsApp Uazapi",
+      subject: "Como configurar nova chave de integração da API do WhatsApp?",
+      category: "WhatsApp",
       status: "CLOSED",
       aiConfidence: 98,
       createdAt: "Ontem às 14:30",
@@ -66,7 +66,7 @@ export default function TenantSupportPage() {
       const aiReply = {
         sender: "AI_AGENT",
         senderName: "IA de Suporte Hoteis.Net (RAG Bot)",
-        content: "Entendido! Caso precise de auxílio imediato para faturamento corporativo ou QR Code do WhatsApp Uazapi, também posso te guiar passo a passo.",
+        content: "Entendido! Caso precise de auxílio imediato para faturamento corporativo ou QR Code do WhatsApp, também posso te guiar passo a passo.",
         time: "Agora",
         confidence: 92,
       };
@@ -273,7 +273,7 @@ export default function TenantSupportPage() {
                   className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#0284C7]"
                 >
                   <option>FNRH / Governo</option>
-                  <option>WhatsApp Uazapi</option>
+                  <option>WhatsApp</option>
                   <option>Faturamento Corporativo</option>
                   <option>Mapa de Quartos / Reservas</option>
                   <option>PDV & Consumo</option>

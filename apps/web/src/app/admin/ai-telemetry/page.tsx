@@ -80,7 +80,7 @@ export default function SuperAdminAITelemetryPage() {
 
         <div className="p-5 rounded-2xl bg-[#0F172A] border border-slate-800 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-[#F59E0B]">Concierge WhatsApp Uazapi</span>
+            <span className="text-xs font-semibold text-[#F59E0B]">Concierge WhatsApp</span>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#10B981]/15 text-[#10B981]">Ativo</span>
           </div>
           <div className="space-y-1">

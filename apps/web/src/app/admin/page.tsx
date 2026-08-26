@@ -249,7 +249,7 @@ export default function SuperAdminDashboardPage() {
   const aiTelemetry = [
     { feature: "IA Suporte RAG (Embeddings Supabase)", requests: 1420, tokens: 680000, costUsd: "$ 1.36", status: "HEALTHY" },
     { feature: "Pré-Checkin FNRH Preditivo", requests: 890, tokens: 340000, costUsd: "$ 0.68", status: "HEALTHY" },
-    { feature: "Concierge WhatsApp Uazapi", requests: 2150, tokens: 1240000, costUsd: "$ 2.48", status: "HEALTHY" },
+    { feature: "Concierge WhatsApp", requests: 2150, tokens: 1240000, costUsd: "$ 2.48", status: "HEALTHY" },
   ];
 
   // Sample Tickets in Master Console

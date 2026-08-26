@@ -387,11 +387,11 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
       } else {
         setWppStatusMsg({
           type: "error",
-          text: data.message || "Erro no envio pelo Uazapi. Verifique se a instância está conectada.",
+          text: data.message || "Erro no envio pelo WhatsApp. Verifique se a instância está conectada.",
         });
       }
     } catch (err: any) {
-      setWppStatusMsg({ type: "error", text: `Falha no envio: ${err.message || "Verifique as configurações do Uazapi."}` });
+      setWppStatusMsg({ type: "error", text: `Falha no envio: ${err.message || "Verifique as configurações do WhatsApp."}` });
     } finally {
       setSendingWpp(false);
     }

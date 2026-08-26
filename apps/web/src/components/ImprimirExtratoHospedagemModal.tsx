@@ -360,7 +360,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
       if (data.success) {
         setWppStatusMsg({
           type: "success",
-          text: data.message || "Extrato em PDF enviado com sucesso via WhatsApp (Uazapi)!",
+          text: data.message || "Extrato em PDF enviado com sucesso via WhatsApp!",
         });
 
         setTimeout(() => {
@@ -370,14 +370,14 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
       } else {
         setWppStatusMsg({
           type: "error",
-          text: data.message || "Erro no envio pelo Uazapi. Verifique se a instância está conectada.",
+          text: data.message || "Erro no envio pelo WhatsApp. Verifique se a instância está conectada.",
         });
       }
     } catch (err: any) {
       console.error("Erro ao enviar extrato via WhatsApp:", err);
       setWppStatusMsg({
         type: "error",
-        text: `Falha no envio: ${err.message || "Verifique as configurações do Uazapi."}`,
+        text: `Falha no envio: ${err.message || "Verifique as configurações do WhatsApp."}`,
       });
     } finally {
       setSendingWpp(false);
@@ -1033,7 +1033,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-4 space-y-3 text-slate-900 border border-slate-200">
             <div className="flex items-center justify-between border-b pb-2">
               <h4 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                <MessageSquare className="w-4 h-4 text-emerald-600" /> Enviar Extrato via WhatsApp (Uazapi API)
+                <MessageSquare className="w-4 h-4 text-emerald-600" /> Enviar Extrato via WhatsApp
               </h4>
               <button onClick={() => setShowWppModal(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-4 h-4" />
@@ -1074,11 +1074,6 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
                 </span>
               </div>
 
-              {/* Uazapi Subscriber Server Info */}
-              <div className="p-2 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-600">
-                <strong>Servidor Uazapi:</strong> {uazapiServerUrl} | <strong>Instância:</strong> {uazapiInstanceToken ? "••••" + uazapiInstanceToken.slice(-4) : "Padrão"}
-              </div>
-
               {/* Status feedback message */}
               {wppStatusMsg && (
                 <div className={`p-2.5 rounded-lg border text-xs font-semibold flex items-center gap-2 ${
@@ -1108,7 +1103,7 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
                 {sendingWpp ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Enviando PDF via Uazapi...</span>
+                    <span>Enviando PDF via WhatsApp...</span>
                   </>
                 ) : (
                   <>

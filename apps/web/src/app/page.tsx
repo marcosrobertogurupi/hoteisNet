@@ -43,7 +43,7 @@ export default function HomePage() {
       <main className="my-auto py-12 z-10 max-w-5xl mx-auto text-center space-y-8">
         <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#0F172A] border border-slate-800 text-xs font-medium text-slate-300">
           <Sparkles className="w-3.5 h-3.5 text-[#F59E0B]" />
-          <span>FNRH Digital Legal + Automação Uazapi WhatsApp + IA Autônoma</span>
+          <span>FNRH Digital Legal + Automação WhatsApp + IA Autônoma</span>
         </div>
 
         <h1 className="text-4xl md:text-6xl font-bold tracking-tight text-white leading-tight">
@@ -115,7 +115,7 @@ export default function HomePage() {
           </div>
           <div className="flex items-center justify-center gap-2">
             <MessageSquareText className="w-4 h-4 text-[#0284C7]" />
-            <span>Automação WhatsApp Uazapi</span>
+            <span>Automação WhatsApp</span>
           </div>
           <div className="flex items-center justify-center gap-2">
             <Building2 className="w-4 h-4 text-[#38BDF8]" />

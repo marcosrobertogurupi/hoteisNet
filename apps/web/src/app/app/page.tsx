@@ -1702,7 +1702,7 @@ export default function TenantDashboardPage() {
                 } disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed`}
               >
                 <MessageSquare className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                Enviar Mensagem (WhatsApp Uazapi)
+                Enviar Mensagem (WhatsApp)
               </button>
 
               <button

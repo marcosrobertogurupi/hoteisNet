@@ -2080,7 +2080,7 @@ export default function CheckinHospedagemModal({
                       ))
                     ) : (
                       <div className="text-[10px] text-slate-500 italic p-2 text-center border border-dashed rounded-lg">
-                        Nenhum telefone cadastrado. Digite um número abaixo para verificar na Uazapi.
+                        Nenhum telefone cadastrado. Digite um número abaixo para verificar no WhatsApp.
                       </div>
                     )}
                   </div>
@@ -2143,7 +2143,7 @@ export default function CheckinHospedagemModal({
                       <div>
                         <div className="flex items-center gap-1.5">
                           <span className="text-[11px] font-extrabold uppercase">WhatsApp Ativo Confirmado</span>
-                          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-emerald-500 text-slate-950 font-bold">Uazapi OK</span>
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-emerald-500 text-slate-950 font-bold">WhatsApp OK</span>
                         </div>
                         <span className="text-[10px] opacity-80 block">
                           Tel: <strong className="font-mono">{whatsappPhone || phone}</strong> {whatsappName ? `(${whatsappName})` : ""}

@@ -489,7 +489,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold truncate">{roomData.guestName || "-"}</span>
                 <span
-                  title={profileCheckFailed ? "Não foi possível confirmar com a instância uazapi — pode estar instável." : undefined}
+                  title={profileCheckFailed ? "Não foi possível confirmar com a instância do WhatsApp — pode estar instável." : undefined}
                   className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
                     hasWhatsapp ? "bg-emerald-500/15 text-emerald-500" : profileCheckFailed ? "bg-amber-500/15 text-amber-500" : "bg-slate-500/15 text-slate-500"
                   }`}

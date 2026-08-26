@@ -110,7 +110,7 @@ export default function TenantReservationsPage() {
         <div>
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <CalendarDays className="w-5 h-5 text-[#0284C7]" />
-            Mapa de Reserva dos Quartos & Automação Wpp Uazapi
+            Mapa de Reserva dos Quartos
           </h2>
           <p className="text-xs text-slate-400 mt-1">
             Matriz interativa de reservas, drag & drop de datas, duplo clique para reservar/editar e remoção por tecla Delete.
