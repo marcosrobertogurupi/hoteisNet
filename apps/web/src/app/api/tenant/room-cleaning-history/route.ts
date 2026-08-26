@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 
-// GET /api/tenant/room-cleaning-history?roomId= — histórico de arrumações (limpeza com
-// hóspede no quarto, tipo OCCUPIED) feitas durante a hospedagem ATUAL do quarto, para o menu de
-// contexto do Mapa de Quartos ("Histórico de Limpeza"). Escopo pela hospedagem ativa: só mostra
-// limpezas concluídas a partir do check-in em vigor, nunca de estadias anteriores.
+// GET /api/tenant/room-cleaning-history?roomId= — histórico de governança do quarto durante a
+// hospedagem ATUAL: arrumações concluídas (tipo OCCUPIED, DONE) e registros de "não perturbe"
+// (SKIPPED), para o menu de contexto do Mapa de Quartos ("Histórico de Limpeza"). Escopo pela
+// hospedagem ativa: só a partir do check-in em vigor, nunca de estadias anteriores.
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
@@ -34,11 +34,12 @@ export async function GET(req: NextRequest) {
         tenantId: resolvedTenantId,
         roomId,
         type: "OCCUPIED",
-        status: "DONE",
+        status: { in: ["DONE", "SKIPPED"] },
         finishedAt: { gte: activeStay.checkInDate },
       },
       select: {
         id: true,
+        status: true,
         finishedAt: true,
         notes: true,
         housekeeper: { select: { name: true } },
@@ -51,6 +52,7 @@ export async function GET(req: NextRequest) {
       hasActiveStay: true,
       cleanings: cleanings.map((c) => ({
         id: c.id,
+        outcome: c.status === "SKIPPED" ? "DND" : "CLEANED",
         housekeeperName: c.housekeeper?.name || "—",
         finishedAt: c.finishedAt,
         notes: c.notes,

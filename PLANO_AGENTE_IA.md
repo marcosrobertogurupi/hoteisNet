@@ -182,11 +182,76 @@ Testando a Fase J via WhatsApp real, ficou claro que `escalate_to_human` não av
   reservas/prospects ficam invisíveis hoje, mas é uma feature bem maior que o alerta sonoro/visual
   já resolve a urgência imediata.
 
+## Fase L — Base de Conhecimento do Hotel (dois níveis + aprendizado) ✅ concluída
+
+Evolução da `SupportKnowledgeBase` rasa (lista plana de Q&A, sem edição) para uma base que o hotel
+mantém de verdade, organizada pelas 12 áreas canônicas de dúvida de hóspede no WhatsApp
+(levantamento do setor — ver o material "Dúvidas mais recorrentes de hóspedes no atendimento via
+WhatsApp"). Decisões travadas com o usuário antes de codar: estrutura em dois níveis; fila de
+sugestões com aprovação humana; qualquer usuário logado edita (sem `requireAdmin`); e — só para a
+Fase 3 — o Agente Operacional pode reescrever sozinho valores desatualizados, com escopo restrito
+(ver Fase L3).
+
+### Fase L1 ✅ (dados + edição humana)
+
+- **Schema**: `HotelKnowledgeTopic` (1 linha por `[tenant, topicKey]` das 12 áreas, `content` texto
+  livre semeado com um texto-guia "Preencha: ..."), `KnowledgeRevision` (histórico append-only de
+  toda edição de conteúdo, para o "Desfazer"), campos novos em `SupportKnowledgeBase` (`topicKey`,
+  `status` ACTIVE/PENDING_REVIEW/ARCHIVED substituindo o antigo `verified`, `lastReviewedAt`,
+  `updatedByName`), e em `AIAgentSetting` (`knowledgeReviewIntervalDays` = 90,
+  `knowledgeAutoRewriteEnabled` = false). RLS habilitado nas 2 tabelas novas
+  (`supabase/migrations/20260826120000_...`).
+- **Seed preguiçoso**: `ensureKnowledgeTopics` (`apps/web/src/lib/knowledgeBase.ts`) roda no GET da
+  tela — sem script de backfill, para não haver dois textos-guia divergindo (a detecção de "tópico
+  ainda com placeholder" em `isTopicFilled` compara com o guia canônico em `lib/knowledgeTopics.ts`).
+- **Rotas**: `GET /api/tenant/knowledge-base` devolve `{ topics, entries }`; `PATCH .../topics/[topicKey]`
+  (editar conteúdo / "marcar como revisado"); `PATCH .../[id]` (editar entrada / aprovar sugestão /
+  arquivar); `GET .../revisions` + `POST .../revisions/[id]/revert`.
+- **Tool `search_knowledge_base`**: agora devolve `{ topicos, perguntas }` — trechos dos documentos
+  por área (máx. 2, truncados a 700 chars) + Q&A só `ACTIVE`. Nunca o documento inteiro (custo).
+- **UI** `/app/cadastros/base-conhecimento`: 12 tópicos em accordion editável com "revisado há N d" /
+  "marcar como revisado", Q&A por tópico (editar/arquivar/excluir), histórico com "Desfazer".
+  Configurações → Agente de IA: link + campo "revisar a cada N dias" + checkbox da reescrita
+  automática (só aparece com autonomia = "Agir sozinho").
+
+### Fase L2 ✅ (aprendizado do agente de atendimento)
+
+- **Fila de sugestões**: ao chamar `escalate_to_human`, o webhook registra a última pergunta do
+  hóspede como `SupportKnowledgeBase { status: PENDING_REVIEW, sourceType: ESCALATION_SUGGESTED }`
+  (`recordAgentKnowledgeGap`, sem chamada de IA, dedupe por pergunta). Nunca vira conhecimento
+  ativo — some na seção "Sugestões do agente" da tela para um humano escrever a resposta e aprovar.
+- **Botão "salvar como conhecimento"** em `MensagensWhatsAppModal.tsx` — em cada mensagem de texto
+  do hóspede; pré-preenche a pergunta e (quando existe) a resposta humana seguinte.
+
+### Fase L3 ✅ (Agente Operacional na Base de Conhecimento)
+
+Em `apps/worker/src/operationalAgent.ts`, só para tenants com o agente de atendimento ligado
+(`AIAgentSetting.enabled`):
+
+- **`KNOWLEDGE_STALE`** (`detectStaleKnowledge`): tópico **já preenchido** (`lastReviewedAt` não
+  nulo) que passou de `knowledgeReviewIntervalDays` sem revisão → alerta + sino, auto-resolve
+  quando o tópico é revisado. Tópico nunca preenchido não gera alerta (a tela já mostra isso).
+- **`KNOWLEDGE_DRIFT`** (`runKnowledgeDrift`): compara os 4 tópicos elegíveis (Serviços/horários,
+  Reserva/preço, Localização/acesso, Check-in/out) com fatos do cadastro (`buildKnowledgeFacts`:
+  `breakfastHours`/`breakfastHoursHoliday`, check-in/out padrão, telefone, endereço, tarifa mais
+  barata, preços de `HotelService`). Pré-filtro por regex (só chama o modelo se há token de valor);
+  1 chamada de IA no máximo a cada 6 h por tenant (throttle em memória). O modelo só **propõe**
+  divergências (`generateStructured` + `responseSchema`); cada proposta passa por um portão
+  determinístico: `valorCorreto` idêntico a um fato, `valorNoTexto` presente literalmente no texto,
+  troca de até 40 caracteres, confiança ≥ 0.8. Se passa **e** `knowledgeAutoRewriteEnabled` +
+  `AUTONOMOUS_LIMITED`: substitui só aquela string, grava `KnowledgeRevision (AGENT_OPERATIONAL)` +
+  `AuditLog (AGENT_KB_UPDATE)`, teto de 3 por ciclo, e o alerta de WhatsApp menciona a correção.
+  Senão: sinaliza como `KNOWLEDGE_DRIFT` para um humano. Nunca toca em texto de política.
+- "Ações do Agente" (`app/relatorios/agente-acoes`) rotula `AGENT_KB_UPDATE`; "Desfazer" na tela da
+  base reverte a edição do agente.
+
 ## O que falta
 
-1. Atalho de salvar conhecimento direto da conversa (único item ainda pendente da Fase C).
-2. Caixa de entrada de WhatsApp independente de stay (ver Fase K acima) — feature maior, ainda não
+1. Caixa de entrada de WhatsApp independente de stay (ver Fase K acima) — feature maior, ainda não
    planejada em detalhe.
+2. Pequeno ajuste: "Desfazer" restaura o `content` mas não o `lastReviewedAt`, então um tópico pode
+   ficar exibindo "Revisado hoje" com o texto-guia de volta (inofensivo — `isTopicFilled` compara o
+   conteúdo, o agente não usa mesmo assim).
 
 ## Lição operacional desta sessão
 

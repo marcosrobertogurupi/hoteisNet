@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Sidebar from "@/components/Sidebar";
 import CashRegisterGate from "@/components/CashRegisterGate";
+import InactivityLock from "@/components/InactivityLock";
 import { Settings, Bell, Bot, ShieldAlert, Check } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -146,6 +147,8 @@ export default function TenantAppLayout({
   }, [user, setOperator]);
 
   return (
+    <>
+    <InactivityLock />
     <CashRegisterGate>
     <div className={`flex h-screen overflow-hidden ${theme.bgApp} ${theme.textMain}`}>
       {/* Retractable Sidebar */}
@@ -204,5 +207,6 @@ export default function TenantAppLayout({
       </div>
     </div>
     </CashRegisterGate>
+    </>
   );
 }

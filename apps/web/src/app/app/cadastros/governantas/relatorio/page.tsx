@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Printer, RefreshCw, Sparkles, Clock, ListChecks, UserCheck } from "lucide-react";
+import { ArrowLeft, Printer, RefreshCw, Sparkles, Clock, ListChecks, UserCheck, DoorClosed } from "lucide-react";
 import RelatorioPrintHeader from "@/components/relatorios/RelatorioPrintHeader";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
@@ -19,6 +19,7 @@ interface HousekeeperStats {
   totalTasks: number;
   checkoutCount: number;
   occupiedCount: number;
+  dndCount: number;
   totalDurationSeconds: number;
   avgDurationSeconds: number;
 }
@@ -27,6 +28,7 @@ interface RecentTask {
   housekeeperName: string;
   roomNumber: string;
   type: "CHECKOUT" | "OCCUPIED";
+  outcome?: "CLEANED" | "DND";
   durationSeconds: number | null;
   finishedAt: string;
 }
@@ -61,7 +63,7 @@ export default function RelatorioLimpezasPage() {
   const [to, setTo] = useState(toISODateInput(new Date()));
 
   const [loading, setLoading] = useState(false);
-  const [overall, setOverall] = useState({ totalTasks: 0, checkoutCount: 0, occupiedCount: 0, totalDurationSeconds: 0, avgDurationSeconds: 0 });
+  const [overall, setOverall] = useState({ totalTasks: 0, checkoutCount: 0, occupiedCount: 0, dndCount: 0, totalDurationSeconds: 0, avgDurationSeconds: 0 });
   const [perHousekeeper, setPerHousekeeper] = useState<HousekeeperStats[]>([]);
   const [recentTasks, setRecentTasks] = useState<RecentTask[]>([]);
 
@@ -79,7 +81,7 @@ export default function RelatorioLimpezasPage() {
   const fetchReport = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ tenantId, from, to });
+      const params = new URLSearchParams({ from, to });
       if (selectedHousekeeperId) params.set("housekeeperId", selectedHousekeeperId);
       const res = await fetch(`/api/tenant/housekeeping-report?${params.toString()}`);
       const data = await res.json();
@@ -197,10 +199,11 @@ export default function RelatorioLimpezasPage() {
       </div>
 
       {/* Painel visual (tela) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 print:hidden">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 print:hidden">
         {[
           { icon: ListChecks, label: "Total de limpezas", value: overall.totalTasks, iconClass: "bg-emerald-500/15 text-emerald-500" },
           { icon: Sparkles, label: "Pós check-out / Arrumação", value: `${overall.checkoutCount} / ${overall.occupiedCount}`, iconClass: "bg-amber-500/15 text-amber-500" },
+          { icon: DoorClosed, label: "Registros de \"não perturbe\"", value: overall.dndCount, iconClass: "bg-slate-500/15 text-slate-400" },
           { icon: Clock, label: "Tempo médio por limpeza", value: formatDuration(overall.avgDurationSeconds), iconClass: "bg-sky-500/15 text-sky-500" },
           { icon: UserCheck, label: "Tempo total dedicado", value: formatDuration(overall.totalDurationSeconds), iconClass: "bg-violet-500/15 text-violet-500" },
         ].map((card, idx) => (
@@ -276,6 +279,7 @@ export default function RelatorioLimpezasPage() {
                   <th className="p-1.5 text-center">Total</th>
                   <th className="p-1.5 text-center">Pós check-out</th>
                   <th className="p-1.5 text-center">Arrumação</th>
+                  <th className="p-1.5 text-center">Não perturbe</th>
                   <th className="p-1.5 text-center">Tempo total</th>
                   <th className="p-1.5 text-center">Tempo médio</th>
                 </tr>
@@ -283,7 +287,7 @@ export default function RelatorioLimpezasPage() {
               <tbody>
                 {perHousekeeper.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-3 text-center text-slate-400 italic">
+                    <td colSpan={7} className="p-3 text-center text-slate-400 italic">
                       {loading ? "Carregando..." : "Nenhuma limpeza concluída no período."}
                     </td>
                   </tr>
@@ -294,6 +298,7 @@ export default function RelatorioLimpezasPage() {
                       <td className="p-1.5 text-center">{h.totalTasks}</td>
                       <td className="p-1.5 text-center">{h.checkoutCount}</td>
                       <td className="p-1.5 text-center">{h.occupiedCount}</td>
+                      <td className="p-1.5 text-center">{h.dndCount}</td>
                       <td className="p-1.5 text-center">{formatDuration(h.totalDurationSeconds)}</td>
                       <td className="p-1.5 text-center">{formatDuration(h.avgDurationSeconds)}</td>
                     </tr>
@@ -331,8 +336,14 @@ export default function RelatorioLimpezasPage() {
                     <td className="p-1.5">{formatDateBR(t.finishedAt)}</td>
                     {!selectedHousekeeperId && <td className="p-1.5">{t.housekeeperName}</td>}
                     <td className="p-1.5 font-bold">{t.roomNumber}</td>
-                    <td className="p-1.5">{t.type === "OCCUPIED" ? "Arrumação" : "Pós check-out"}</td>
-                    <td className="p-1.5 text-right">{formatDuration(t.durationSeconds || 0)}</td>
+                    <td className="p-1.5">
+                      {t.outcome === "DND"
+                        ? "Não perturbe"
+                        : t.type === "OCCUPIED"
+                        ? "Arrumação"
+                        : "Pós check-out"}
+                    </td>
+                    <td className="p-1.5 text-right">{t.outcome === "DND" ? "—" : formatDuration(t.durationSeconds || 0)}</td>
                   </tr>
                 ))
               )}

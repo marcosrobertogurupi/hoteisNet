@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, ChangeEvent } from "react";
+import Link from "next/link";
 import { useTheme, THEMES, ThemeId } from "@/context/ThemeContext";
 import { getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
 import { playWhatsappNotificationSound, playHumanInterventionSound } from "@/utils/notificationSound";
@@ -44,6 +45,7 @@ import {
   UserCheck,
   Percent,
   FileSignature,
+  BookOpen,
 } from "lucide-react";
 
 export default function SubscriberSettingsPage() {
@@ -121,6 +123,27 @@ export default function SubscriberSettingsPage() {
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
 
+  // Dados do Hotel — equivalente à tabela Hotel.fic do sistema legado WinDev, persistido no Tenant.
+  // O assinante edita tudo aqui EXCETO cnpj e cidade/UF (cidade/UF vêm da busca de CEP; cnpj é do
+  // admin master). Ver memória tenant-is-the-windev-hotel-cadastro. A razão social usa o mesmo
+  // estado `inputName` que já alimenta o nome no cabeçalho do SaaS.
+  const [hotelFantasia, setHotelFantasia] = useState("");
+  const [hotelCnpj, setHotelCnpj] = useState(""); // somente-leitura
+  const [hotelEmail, setHotelEmail] = useState("");
+  const [hotelPhone, setHotelPhone] = useState("");
+  const [hotelCep, setHotelCep] = useState("");
+  const [hotelStreet, setHotelStreet] = useState("");
+  const [hotelNumber, setHotelNumber] = useState("");
+  const [hotelNeighborhood, setHotelNeighborhood] = useState("");
+  const [hotelCity, setHotelCity] = useState(""); // somente-leitura (busca de CEP)
+  const [hotelState, setHotelState] = useState(""); // somente-leitura (busca de CEP)
+  const [hotelIE, setHotelIE] = useState("");
+  const [hotelWebsite, setHotelWebsite] = useState("");
+  const [hotelTaxRegime, setHotelTaxRegime] = useState("");
+  const [hotelInterestRate, setHotelInterestRate] = useState("");
+  const [cepLookupLoading, setCepLookupLoading] = useState(false);
+  const [cepLookupError, setCepLookupError] = useState<string | null>(null);
+
   // Horário de virada de diária — persistido no Tenant (usado pelo worker de virada automática)
   const [dailyRolloverTimeInput, setDailyRolloverTimeInput] = useState("14:30");
   const [rolloverSaveError, setRolloverSaveError] = useState<string | null>(null);
@@ -129,6 +152,9 @@ export default function SubscriberSettingsPage() {
   // quando o saldo disponível é insuficiente, em vez de bloquear o lançamento.
   const [allowNegativeStockInput, setAllowNegativeStockInput] = useState(false);
   const [breakfastHoursInput, setBreakfastHoursInput] = useState("");
+  // Horário do café da manhã aos domingos e feriados, quando difere do padrão (seg-sáb). Opcional:
+  // vazio = o agente usa o horário padrão para todos os dias. Ver get_hotel_info no agente de atendimento.
+  const [breakfastHoursHolidayInput, setBreakfastHoursHolidayInput] = useState("");
 
   // Percentual máximo de desconto que um operador comum pode aplicar no check-in sem
   // autorização de administrador — acima disso, o modal de check-in exige senha de admin.
@@ -137,6 +163,10 @@ export default function SubscriberSettingsPage() {
   // Exige preenchimento + assinatura da FNRH pelo hóspede antes de liberar o check-in (reserva
   // ou avulso) — ver CheckinHospedagemModal.tsx e POST /api/stay/checkin.
   const [fnrhMandatoryInput, setFnrhMandatoryInput] = useState(false);
+
+  // Minutos de inatividade até a tela travar e exigir novo login (0 = desativado) — ver
+  // components/InactivityLock.tsx. Também serve como troca rápida de operador no terminal.
+  const [screenLockMinutesInput, setScreenLockMinutesInput] = useState(0);
 
   // Mensagens automáticas de WhatsApp para o hóspede (confirmação de reserva, boas-vindas no
   // check-in, previsão de check-out e check-out) — persistidas no Tenant e lidas pelo worker
@@ -173,12 +203,17 @@ export default function SubscriberSettingsPage() {
   const [aiAgentMonitoringEnabled, setAiAgentMonitoringEnabled] = useState(false);
   const [aiAgentAlertPhone, setAiAgentAlertPhone] = useState("");
   const [aiAgentAutonomyMode, setAiAgentAutonomyMode] = useState("ALERT_ONLY");
+  const [aiAgentKnowledgeReviewDays, setAiAgentKnowledgeReviewDays] = useState(90);
+  const [aiAgentKnowledgeAutoRewrite, setAiAgentKnowledgeAutoRewrite] = useState(false);
   const [aiAgentSaveError, setAiAgentSaveError] = useState<string | null>(null);
 
   // Governança de quartos — modo de atribuição das limpezas às governantas: RECEPTION (recepção
   // define manualmente quem limpa cada quarto) ou QUEUE (fila geral de quartos sujos, qualquer
   // governanta assume pelo app).
   const [housekeepingAssignmentMode, setHousekeepingAssignmentMode] = useState<"RECEPTION" | "QUEUE">("RECEPTION");
+  // Só valem no modo QUEUE (ver PLANO_GOVERNANCA_FILA.md).
+  const [autoDailyArrumacao, setAutoDailyArrumacao] = useState(true);
+  const [arrumacaoSkipCheckinDay, setArrumacaoSkipCheckinDay] = useState(true);
   const [housekeepingSaveError, setHousekeepingSaveError] = useState<string | null>(null);
 
   // Conexão da instância WhatsApp (uazapi) — tela "Configuração do sistema > API Whatsapp" do
@@ -400,12 +435,43 @@ export default function SubscriberSettingsPage() {
         }
         if (data.success) {
           setBreakfastHoursInput(data.settings?.breakfastHours || "");
+          setBreakfastHoursHolidayInput(data.settings?.breakfastHoursHoliday || "");
         }
         if (data.success && typeof data.settings?.maxDiscountPercent === "number") {
           setMaxDiscountPercentInput(data.settings.maxDiscountPercent);
         }
         if (data.success && typeof data.settings?.fnrhMandatoryBeforeCheckin === "boolean") {
           setFnrhMandatoryInput(data.settings.fnrhMandatoryBeforeCheckin);
+        }
+        if (data.success && typeof data.settings?.screenLockMinutes === "number") {
+          setScreenLockMinutesInput(data.settings.screenLockMinutes);
+        }
+        if (data.success && data.settings) {
+          const s = data.settings;
+          setHotelFantasia(s.tradeName || "");
+          setHotelCnpj(s.cnpj || "");
+          setHotelEmail(s.email || "");
+          setHotelPhone(s.phone || "");
+          setHotelCep(s.zipCode || "");
+          setHotelStreet(s.street || "");
+          setHotelNumber(s.number || "");
+          setHotelNeighborhood(s.neighborhood || "");
+          setHotelCity(s.city || "");
+          setHotelState(s.state || "");
+          setHotelIE(s.stateRegistration || "");
+          setHotelWebsite(s.website || "");
+          setHotelTaxRegime(s.taxRegime || "");
+          setHotelInterestRate(s.interestRate != null ? String(s.interestRate) : "");
+          // O nome do hotel agora vem do banco (Tenant.name) — mantém o cabeçalho do SaaS
+          // sincronizado (antes vivia só no localStorage via ThemeContext).
+          if (s.name) {
+            setHotelName(s.name);
+            setInputName(s.name);
+          }
+          if (s.logoUrl) {
+            setHotelLogo(s.logoUrl);
+            setLogoInput(s.logoUrl);
+          }
         }
       })
       .catch(() => {});
@@ -457,6 +523,8 @@ export default function SubscriberSettingsPage() {
         setAiAgentMonitoringEnabled(!!s.monitoringEnabled);
         setAiAgentAlertPhone(s.alertPhone || "");
         setAiAgentAutonomyMode(s.operationalAutonomyMode || "ALERT_ONLY");
+        setAiAgentKnowledgeReviewDays(s.knowledgeReviewIntervalDays ?? 90);
+        setAiAgentKnowledgeAutoRewrite(!!s.knowledgeAutoRewriteEnabled);
       })
       .catch(() => {});
 
@@ -465,6 +533,8 @@ export default function SubscriberSettingsPage() {
       .then((data) => {
         if (!data.success || !data.settings) return;
         setHousekeepingAssignmentMode(data.settings.assignmentMode === "QUEUE" ? "QUEUE" : "RECEPTION");
+        setAutoDailyArrumacao(data.settings.autoDailyArrumacao !== false);
+        setArrumacaoSkipCheckinDay(data.settings.arrumacaoSkipCheckinDay !== false);
       })
       .catch(() => {});
 
@@ -486,6 +556,35 @@ export default function SubscriberSettingsPage() {
   });
   const expirationExampleFormatted = formatExpirationLimit(expirationExample);
 
+  // Busca de CEP (ViaCEP) — mesmo serviço usado no cadastro de hóspede. Preenche logradouro,
+  // bairro, cidade e UF; o assinante pode ajustar logradouro/bairro, mas cidade/UF ficam como a
+  // consulta retornou (não são editáveis livremente por ele).
+  const lookupCep = async () => {
+    const clean = hotelCep.replace(/\D/g, "");
+    if (clean.length !== 8) {
+      setCepLookupError("Informe um CEP com 8 dígitos.");
+      return;
+    }
+    setCepLookupError(null);
+    setCepLookupLoading(true);
+    try {
+      const res = await fetch(`https://viacep.com.br/ws/${clean}/json/`);
+      const data = await res.json();
+      if (data.erro) {
+        setCepLookupError("CEP não encontrado.");
+        return;
+      }
+      if (data.logradouro) setHotelStreet(data.logradouro);
+      if (data.bairro) setHotelNeighborhood(data.bairro);
+      if (data.localidade) setHotelCity(data.localidade);
+      if (data.uf) setHotelState(data.uf);
+    } catch {
+      setCepLookupError("Não foi possível consultar o CEP agora.");
+    } finally {
+      setCepLookupLoading(false);
+    }
+  };
+
   const handleSave = async () => {
     setRolloverSaveError(null);
     try {
@@ -493,11 +592,30 @@ export default function SubscriberSettingsPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          // Dados do Hotel (assinante) — cnpj não é enviado daqui (admin master)
+          name: inputName,
+          tradeName: hotelFantasia,
+          email: hotelEmail,
+          phone: hotelPhone,
+          zipCode: hotelCep,
+          street: hotelStreet,
+          number: hotelNumber,
+          neighborhood: hotelNeighborhood,
+          city: hotelCity || undefined,
+          state: hotelState || undefined,
+          stateRegistration: hotelIE,
+          website: hotelWebsite,
+          taxRegime: hotelTaxRegime || null,
+          interestRate: hotelInterestRate === "" ? null : hotelInterestRate,
+          logoUrl: logoInput || null,
+          // Operacionais
           dailyRolloverTime: dailyRolloverTimeInput,
           allowNegativeStock: allowNegativeStockInput,
           breakfastHours: breakfastHoursInput,
+          breakfastHoursHoliday: breakfastHoursHolidayInput,
           maxDiscountPercent: maxDiscountPercentInput,
           fnrhMandatoryBeforeCheckin: fnrhMandatoryInput,
+          screenLockMinutes: screenLockMinutesInput,
         }),
       });
       const data = await res.json();
@@ -575,6 +693,8 @@ export default function SubscriberSettingsPage() {
           monitoringEnabled: aiAgentMonitoringEnabled,
           alertPhone: aiAgentAlertPhone,
           operationalAutonomyMode: aiAgentAutonomyMode,
+          knowledgeReviewIntervalDays: aiAgentKnowledgeReviewDays,
+          knowledgeAutoRewriteEnabled: aiAgentKnowledgeAutoRewrite,
         }),
       });
       const data = await res.json();
@@ -590,7 +710,11 @@ export default function SubscriberSettingsPage() {
       const res = await fetch("/api/tenant/housekeeping-settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignmentMode: housekeepingAssignmentMode }),
+        body: JSON.stringify({
+          assignmentMode: housekeepingAssignmentMode,
+          autoDailyArrumacao,
+          arrumacaoSkipCheckinDay,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -852,14 +976,128 @@ export default function SubscriberSettingsPage() {
         </div>
       </div>
 
-      {/* SECTION 2: Hotel Logo & Branding */}
+      {/* SECTION 2: Dados do Hotel (Cadastro do Assinante) */}
+      {(() => {
+        const inCls = `w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+          theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+        }`;
+        const roCls = `w-full border rounded-xl px-3 py-2.5 text-sm cursor-not-allowed ${
+          theme.isDark ? "bg-slate-800 border-slate-800 text-slate-400" : "bg-slate-100 border-slate-200 text-slate-500"
+        }`;
+        return (
+          <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+            <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+              <div className="w-10 h-10 rounded-xl bg-[#0284C7]/15 border border-[#0284C7]/30 flex items-center justify-center text-[#0284C7]">
+                <Building className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold">2. Dados do Hotel</h2>
+                <p className={`text-xs ${theme.textMuted}`}>
+                  Cadastro do estabelecimento — aparece no cabeçalho do SaaS e nas impressões. CNPJ e cidade/UF são
+                  definidos pela administração; os demais campos você edita aqui.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">Razão Social</label>
+                <input value={inputName} onChange={(e) => setInputName(e.target.value)} placeholder="Ex: Pousada Sol & Mar LTDA" className={inCls} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">Nome Fantasia</label>
+                <input value={hotelFantasia} onChange={(e) => setHotelFantasia(e.target.value)} placeholder="Ex: Pousada Sol & Mar" className={inCls} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">
+                  CNPJ <span className={theme.textMuted}>(definido pela administração)</span>
+                </label>
+                <input value={hotelCnpj} readOnly className={roCls} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">Inscrição Estadual</label>
+                <input value={hotelIE} onChange={(e) => setHotelIE(e.target.value)} placeholder="Isento / número" className={inCls} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">Regime Tributário</label>
+                <select value={hotelTaxRegime} onChange={(e) => setHotelTaxRegime(e.target.value)} className={inCls}>
+                  <option value="">Não informado</option>
+                  <option value="SIMPLES_NACIONAL">Simples Nacional</option>
+                  <option value="LUCRO_PRESUMIDO">Lucro Presumido</option>
+                  <option value="LUCRO_REAL">Lucro Real</option>
+                  <option value="MEI">MEI</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">Juros de mora <span className={theme.textMuted}>(% ao mês, títulos em atraso)</span></label>
+                <input type="number" min={0} max={100} step="0.01" value={hotelInterestRate} onChange={(e) => setHotelInterestRate(e.target.value)} placeholder="Ex: 2" className={inCls} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">E-mail</label>
+                <input type="email" value={hotelEmail} onChange={(e) => setHotelEmail(e.target.value)} placeholder="reservas@seuhotel.com.br" className={inCls} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold block mb-1.5">Telefone</label>
+                <input value={hotelPhone} onChange={(e) => setHotelPhone(e.target.value)} placeholder="(00) 00000-0000" className={inCls} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs font-semibold block mb-1.5">Site</label>
+                <input value={hotelWebsite} onChange={(e) => setHotelWebsite(e.target.value)} placeholder="https://www.seuhotel.com.br" className={inCls} />
+              </div>
+            </div>
+
+            <div className={`pt-4 border-t ${theme.borderColor}`}>
+              <p className="text-xs font-bold mb-3">Endereço</p>
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                <div className="md:col-span-2">
+                  <label className="text-xs font-semibold block mb-1.5">CEP</label>
+                  <div className="flex gap-2">
+                    <input value={hotelCep} onChange={(e) => setHotelCep(e.target.value)} onBlur={lookupCep} placeholder="00000-000" className={inCls} />
+                    <button
+                      type="button"
+                      onClick={lookupCep}
+                      disabled={cepLookupLoading}
+                      className="px-3 py-2 rounded-xl bg-[#0284C7] text-white text-xs font-semibold hover:bg-[#0369A1] disabled:opacity-50 shrink-0"
+                    >
+                      {cepLookupLoading ? "..." : "Buscar"}
+                    </button>
+                  </div>
+                  {cepLookupError && <p className="text-[11px] text-red-500 mt-1">{cepLookupError}</p>}
+                </div>
+                <div className="md:col-span-3">
+                  <label className="text-xs font-semibold block mb-1.5">Logradouro</label>
+                  <input value={hotelStreet} onChange={(e) => setHotelStreet(e.target.value)} className={inCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold block mb-1.5">Número</label>
+                  <input value={hotelNumber} onChange={(e) => setHotelNumber(e.target.value)} className={inCls} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-xs font-semibold block mb-1.5">Bairro</label>
+                  <input value={hotelNeighborhood} onChange={(e) => setHotelNeighborhood(e.target.value)} className={inCls} />
+                </div>
+                <div className="md:col-span-3">
+                  <label className="text-xs font-semibold block mb-1.5">Cidade <span className={theme.textMuted}>(pelo CEP)</span></label>
+                  <input value={hotelCity} readOnly className={roCls} />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold block mb-1.5">UF <span className={theme.textMuted}>(pelo CEP)</span></label>
+                  <input value={hotelState} readOnly className={roCls} />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* SECTION 3: Hotel Logo & Branding */}
       <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
         <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
           <div className="w-10 h-10 rounded-xl bg-[#F59E0B]/15 border border-[#F59E0B]/30 flex items-center justify-center text-[#F59E0B]">
             <ImageIcon className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-lg font-bold">2. Logo do Hotel (SaaS & Impressões)</h2>
+            <h2 className="text-lg font-bold">3. Logo do Hotel (SaaS & Impressões)</h2>
             <p className={`text-xs ${theme.textMuted}`}>
               Insira o logotipo oficial da sua propriedade para exibição no cabeçalho do SaaS e nos documentos de impressão.
             </p>
@@ -871,25 +1109,7 @@ export default function SubscriberSettingsPage() {
           <div className="space-y-4">
             <div>
               <label className="text-xs font-semibold block mb-1.5">
-                Nome do Hotel / Pousada
-              </label>
-              <div className="relative">
-                <Building className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                <input
-                  type="text"
-                  value={inputName}
-                  onChange={(e) => setInputName(e.target.value)}
-                  placeholder="Ex: Pousada Sol & Mar"
-                  className={`w-full border rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
-                    theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
-                  }`}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold block mb-1.5">
-                Horário do Café da Manhã
+                Horário do Café da Manhã <span className={theme.textMuted}>(segunda a sábado)</span>
               </label>
               <div className="relative">
                 <Clock3 className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
@@ -904,6 +1124,25 @@ export default function SubscriberSettingsPage() {
                 />
               </div>
               <p className={`text-[10px] mt-1 ${theme.textMuted}`}>Usado pelo Agente de Atendimento para responder o hóspede pelo WhatsApp.</p>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold block mb-1.5">
+                Horário do Café da Manhã <span className={theme.textMuted}>(domingos e feriados)</span>
+              </label>
+              <div className="relative">
+                <Clock3 className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                <input
+                  type="text"
+                  value={breakfastHoursHolidayInput}
+                  onChange={(e) => setBreakfastHoursHolidayInput(e.target.value)}
+                  placeholder="Ex: 07:30 às 10:30"
+                  className={`w-full border rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+                    theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+                  }`}
+                />
+              </div>
+              <p className={`text-[10px] mt-1 ${theme.textMuted}`}>Opcional. Se ficar em branco, o Agente de Atendimento usa o horário de segunda a sábado todos os dias. Como o agente não tem calendário de feriados, ao responder num dia que pode ser feriado ele informa os dois horários e deixa o hóspede confirmar.</p>
             </div>
 
             <div>
@@ -1237,6 +1476,66 @@ export default function SubscriberSettingsPage() {
         </div>
       </div>
 
+      {/* SECTION 3.6.5b: Bloqueio de Tela por Inatividade */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-500">
+            <Lock className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">Bloqueio de Tela por Inatividade</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Após esse tempo sem uso (mouse ou teclado), a tela trava, a sessão é encerrada e aparece
+              a tela de login por cima — com a tela atual congelada e embaçada atrás. Quem entrar
+              assume o terminal, inclusive um operador diferente do que estava logado (útil para
+              lançamentos de caixa em recepção compartilhada).
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold block">
+              Travar após (minutos de inatividade)
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                min={0}
+                max={240}
+                step={1}
+                value={screenLockMinutesInput}
+                onChange={(e) => setScreenLockMinutesInput(Math.min(240, Math.max(0, Math.floor(Number(e.target.value) || 0))))}
+                className={`w-full border rounded-xl px-4 py-2.5 pr-16 text-sm focus:outline-none focus:border-sky-500 ${
+                  theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+                }`}
+              />
+              <span className={`absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold ${theme.textMuted}`}>min</span>
+            </div>
+            <p className={`text-[11px] ${theme.textMuted}`}>
+              <strong>0 = desativado.</strong> Só administradores podem alterar. Máximo 240 (4 horas).
+            </p>
+          </div>
+
+          <div className={`p-4 rounded-xl border text-xs font-mono space-y-1 ${
+            theme.isDark ? "bg-slate-950 border-slate-800 text-slate-300" : "bg-slate-50 border-slate-200 text-slate-700"
+          }`}>
+            <p className="text-[11px] font-semibold text-sky-500 uppercase tracking-wider flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5" /> Como funciona
+            </p>
+            {screenLockMinutesInput > 0 ? (
+              <>
+                <p>Sem mexer por {screenLockMinutesInput} min → tela trava e pede login.</p>
+                <p>Mesmo usuário entra de novo → volta de onde parou.</p>
+                <p>Outro usuário entra → assume o terminal e abre o próprio caixa.</p>
+              </>
+            ) : (
+              <p>Recurso desativado — a tela nunca trava sozinha por inatividade.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* SECTION 3.6.6: FNRH Obrigatória no Check-in */}
       <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
         <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
@@ -1338,6 +1637,45 @@ export default function SubscriberSettingsPage() {
             </div>
           </label>
         </div>
+
+        {housekeepingAssignmentMode === "QUEUE" && (
+          <div className={`space-y-3 rounded-xl border p-4 ${theme.isDark ? "border-slate-800 bg-slate-900/40" : "border-slate-200 bg-slate-50"}`}>
+            <p className={`text-[11px] font-semibold uppercase tracking-wider ${theme.textMuted}`}>
+              Arrumação de quartos ocupados
+            </p>
+
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoDailyArrumacao}
+                onChange={(e) => setAutoDailyArrumacao(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
+              />
+              <div>
+                <span className="text-sm font-bold block">Gerar arrumação diária automática</span>
+                <span className={`text-xs ${theme.textMuted}`}>
+                  Todo dia, cada quarto ocupado entra na fila para arrumação (uma vez por quarto por dia). Desligado, só a limpeza pós check-out entra na fila.
+                </span>
+              </div>
+            </label>
+
+            <label className={`flex items-start gap-3 ${autoDailyArrumacao ? "cursor-pointer" : "opacity-50"}`}>
+              <input
+                type="checkbox"
+                disabled={!autoDailyArrumacao}
+                checked={arrumacaoSkipCheckinDay}
+                onChange={(e) => setArrumacaoSkipCheckinDay(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
+              />
+              <div>
+                <span className="text-sm font-bold block">Não gerar arrumação no dia do check-in</span>
+                <span className={`text-xs ${theme.textMuted}`}>
+                  O quarto acabou de ser preparado para a chegada do hóspede — a arrumação começa a partir do dia seguinte.
+                </span>
+              </div>
+            </label>
+          </div>
+        )}
 
         {housekeepingSaveError && (
           <p className="text-[11px] text-red-400">{housekeepingSaveError}</p>
@@ -2438,6 +2776,63 @@ export default function SubscriberSettingsPage() {
                 "Agir sozinho" ainda está em desenvolvimento — por enquanto o agente sempre só alerta, mesmo com essa opção marcada.
               </p>
             </div>
+          </div>
+        </div>
+
+        {/* Base de Conhecimento — o que o agente consulta para responder o hóspede */}
+        <div className={`p-4 rounded-xl border flex flex-col md:flex-row gap-4 ${theme.isDark ? "bg-slate-900/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+          <div className="flex md:flex-col items-center md:items-start gap-2 md:w-40 shrink-0">
+            <div className="flex items-center gap-1.5 text-xs font-bold">
+              <BookOpen className="w-3.5 h-3.5 text-violet-500" />
+              Base de Conhecimento
+            </div>
+          </div>
+          <div className="flex-1 space-y-3">
+            <p className={`text-[11px] ${theme.textMuted}`}>
+              Os 12 tópicos (horários, políticas, serviços, estacionamento...) que o agente de atendimento consulta antes
+              de responder. Mantenha atualizado em{" "}
+              <Link href="/app/cadastros/base-conhecimento" className="text-violet-500 font-semibold hover:underline">
+                Cadastros → Base de Conhecimento do Hotel
+              </Link>
+              .
+            </p>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold">Avisar quando um tópico não for revisado há</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={7}
+                  max={365}
+                  value={aiAgentKnowledgeReviewDays}
+                  onChange={(e) => setAiAgentKnowledgeReviewDays(Number(e.target.value))}
+                  className={`w-20 border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-violet-500 ${theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"}`}
+                />
+                <span className="text-xs">dias</span>
+              </div>
+              <p className={`text-[10px] ${theme.textMuted}`}>
+                O agente de monitoramento avisa a equipe para revisar tópicos parados há mais tempo que isso.
+              </p>
+            </div>
+
+            {aiAgentAutonomyMode === "AUTONOMOUS_LIMITED" && (
+              <label className="flex items-start gap-2 text-xs font-semibold cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={aiAgentKnowledgeAutoRewrite}
+                  onChange={(e) => setAiAgentKnowledgeAutoRewrite(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-violet-500"
+                />
+                <span>
+                  Permitir que o agente operacional corrija sozinho valores desatualizados (preços, horários) na base
+                  quando divergirem do cadastro do sistema — sempre registrado e reversível.
+                  <span className={`block font-normal text-[10px] ${theme.textMuted}`}>
+                    Só valores que batem exatamente com o cadastro, uma correção mínima por vez. Nunca altera texto de
+                    política (cancelamento, regras, pets) — nesses casos apenas avisa.
+                  </span>
+                </span>
+              </label>
+            )}
           </div>
         </div>
       </div>

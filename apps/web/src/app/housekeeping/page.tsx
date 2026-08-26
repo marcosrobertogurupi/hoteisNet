@@ -2,7 +2,19 @@
 
 import { useState, useEffect, useCallback, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, Phone, Lock, Eye, EyeOff, LogOut, RefreshCw, ChevronRight, MessageSquare } from "lucide-react";
+import {
+  Sparkles,
+  Phone,
+  Lock,
+  Eye,
+  EyeOff,
+  LogOut,
+  RefreshCw,
+  ChevronRight,
+  MessageSquare,
+  CheckCircle2,
+  BedDouble,
+} from "lucide-react";
 
 interface HousekeeperInfo {
   id: string;
@@ -15,16 +27,36 @@ interface RoomEntry {
   id: string;
   number: string;
   category: string | null;
+  roomStatus: "VACANT_CLEAN" | "VACANT_DIRTY" | "OCCUPIED" | "MAINTENANCE";
   taskId: string | null;
   type: "CHECKOUT" | "OCCUPIED";
-  status: "PENDING" | "IN_PROGRESS" | "DONE";
+  status: "PENDING" | "IN_PROGRESS";
   notes: string | null;
   startedAt: string | null;
 }
 
+interface ResolvedEntry {
+  id: string;
+  number: string;
+  category: string | null;
+  taskId: string;
+  outcome: "CLEANED" | "DND";
+  resolvedAt: string | null;
+  resolvedByName: string | null;
+  notes: string | null;
+}
+
 interface FloorGroup {
   floor: string;
-  rooms: RoomEntry[];
+  pending: RoomEntry[];
+  resolvedToday: ResolvedEntry[];
+}
+
+function formatTimeBR(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export default function HousekeepingAppPage() {
@@ -212,7 +244,9 @@ export default function HousekeepingAppPage() {
     );
   }
 
-  const totalRooms = floors.reduce((sum, f) => sum + f.rooms.length, 0);
+  const totalPending = floors.reduce((sum, f) => sum + f.pending.length, 0);
+  const totalResolved = floors.reduce((sum, f) => sum + f.resolvedToday.length, 0);
+  const hasAnything = totalPending > 0 || totalResolved > 0;
 
   return (
     <div className="min-h-screen pb-8">
@@ -241,7 +275,7 @@ export default function HousekeepingAppPage() {
       <div className="px-4 py-4 space-y-6">
         <div className="flex items-center justify-between">
           <span className="text-xs font-mono text-slate-400">
-            {totalRooms} quarto{totalRooms !== 1 ? "s" : ""} pendente{totalRooms !== 1 ? "s" : ""}
+            {totalPending} quarto{totalPending !== 1 ? "s" : ""} a limpar
           </span>
           <button
             onClick={() => loadRooms()}
@@ -252,54 +286,105 @@ export default function HousekeepingAppPage() {
           </button>
         </div>
 
-        {floors.length === 0 && !loadingRooms && (
+        {!hasAnything && !loadingRooms && (
           <div className="text-center py-16 space-y-3">
             <Sparkles className="w-10 h-10 text-slate-600 mx-auto" />
             <p className="text-sm font-medium text-slate-300">Nenhum quarto pendente no momento</p>
             <p className="text-xs text-slate-500">
               {assignmentMode === "RECEPTION"
                 ? "Assim que a recepção atribuir um quarto a você, ele aparece aqui."
-                : "Assim que houver um quarto sujo, ele aparece aqui."}
+                : "Assim que houver um quarto para limpar, ele aparece aqui."}
             </p>
           </div>
         )}
 
-        {floors.map((floor) => (
-          <div key={floor.floor} className="space-y-2.5">
-            <h2 className="text-xs font-mono uppercase tracking-wider text-slate-500 px-1">{floor.floor}</h2>
-            <div className="space-y-2.5">
-              {floor.rooms.map((room) => {
-                const badge = getStatusBadge(room);
-                return (
-                  <button
-                    key={room.id}
-                    onClick={() => router.push(`/housekeeping/room/${room.id}`)}
-                    className="w-full flex items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-rose-500/40 transition text-left"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-11 h-11 rounded-xl bg-slate-950 border border-slate-700 flex items-center justify-center font-mono font-bold text-base">
-                        {room.number}
+        {floors.map((floor) => {
+          if (floor.pending.length === 0 && floor.resolvedToday.length === 0) return null;
+          return (
+            <div key={floor.floor} className="space-y-2.5">
+              <h2 className="text-xs font-mono uppercase tracking-wider text-slate-500 px-1">{floor.floor}</h2>
+
+              <div className="space-y-2.5">
+                {floor.pending.map((room) => {
+                  const badge = getStatusBadge(room);
+                  const isOccupied = room.type === "OCCUPIED";
+                  return (
+                    <button
+                      key={room.id}
+                      onClick={() => router.push(`/housekeeping/room/${room.id}`)}
+                      className="w-full flex items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-rose-500/40 transition text-left"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-xl bg-slate-950 border border-slate-700 flex items-center justify-center font-mono font-bold text-base">
+                          {room.number}
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold">{room.category || "Quarto"}</p>
+                          <p className={`text-[11px] flex items-center gap-1 ${isOccupied ? "text-violet-300" : "text-slate-500"}`}>
+                            {isOccupied && <BedDouble className="w-3 h-3" />}
+                            {getTypeLabel(room.type)}
+                          </p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${badge.className}`}>
+                              {badge.text}
+                            </span>
+                            {room.notes && <MessageSquare className="w-3 h-3 text-slate-500" />}
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-sm font-bold">{room.category || "Quarto"}</p>
-                        <p className="text-[11px] text-slate-500">{getTypeLabel(room.type)}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${badge.className}`}>
-                            {badge.text}
-                          </span>
+                      <ChevronRight className="w-5 h-5 text-slate-600" />
+                    </button>
+                  );
+                })}
+              </div>
+
+              {floor.resolvedToday.length > 0 && (
+                <details className="group rounded-2xl bg-slate-900/40 border border-slate-800/80">
+                  <summary className="flex items-center justify-between gap-2 px-4 py-3 cursor-pointer list-none text-[11px] font-semibold text-slate-400">
+                    <span className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                      Resolvidos hoje ({floor.resolvedToday.length})
+                    </span>
+                    <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
+                  </summary>
+                  <div className="px-3 pb-3 space-y-2">
+                    {floor.resolvedToday.map((room) => (
+                      <div
+                        key={room.id}
+                        className="flex items-start gap-3 p-3 rounded-xl bg-slate-950/50 border border-slate-800"
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center font-mono font-bold text-xs shrink-0">
+                          {room.number}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                            {room.outcome === "DND" ? (
+                              <span className="text-amber-400">🚫 Não perturbe</span>
+                            ) : (
+                              <span className="text-emerald-400 flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> Limpo
+                              </span>
+                            )}
+                            <span className="text-slate-500 font-normal">
+                              {formatTimeBR(room.resolvedAt)}
+                              {room.resolvedByName ? ` · ${room.resolvedByName}` : ""}
+                            </span>
+                          </p>
                           {room.notes && (
-                            <MessageSquare className="w-3 h-3 text-slate-500" />
+                            <p className="text-[11px] text-slate-400 mt-0.5 flex items-start gap-1">
+                              <MessageSquare className="w-3 h-3 mt-0.5 shrink-0 text-slate-500" />
+                              {room.notes}
+                            </p>
                           )}
                         </div>
                       </div>
-                    </div>
-                    <ChevronRight className="w-5 h-5 text-slate-600" />
-                  </button>
-                );
-              })}
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

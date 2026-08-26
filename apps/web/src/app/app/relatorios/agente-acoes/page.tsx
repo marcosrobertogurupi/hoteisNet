@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "@/context/ThemeContext";
-import { Bot, CalendarX2, CalendarCheck2, Send, RotateCcw, MessageCircleWarning, ListChecks } from "lucide-react";
+import { Bot, CalendarX2, CalendarCheck2, Send, RotateCcw, MessageCircleWarning, ListChecks, BookOpen } from "lucide-react";
 
 interface AgentAction {
   id: string;
@@ -19,6 +19,7 @@ const ACTION_META: Record<string, { label: string; icon: typeof Bot }> = {
   AGENT_FNRH_RESEND: { label: "Link de pré-check-in reenviado", icon: Send },
   AGENT_FNRH_RETRY_RESET: { label: "Nova chance de envio à FNRH", icon: RotateCcw },
   AGENT_HOUSEKEEPING_NUDGE: { label: "Governanta avisada", icon: MessageCircleWarning },
+  AGENT_KB_UPDATE: { label: "Valor corrigido na Base de Conhecimento", icon: BookOpen },
 };
 
 export default function AgenteAcoesPage() {

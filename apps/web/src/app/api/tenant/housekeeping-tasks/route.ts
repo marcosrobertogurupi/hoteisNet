@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
+import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
-// GET /api/tenant/housekeeping-tasks — tarefas de limpeza em aberto (PENDING ou IN_PROGRESS) do
-// tenant da sessão, usado na tela de atribuição manual (Governança) e no selo visual do Mapa de Quartos.
+// GET /api/tenant/housekeeping-tasks — tarefas de limpeza em aberto do tenant da sessão, usado na
+// tela de atribuição manual (Governança) e no selo visual do Mapa de Quartos. Retorna as tarefas
+// IN_PROGRESS e as PENDING que representam uma atribuição real (feita pela recepção ou limpeza pós
+// check-out) — a arrumação diária automática do modo QUEUE ainda sem governanta fica de fora, para
+// não inflar o payload dos pollings nem virar falsa "atribuição" na Governança. `dndTodayRoomIds`
+// traz os quartos com "não perturbe" registrado hoje, para o selo no Mapa.
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
@@ -11,17 +16,43 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
     const resolvedTenantId = session.tenantId;
+    const today = dateOnlyBrasilia(new Date());
 
-    const tasks = await prisma.housekeepingTask.findMany({
-      where: { tenantId: resolvedTenantId, status: { in: ["PENDING", "IN_PROGRESS"] } },
-      include: {
-        housekeeper: { select: { id: true, name: true, photoUrl: true } },
-        room: { select: { id: true, number: true } },
-      },
-      orderBy: { createdAt: "asc" },
+    const [tasks, dndToday] = await Promise.all([
+      prisma.housekeepingTask.findMany({
+        where: {
+          tenantId: resolvedTenantId,
+          OR: [
+            { status: "IN_PROGRESS" },
+            // PENDING só quando é atribuição de verdade: tem governanta, ou é limpeza pós check-out
+            // (serviceDate nulo). Exclui a arrumação diária automática ainda na fila geral.
+            { status: "PENDING", housekeeperId: { not: null } },
+            { status: "PENDING", serviceDate: null },
+          ],
+        },
+        include: {
+          housekeeper: { select: { id: true, name: true, photoUrl: true } },
+          room: { select: { id: true, number: true } },
+        },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.housekeepingTask.findMany({
+        where: {
+          tenantId: resolvedTenantId,
+          type: "OCCUPIED",
+          status: "SKIPPED",
+          skipReason: "DO_NOT_DISTURB",
+          serviceDate: today,
+        },
+        select: { roomId: true },
+      }),
+    ]);
+
+    return NextResponse.json({
+      success: true,
+      tasks,
+      dndTodayRoomIds: dndToday.map((t) => t.roomId),
     });
-
-    return NextResponse.json({ success: true, tasks });
   } catch (error: any) {
     console.error("[GET /api/tenant/housekeeping-tasks] Erro:", error);
     return NextResponse.json(

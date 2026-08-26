@@ -14,7 +14,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   try {
     const { id } = await params;
     const body = await req.json();
-    const { cpfQueryQuotaMonthly, cpfQueryEnabled, aiSystemPromptExtra, aiTokenQuotaOverride, aiBlocked } = body;
+    const { cpfQueryQuotaMonthly, cpfQueryEnabled, aiSystemPromptExtra, aiTokenQuotaOverride, aiBlocked, cnpj, city, state } = body;
+
+    // Dados do Hotel restritos ao admin master — o assinante vê mas não edita na tela dele
+    // (ver /api/tenant/settings). CNPJ = identidade comercial; cidade/UF ficam com a administração.
+    const hotelData: Record<string, any> = {};
+    if (cnpj !== undefined) {
+      const digits = String(cnpj || "").replace(/\D/g, "");
+      if (digits && digits.length !== 14) {
+        return NextResponse.json({ success: false, error: "CNPJ deve ter 14 dígitos." }, { status: 400 });
+      }
+      hotelData.cnpj = digits || null;
+    }
+    if (city !== undefined) hotelData.city = (String(city || "").trim() || null);
+    if (state !== undefined) hotelData.state = (String(state || "").trim().slice(0, 2).toUpperCase() || null);
+    if (Object.keys(hotelData).length > 0) {
+      await prisma.tenant.update({ where: { id }, data: hotelData });
+    }
 
     if (cpfQueryQuotaMonthly !== undefined) {
       if (typeof cpfQueryQuotaMonthly !== "number" || cpfQueryQuotaMonthly < 0 || !Number.isInteger(cpfQueryQuotaMonthly)) {

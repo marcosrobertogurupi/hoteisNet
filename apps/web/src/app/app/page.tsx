@@ -33,7 +33,8 @@ import {
   Eye,
   EyeOff,
   X,
-  Percent
+  Percent,
+  DoorClosed
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
@@ -264,6 +265,10 @@ export default function TenantDashboardPage() {
     housekeeperName: string | null;
   }>>({});
 
+  // Quartos cuja arrumação de hoje foi marcada como "não perturbe" pela governanta (modo Fila de
+  // quartos). Selo informativo no card — zera na virada do dia.
+  const [dndTodayRoomIds, setDndTodayRoomIds] = useState<Set<string>>(new Set());
+
   // Sincronização automática e transparente a partir do banco de dados (sem piscamento de tela)
   const syncRoomsFromDatabase = useCallback(async () => {
     try {
@@ -282,6 +287,15 @@ export default function TenantDashboardPage() {
             }
           }
           setHousekeepingByRoomId(map);
+
+          const dndIds: string[] = Array.isArray(housekeepingData.dndTodayRoomIds)
+            ? housekeepingData.dndTodayRoomIds
+            : [];
+          setDndTodayRoomIds((prev) => {
+            const next = new Set(dndIds);
+            if (prev.size === next.size && [...prev].every((id) => next.has(id))) return prev;
+            return next;
+          });
         }
       }
 
@@ -1166,6 +1180,14 @@ export default function TenantDashboardPage() {
                     <Sparkles className="w-3 h-3 shrink-0" />
                     {housekeepingByRoomId[room.id].type === "OCCUPIED" ? "Arrumação c/ hóspede" : "Em limpeza"}
                     {housekeepingByRoomId[room.id].housekeeperName ? ` — ${housekeepingByRoomId[room.id].housekeeperName}` : ""}
+                  </div>
+                )}
+
+                {/* 🚪 SELO: HÓSPEDE EM "NÃO PERTURBE" HOJE — registrado pela governanta no app dela */}
+                {!housekeepingByRoomId[room.id] && dndTodayRoomIds.has(room.id) && (
+                  <div className="absolute -top-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap bg-slate-700 text-amber-200 border-amber-400/50">
+                    <DoorClosed className="w-3 h-3 shrink-0" />
+                    Não perturbe hoje
                   </div>
                 )}
 
@@ -2572,7 +2594,6 @@ export default function TenantDashboardPage() {
         <HistoricoLimpezaModal
           isOpen={showHistoricoLimpezaModal}
           onClose={() => setShowHistoricoLimpezaModal(false)}
-          tenantId="tenant-hoteisnet-demo"
           roomId={activeRoom.id}
           roomNumber={activeRoom.number}
         />

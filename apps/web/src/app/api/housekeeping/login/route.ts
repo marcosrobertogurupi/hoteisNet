@@ -7,6 +7,7 @@ import {
   HOUSEKEEPER_SESSION_COOKIE_MAX_AGE,
 } from "@/lib/housekeeperAuth";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { ensureDailyArrumacaoTasks } from "@/lib/housekeeping";
 
 const GENERIC_AUTH_ERROR = "WhatsApp ou senha inválidos.";
 
@@ -52,6 +53,14 @@ export async function POST(req: NextRequest) {
     }
     if (housekeeper.failedLoginAttempts > 0) {
       await prisma.housekeeper.update({ where: { id: housekeeper.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
+    }
+
+    // Semeia a arrumação do dia (modo QUEUE) — a primeira governanta a entrar de manhã já
+    // encontra a fila montada. Não bloqueia o login se falhar.
+    try {
+      await ensureDailyArrumacaoTasks(housekeeper.tenantId);
+    } catch (e) {
+      console.error("[POST /api/housekeeping/login] ensureDailyArrumacaoTasks falhou:", e);
     }
 
     const token = await createHousekeeperSessionToken({

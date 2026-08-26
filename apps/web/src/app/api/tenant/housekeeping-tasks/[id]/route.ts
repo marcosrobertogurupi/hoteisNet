@@ -4,6 +4,8 @@ import { getSessionUser } from "@/lib/auth";
 
 // DELETE /api/tenant/housekeeping-tasks/[id] — cancela uma atribuição ainda não iniciada
 // (só permitido em status PENDING; uma limpeza IN_PROGRESS não pode ser cancelada por aqui).
+// Quando a tarefa é a arrumação diária automática do modo QUEUE (tem serviceDate), não apaga o
+// registro — apenas tira a governanta, devolvendo o quarto para a fila geral.
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getSessionUser(req);
@@ -23,7 +25,14 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       );
     }
 
-    await prisma.housekeepingTask.delete({ where: { id } });
+    if (task.serviceDate) {
+      await prisma.housekeepingTask.updateMany({
+        where: { id, tenantId: session.tenantId, status: "PENDING" },
+        data: { housekeeperId: null, assignedAt: null },
+      });
+    } else {
+      await prisma.housekeepingTask.deleteMany({ where: { id, tenantId: session.tenantId, status: "PENDING" } });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

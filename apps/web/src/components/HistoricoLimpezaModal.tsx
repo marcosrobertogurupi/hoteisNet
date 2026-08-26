@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, Sparkles, User, MessageSquare } from "lucide-react";
+import { X, Sparkles, User, MessageSquare, DoorClosed } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 export interface CleaningHistoryEntry {
   id: string;
+  outcome: "CLEANED" | "DND";
   housekeeperName: string;
   finishedAt: string;
   notes: string | null;
@@ -14,7 +15,6 @@ export interface CleaningHistoryEntry {
 interface HistoricoLimpezaModalProps {
   isOpen: boolean;
   onClose: () => void;
-  tenantId: string;
   roomId: string;
   roomNumber: string;
 }
@@ -25,10 +25,10 @@ function formatDateTimeBR(iso: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} às ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// Histórico de arrumações (limpeza com hóspede no quarto) feitas durante a hospedagem ATUAL —
-// mostra quem limpou, quando e a observação deixada pela governanta. Nunca mostra duração —
-// esse dado é só para acompanhamento interno da gerência em outra tela (relatório de governança).
-export default function HistoricoLimpezaModal({ isOpen, onClose, tenantId, roomId, roomNumber }: HistoricoLimpezaModalProps) {
+// Histórico de governança do quarto durante a hospedagem ATUAL — arrumações feitas (quem limpou,
+// quando, observação) e registros de "não perturbe" deixados pela governanta no app dela. Nunca
+// mostra duração — esse dado é só para o relatório de governança da gerência.
+export default function HistoricoLimpezaModal({ isOpen, onClose, roomId, roomNumber }: HistoricoLimpezaModalProps) {
   const { theme } = useTheme();
   const isDark = theme.isDark;
 
@@ -39,7 +39,7 @@ export default function HistoricoLimpezaModal({ isOpen, onClose, tenantId, roomI
   useEffect(() => {
     if (!isOpen || !roomId) return;
     setLoading(true);
-    fetch(`/api/tenant/room-cleaning-history?roomId=${roomId}&tenantId=${tenantId}`)
+    fetch(`/api/tenant/room-cleaning-history?roomId=${roomId}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.success) {
@@ -49,7 +49,7 @@ export default function HistoricoLimpezaModal({ isOpen, onClose, tenantId, roomI
       })
       .catch((e) => console.error("Erro ao buscar histórico de limpeza:", e))
       .finally(() => setLoading(false));
-  }, [isOpen, roomId, tenantId]);
+  }, [isOpen, roomId]);
 
   if (!isOpen) return null;
 
@@ -62,7 +62,7 @@ export default function HistoricoLimpezaModal({ isOpen, onClose, tenantId, roomI
               <Sparkles className="w-4.5 h-4.5" />
             </div>
             <div>
-              <h2 className={`text-base font-bold ${isDark ? "text-white" : "text-slate-900"}`}>Histórico de Limpeza</h2>
+              <h2 className={`text-base font-bold ${isDark ? "text-white" : "text-slate-900"}`}>Histórico de Governança do Quarto</h2>
               <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-600"}`}>Quarto {roomNumber} — hospedagem atual</p>
             </div>
           </div>
@@ -84,30 +84,43 @@ export default function HistoricoLimpezaModal({ isOpen, onClose, tenantId, roomI
 
           {!loading && hasActiveStay && cleanings.length === 0 && (
             <p className={`text-sm text-center py-8 ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-              Nenhuma limpeza registrada durante esta hospedagem ainda.
+              Nenhum registro de governança durante esta hospedagem ainda.
             </p>
           )}
 
           {!loading &&
-            cleanings.map((c) => (
-              <div key={c.id} className={`p-3.5 rounded-xl border space-y-1.5 ${isDark ? "bg-slate-950/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
-                <div className="flex items-center justify-between">
-                  <span className={`flex items-center gap-1.5 text-sm font-bold ${isDark ? "text-white" : "text-slate-900"}`}>
-                    <User className="w-3.5 h-3.5 text-violet-500" />
-                    {c.housekeeperName}
+            cleanings.map((c) => {
+              const isDnd = c.outcome === "DND";
+              return (
+                <div key={c.id} className={`p-3.5 rounded-xl border space-y-1.5 ${isDark ? "bg-slate-950/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+                  <div className="flex items-center justify-between">
+                    <span className={`flex items-center gap-1.5 text-sm font-bold ${isDark ? "text-white" : "text-slate-900"}`}>
+                      <User className="w-3.5 h-3.5 text-violet-500" />
+                      {c.housekeeperName}
+                    </span>
+                    <span className={`text-[11px] font-mono ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                      {formatDateTimeBR(c.finishedAt)}
+                    </span>
+                  </div>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      isDnd
+                        ? "bg-amber-500/15 text-amber-500 border-amber-500/30"
+                        : "bg-emerald-500/15 text-emerald-500 border-emerald-500/30"
+                    }`}
+                  >
+                    {isDnd ? <DoorClosed className="w-3 h-3" /> : <Sparkles className="w-3 h-3" />}
+                    {isDnd ? "Não perturbe" : "Arrumado"}
                   </span>
-                  <span className={`text-[11px] font-mono ${isDark ? "text-slate-400" : "text-slate-500"}`}>
-                    {formatDateTimeBR(c.finishedAt)}
-                  </span>
+                  {c.notes && (
+                    <p className={`flex items-start gap-1.5 text-xs ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                      <MessageSquare className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-500" />
+                      {c.notes}
+                    </p>
+                  )}
                 </div>
-                {c.notes && (
-                  <p className={`flex items-start gap-1.5 text-xs ${isDark ? "text-slate-300" : "text-slate-700"}`}>
-                    <MessageSquare className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-500" />
-                    {c.notes}
-                  </p>
-                )}
-              </div>
-            ))}
+              );
+            })}
         </div>
       </div>
     </div>

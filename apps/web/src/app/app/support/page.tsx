@@ -1,9 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { LifeBuoy, Sparkles, Send, CheckCircle2, MessageSquare, Plus, ThumbsUp, ThumbsDown, ShieldCheck, Clock } from "lucide-react";
+import { useTheme } from "@/context/ThemeContext";
+import { LifeBuoy, Sparkles, Send, CheckCircle2, Plus, ThumbsUp, ThumbsDown } from "lucide-react";
 
 export default function TenantSupportPage() {
+  const { theme } = useTheme();
+
+  // Superfícies internas (bolhas da IA, campos de texto, botões secundários) seguem o tema
+  // escolhido em Configurações — claro ou escuro.
+  const innerSurface = theme.isDark
+    ? "bg-[#1E293B] border-slate-800 text-slate-200"
+    : "bg-slate-100 border-slate-200 text-slate-700";
+  const inputClass = theme.isDark
+    ? "bg-[#1E293B] border-slate-700 text-white"
+    : "bg-white border-slate-300 text-slate-900";
+  const secondaryBtn = theme.isDark
+    ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+    : "bg-slate-100 text-slate-700 hover:bg-slate-200";
+
   const [tickets, setTickets] = useState([
     {
       id: "TKT-1082",
@@ -97,19 +112,19 @@ export default function TenantSupportPage() {
   return (
     <div className="space-y-6">
       {/* Header Banner */}
-      <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4">
+      <div className={`p-6 rounded-2xl border shadow-lg flex flex-wrap items-center justify-between gap-4 ${theme.bgCard}`}>
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-[#F59E0B]/15 border border-[#F59E0B]/30 flex items-center justify-center text-[#F59E0B]">
             <Sparkles className="w-6 h-6 animate-pulse" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <h2 className="text-lg font-bold flex items-center gap-2">
               Aba de Suporte Inteligente (IA Autônoma)
               <span className="text-xs px-2 py-0.5 rounded-full bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-normal">
                 Aprendizado RAG Ativo
               </span>
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className={`text-xs mt-0.5 ${theme.textMuted}`}>
               Sua dúvida é consultada em tempo real na nossa Base de Conhecimento e histórico de casos resolvidos.
             </p>
           </div>
@@ -128,7 +143,7 @@ export default function TenantSupportPage() {
       <div className="grid md:grid-cols-3 gap-6">
         {/* Left Column: Tickets List */}
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-slate-300 px-1">Meus Chamados</h3>
+          <h3 className={`text-sm font-semibold px-1 ${theme.textMuted}`}>Meus Chamados</h3>
 
           {tickets.map((tkt) => (
             <div
@@ -137,18 +152,18 @@ export default function TenantSupportPage() {
               className={`p-4 rounded-xl border transition-all cursor-pointer space-y-2 ${
                 activeTicket?.id === tkt.id
                   ? "border-[#0284C7] bg-[#0284C7]/10"
-                  : "border-slate-800 bg-[#0F172A] hover:border-slate-700"
+                  : `${theme.bgCard} hover:border-[#0284C7]/50`
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono font-semibold text-[#0284C7]">{tkt.id}</span>
-                <span className="text-[10px] text-slate-400 font-mono">{tkt.createdAt}</span>
+                <span className={`text-[10px] font-mono ${theme.textMuted}`}>{tkt.createdAt}</span>
               </div>
 
-              <h4 className="text-sm font-medium text-white line-clamp-1">{tkt.subject}</h4>
+              <h4 className="text-sm font-medium line-clamp-1">{tkt.subject}</h4>
 
               <div className="flex items-center justify-between pt-1 text-xs">
-                <span className="text-slate-400 text-[11px]">{tkt.category}</span>
+                <span className={`text-[11px] ${theme.textMuted}`}>{tkt.category}</span>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 flex items-center gap-1">
                   <Sparkles className="w-3 h-3" /> IA {tkt.aiConfidence}% Confiança
                 </span>
@@ -158,15 +173,15 @@ export default function TenantSupportPage() {
         </div>
 
         {/* Right Column: Active Ticket Chat & Resolution */}
-        <div className="md:col-span-2 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-col h-[560px] overflow-hidden">
+        <div className={`md:col-span-2 rounded-2xl border flex flex-col h-[560px] overflow-hidden shadow-lg ${theme.bgCard}`}>
           {/* Chat Header */}
-          <div className="p-4 border-b border-slate-800 bg-[#1E293B]/40 flex items-center justify-between">
+          <div className={`p-4 border-b flex items-center justify-between ${theme.borderColor} ${theme.isDark ? "bg-[#1E293B]/40" : "bg-slate-50"}`}>
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-mono text-[#0284C7] font-semibold">{activeTicket?.id}</span>
-                <h3 className="text-sm font-semibold text-white">{activeTicket?.subject}</h3>
+                <h3 className="text-sm font-semibold">{activeTicket?.subject}</h3>
               </div>
-              <span className="text-xs text-slate-400 block mt-0.5">Categoria: {activeTicket?.category}</span>
+              <span className={`text-xs block mt-0.5 ${theme.textMuted}`}>Categoria: {activeTicket?.category}</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -186,7 +201,9 @@ export default function TenantSupportPage() {
                 <div
                   className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
                     msg.sender === "USER"
-                      ? "bg-slate-700 text-white"
+                      ? theme.isDark
+                        ? "bg-slate-700 text-white"
+                        : "bg-slate-200 text-slate-700"
                       : "bg-[#F59E0B]/20 border border-[#F59E0B]/40 text-[#F59E0B]"
                   }`}
                 >
@@ -194,10 +211,10 @@ export default function TenantSupportPage() {
                 </div>
 
                 <div
-                  className={`p-3.5 rounded-2xl text-sm space-y-1.5 ${
+                  className={`p-3.5 rounded-2xl text-sm space-y-1.5 border ${
                     msg.sender === "USER"
-                      ? "bg-[#0284C7] text-white rounded-tr-none"
-                      : "bg-[#1E293B] border border-slate-800 text-slate-200 rounded-tl-none"
+                      ? "bg-[#0284C7] text-white border-transparent rounded-tr-none"
+                      : `${innerSurface} rounded-tl-none`
                   }`}
                 >
                   <div className="flex items-center justify-between gap-4 text-[11px] opacity-80">
@@ -207,7 +224,7 @@ export default function TenantSupportPage() {
                   <p className="leading-relaxed">{msg.content}</p>
 
                   {msg.confidence && (
-                    <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between text-[10px] text-slate-400">
+                    <div className={`pt-2 border-t flex items-center justify-between text-[10px] ${theme.borderColor} ${theme.textMuted}`}>
                       <span>Baseado em {msg.confidence}% de similaridade em tickets fechados</span>
                       <div className="flex items-center gap-2">
                         <span>Esta resposta ajudou?</span>
@@ -222,14 +239,14 @@ export default function TenantSupportPage() {
           </div>
 
           {/* Chat Input */}
-          <div className="p-3 border-t border-slate-800 bg-[#0F172A] flex items-center gap-2">
+          <div className={`p-3 border-t flex items-center gap-2 ${theme.borderColor}`}>
             <input
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
               placeholder="Digite sua dúvida ou resposta..."
-              className="flex-1 bg-[#1E293B] border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#0284C7]"
+              className={`flex-1 border rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
             />
             <button
               onClick={handleSendMessage}
@@ -244,33 +261,33 @@ export default function TenantSupportPage() {
       {/* Modal for Creating New Ticket */}
       {showNewTicketModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0F172A] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-semibold text-white flex items-center gap-2">
+          <div className={`border rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl ${theme.bgCard}`}>
+            <div className={`flex items-center justify-between border-b pb-3 ${theme.borderColor}`}>
+              <h3 className="text-base font-semibold flex items-center gap-2">
                 <LifeBuoy className="w-4 h-4 text-[#0284C7]" />
                 Abrir Chamado de Suporte
               </h3>
-              <button onClick={() => setShowNewTicketModal(false)} className="text-slate-400 hover:text-white text-sm">✕</button>
+              <button onClick={() => setShowNewTicketModal(false)} className={`text-sm ${theme.textMuted} hover:opacity-80`}>✕</button>
             </div>
 
             <div className="space-y-3">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-300">Assunto / Dúvida</label>
+                <label className={`text-xs font-medium ${theme.textMuted}`}>Assunto / Dúvida</label>
                 <input
                   type="text"
                   value={newTicketSubject}
                   onChange={(e) => setNewTicketSubject(e.target.value)}
                   placeholder="Ex: Como faturar diárias para empresa?"
-                  className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#0284C7]"
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
                 />
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-300">Categoria</label>
+                <label className={`text-xs font-medium ${theme.textMuted}`}>Categoria</label>
                 <select
                   value={newTicketCategory}
                   onChange={(e) => setNewTicketCategory(e.target.value)}
-                  className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#0284C7]"
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
                 >
                   <option>FNRH / Governo</option>
                   <option>WhatsApp</option>
@@ -281,21 +298,21 @@ export default function TenantSupportPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-300">Descrição Detalhada</label>
+                <label className={`text-xs font-medium ${theme.textMuted}`}>Descrição Detalhada</label>
                 <textarea
                   rows={3}
                   value={newTicketMessage}
                   onChange={(e) => setNewTicketMessage(e.target.value)}
                   placeholder="Descreva o que ocorreu para a IA analisar a solução..."
-                  className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#0284C7]"
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
+            <div className={`flex justify-end gap-3 pt-3 border-t ${theme.borderColor}`}>
               <button
                 onClick={() => setShowNewTicketModal(false)}
-                className="px-4 py-2 bg-slate-800 text-slate-300 text-sm rounded-lg hover:bg-slate-700"
+                className={`px-4 py-2 text-sm rounded-lg ${secondaryBtn}`}
               >
                 Cancelar
               </button>

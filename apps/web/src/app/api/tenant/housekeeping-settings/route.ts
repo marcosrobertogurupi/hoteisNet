@@ -4,6 +4,8 @@ import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 const DEFAULTS = {
   assignmentMode: "RECEPTION" as "RECEPTION" | "QUEUE",
+  autoDailyArrumacao: true,
+  arrumacaoSkipCheckinDay: true,
 };
 
 // GET /api/tenant/housekeeping-settings — como os quartos são atribuídos às governantas do tenant
@@ -20,7 +22,13 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      settings: settings ? { assignmentMode: settings.assignmentMode } : DEFAULTS,
+      settings: settings
+        ? {
+            assignmentMode: settings.assignmentMode,
+            autoDailyArrumacao: settings.autoDailyArrumacao,
+            arrumacaoSkipCheckinDay: settings.arrumacaoSkipCheckinDay,
+          }
+        : DEFAULTS,
     });
   } catch (error: any) {
     console.error("[GET /api/tenant/housekeeping-settings] Erro:", error);
@@ -40,13 +48,20 @@ export async function PATCH(req: NextRequest) {
     const resolvedTenantId = session!.tenantId!;
 
     const body = await req.json();
-    const { assignmentMode } = body;
+    const { assignmentMode, autoDailyArrumacao, arrumacaoSkipCheckinDay } = body;
 
     if (assignmentMode !== undefined && !["RECEPTION", "QUEUE"].includes(assignmentMode)) {
       return NextResponse.json({ success: false, error: "Modo de atribuição inválido." }, { status: 400 });
     }
 
-    const data = assignmentMode !== undefined ? { assignmentMode } : {};
+    const data: {
+      assignmentMode?: "RECEPTION" | "QUEUE";
+      autoDailyArrumacao?: boolean;
+      arrumacaoSkipCheckinDay?: boolean;
+    } = {};
+    if (assignmentMode !== undefined) data.assignmentMode = assignmentMode;
+    if (typeof autoDailyArrumacao === "boolean") data.autoDailyArrumacao = autoDailyArrumacao;
+    if (typeof arrumacaoSkipCheckinDay === "boolean") data.arrumacaoSkipCheckinDay = arrumacaoSkipCheckinDay;
 
     await prisma.housekeepingSetting.upsert({
       where: { tenantId: resolvedTenantId },

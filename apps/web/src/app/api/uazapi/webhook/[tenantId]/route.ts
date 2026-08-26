@@ -16,6 +16,7 @@ import { sendUazapiText, downloadUazapiMedia, fetchAsBase64 } from "@/lib/uazapi
 import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
 import { prepareConversationContext } from "@/lib/aiAgent/conversationMemory";
 import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
+import { recordAgentKnowledgeGap } from "@/lib/knowledgeBase";
 
 type AgentMessageContent = string | Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: string }>;
 
@@ -159,6 +160,17 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
         await prisma.humanEscalation.create({
           data: { tenantId, source: "SUPPORT_AGENT", reason: escalationReason, guestPhone: phone },
         });
+      }
+
+      // Registra a dúvida como sugestão pendente na Base de Conhecimento (o agente não sabia
+      // responder). Não vira conhecimento ativo — um humano revisa e aprova depois. Sem custo de IA.
+      const lastGuestMsg = await prisma.whatsappMessage.findFirst({
+        where: { tenantId, phone, direction: "IN", type: "text", content: { not: null } },
+        orderBy: { createdAt: "desc" },
+        select: { content: true },
+      });
+      if (lastGuestMsg?.content) {
+        await recordAgentKnowledgeGap({ tenantId, guestQuestion: lastGuestMsg.content, agentSummary: escalationReason });
       }
     }
 

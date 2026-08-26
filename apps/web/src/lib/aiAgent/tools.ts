@@ -306,32 +306,75 @@ async function findGuestByCpf(tenantId: string, cpf: string) {
   return { encontrado: false, origem: null, motivo: hubResult.message };
 }
 
-// RAG leve: sem embeddings/vetores, busca por palavras-chave do título/pergunta/categoria já
-// verificados. Suficiente para o volume esperado de conhecimento por hotel; se a base crescer
-// muito, migrar para busca vetorial no Supabase (pgvector) é o próximo passo natural.
+// RAG leve: sem embeddings/vetores, busca por palavras-chave. Cobre os dois níveis da Base de
+// Conhecimento do Hotel: (1) os 12 "documentos" por área de dúvida que o hotel mantém
+// (HotelKnowledgeTopic) e (2) as perguntas+respostas pontuais aprovadas (SupportKnowledgeBase,
+// status ACTIVE). Retorna só trechos relevantes e truncados — nunca o documento inteiro — para não
+// inflar o prompt/custo. Se a base crescer muito, migrar para busca vetorial (pgvector) é o próximo
+// passo natural.
+const KB_TOPIC_MAX_RESULTS = 2;
+const KB_TOPIC_CONTENT_MAX_CHARS = 700;
+const KB_ENTRY_MAX_RESULTS = 5;
+
+// `content` só guarda informação real do hotel (o texto-guia é placeholder de tela, nunca gravado —
+// ver ensureKnowledgeTopics), então "preenchido" é simplesmente ter conteúdo não vazio.
+function isTopicFilled(topic: { content: string }): boolean {
+  return !!topic.content?.trim();
+}
+
 async function searchKnowledgeBase(tenantId: string, query: string) {
   const keywords = query
     .toLowerCase()
     .split(/\s+/)
     .filter((w) => w.length >= 4)
     .slice(0, 6);
-  if (keywords.length === 0) return [];
+  if (keywords.length === 0) return { topicos: [], perguntas: [] };
 
-  const entries = await prisma.supportKnowledgeBase.findMany({
-    where: {
-      tenantId,
-      agentType: "SUPPORT",
-      verified: true,
-      OR: keywords.flatMap((kw) => [
-        { question: { contains: kw, mode: "insensitive" as const } },
-        { title: { contains: kw, mode: "insensitive" as const } },
-        { category: { contains: kw, mode: "insensitive" as const } },
-      ]),
-    },
-    select: { title: true, category: true, question: true, resolution: true },
-    take: 5,
-  });
-  return entries.map((e) => ({ titulo: e.title, categoria: e.category, pergunta: e.question, resposta: e.resolution }));
+  const [topicsRaw, entries] = await Promise.all([
+    prisma.hotelKnowledgeTopic.findMany({
+      where: {
+        tenantId,
+        active: true,
+        OR: keywords.flatMap((kw) => [
+          { title: { contains: kw, mode: "insensitive" as const } },
+          { content: { contains: kw, mode: "insensitive" as const } },
+        ]),
+      },
+      select: { title: true, content: true },
+    }),
+    prisma.supportKnowledgeBase.findMany({
+      where: {
+        tenantId,
+        agentType: "SUPPORT",
+        status: "ACTIVE",
+        OR: keywords.flatMap((kw) => [
+          { question: { contains: kw, mode: "insensitive" as const } },
+          { title: { contains: kw, mode: "insensitive" as const } },
+          { category: { contains: kw, mode: "insensitive" as const } },
+        ]),
+      },
+      select: { title: true, category: true, question: true, resolution: true },
+      take: KB_ENTRY_MAX_RESULTS,
+    }),
+  ]);
+
+  const topicos = topicsRaw
+    .filter(isTopicFilled)
+    .slice(0, KB_TOPIC_MAX_RESULTS)
+    .map((t) => ({
+      area: t.title,
+      informacao:
+        t.content.length > KB_TOPIC_CONTENT_MAX_CHARS ? t.content.slice(0, KB_TOPIC_CONTENT_MAX_CHARS) + "…" : t.content,
+    }));
+
+  const perguntas = entries.map((e) => ({
+    titulo: e.title,
+    categoria: e.category,
+    pergunta: e.question,
+    resposta: e.resolution,
+  }));
+
+  return { topicos, perguntas };
 }
 
 // Horário padrão de check-in/check-out do hotel. A tela de Configurações ("Horários Padrão de
@@ -634,15 +677,19 @@ async function sendRoomPhotos(tenantId: string, guestPhone: string, categoryName
 async function getHotelInfo(tenantId: string) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { name: true, tradeName: true, phone: true, address: true, city: true, state: true, breakfastHours: true },
+    select: { name: true, tradeName: true, phone: true, breakfastHours: true, breakfastHoursHoliday: true },
   });
+  // Deliberadamente sem endereço/cidade/estado: o cadastro do Tenant só tem esses campos parciais
+  // (às vezes só a cidade, às vezes errados) e o agente respondia "o hotel fica em <cidade>", que é
+  // inútil para quem quer chegar. Localização, endereço, mapa, estacionamento e transfer vêm do
+  // tópico "Localização" da base de conhecimento (search_knowledge_base).
   return {
     nome: tenant?.tradeName || tenant?.name,
     telefone: tenant?.phone,
-    endereco: tenant?.address,
-    cidade: tenant?.city,
-    estado: tenant?.state,
+    // Horário padrão do café da manhã (segunda a sábado).
     horarioCafeDaManha: tenant?.breakfastHours || null,
+    // Horário do café da manhã aos domingos e feriados. Se null, vale o horário padrão todos os dias.
+    horarioCafeDaManhaDomingosEFeriados: tenant?.breakfastHoursHoliday || null,
   };
 }
 
@@ -753,7 +800,8 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
     }),
 
     get_hotel_info: tool({
-      description: "Retorna informações institucionais do hotel (nome, telefone, endereço, horário do café da manhã).",
+      description:
+        "Retorna nome, telefone e horário do café da manhã do hotel (de segunda a sábado e, quando houver, o horário diferente para domingos e feriados). NÃO tem endereço, localização, estacionamento nem transfer — para isso use search_knowledge_base (tópico 'Localização').",
       inputSchema: z.object({}),
       execute: async () => await getHotelInfo(tenantId),
     }),
@@ -766,11 +814,11 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     search_knowledge_base: tool({
       description:
-        "Busca na base de conhecimento deste hotel por respostas já validadas para perguntas parecidas (regras da casa, políticas, dúvidas recorrentes). Use antes de dizer que não sabe algo ou de escalar para um humano.",
+        "Consulta a base de conhecimento deste hotel: localização, endereço, como chegar, estacionamento, transfer, regras da casa, políticas (cancelamento, pets, crianças), horários, o que a diária inclui, formas de pagamento, recomendações locais e dúvidas recorrentes. Retorna `topicos` (trechos do manual que o hotel mantém, por área) e `perguntas` (perguntas+respostas pontuais já aprovadas). Use SEMPRE antes de dizer que não sabe algo ou de escalar para um humano. Se vier vazio, aí sim escale.",
       inputSchema: z.object({
         query: z.string().describe("A pergunta ou tópico do hóspede, em texto livre"),
       }),
-      execute: async ({ query }) => ({ resultados: await searchKnowledgeBase(tenantId, query) }),
+      execute: async ({ query }) => await searchKnowledgeBase(tenantId, query),
     }),
 
     create_reservation: tool({

@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound, Download, Image as ImageIcon, Bot } from "lucide-react";
+import { X, Send, Paperclip, MessageCircle, FileText, ShoppingBag, Receipt, Trash2, Eye, EyeOff, UserRound, Download, Image as ImageIcon, Bot, BookOpen } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { KNOWLEDGE_TOPIC_ORDER, KNOWLEDGE_TOPIC_LABEL } from "@/lib/knowledgeTopicLabels";
 import { generateExtratoPdfBase64, generateResumoPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
 import type { ExtratoRoomData } from "@/components/ImprimirExtratoHospedagemModal";
 
@@ -63,6 +64,12 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   const [sendingText, setSendingText] = useState(false);
   const [sendingDocType, setSendingDocType] = useState<"resumo" | "consumo" | "extrato" | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // "Salvar como conhecimento": a partir de uma pergunta do hóspede na conversa, cria uma entrada
+  // na Base de Conhecimento do Hotel para o agente de atendimento reaproveitar depois.
+  const [kbForm, setKbForm] = useState<null | { question: string; answer: string; title: string; topicKey: string }>(null);
+  const [kbSaving, setKbSaving] = useState(false);
+  const [kbStatus, setKbStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const phone = roomData.phone || "";
 
@@ -251,6 +258,48 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
       loadMessages();
     } catch {
       // log local é best-effort — não deve bloquear o fluxo de envio
+    }
+  };
+
+  const openSaveKnowledge = (m: SentMessage) => {
+    const idx = messages.findIndex((x) => x.id === m.id);
+    const nextOut = idx >= 0 ? messages.slice(idx + 1).find((x) => x.direction === "OUT" && x.content) : undefined;
+    setKbStatus(null);
+    setKbForm({
+      question: m.content || "",
+      answer: nextOut?.content || "",
+      title: (m.content || "").trim().slice(0, 60),
+      topicKey: "",
+    });
+  };
+
+  const saveKnowledge = async () => {
+    if (!kbForm || !kbForm.question.trim() || !kbForm.answer.trim()) return;
+    setKbSaving(true);
+    setKbStatus(null);
+    try {
+      const res = await fetch("/api/tenant/knowledge-base", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: kbForm.title.trim() || kbForm.question.trim().slice(0, 60),
+          question: kbForm.question.trim(),
+          resolution: kbForm.answer.trim(),
+          agentType: "SUPPORT",
+          topicKey: kbForm.topicKey || null,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setKbStatus({ type: "success", text: "Salvo na Base de Conhecimento." });
+        setTimeout(() => setKbForm(null), 900);
+      } else {
+        setKbStatus({ type: "error", text: data.error || "Erro ao salvar." });
+      }
+    } catch {
+      setKbStatus({ type: "error", text: "Erro de rede ao salvar." });
+    } finally {
+      setKbSaving(false);
     }
   };
 
@@ -642,6 +691,15 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
                       </div>
                     )}
                     {m.content && <p>{m.content}</p>}
+                    {isIn && m.type === "text" && m.content && (
+                      <button
+                        onClick={() => openSaveKnowledge(m)}
+                        title="Salvar esta pergunta e a resposta na Base de Conhecimento do agente"
+                        className={`mt-1 flex items-center gap-1 text-[10px] font-semibold ${theme.textMuted} hover:text-violet-500`}
+                      >
+                        <BookOpen className="w-3 h-3" /> salvar como conhecimento
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -709,6 +767,86 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
             style={expandedImgSize ? { width: expandedImgSize.w, height: expandedImgSize.h } : undefined}
             className={`rounded-xl object-contain shadow-2xl cursor-default ${expandedImgSize ? "" : "opacity-0"}`}
           />
+        </div>
+      )}
+
+      {/* Mini-modal: salvar pergunta+resposta na Base de Conhecimento do agente */}
+      {kbForm && (
+        <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`rounded-2xl max-w-md w-full p-5 space-y-3 shadow-2xl border ${theme.isDark ? "bg-slate-900 border-slate-700 text-slate-100" : "bg-white border-slate-200 text-slate-900"}`}>
+            <div className="flex items-center justify-between border-b border-slate-500/20 pb-2">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-violet-500" /> Salvar como conhecimento
+              </h3>
+              <button onClick={() => setKbForm(null)}>
+                <X className="w-4 h-4 opacity-60" />
+              </button>
+            </div>
+            <p className={`text-[11px] ${theme.textMuted}`}>
+              O agente de atendimento vai reaproveitar esta resposta em perguntas parecidas de outros hóspedes.
+            </p>
+            <div className="space-y-2 text-xs">
+              <div className="space-y-1">
+                <label className="font-semibold">Tópico</label>
+                <select
+                  value={kbForm.topicKey}
+                  onChange={(e) => setKbForm((f) => (f ? { ...f, topicKey: e.target.value } : f))}
+                  className={`w-full border rounded-lg px-3 py-2 ${theme.isDark ? "bg-slate-800 border-slate-700" : "bg-white border-slate-300"}`}
+                >
+                  <option value="">(sem tópico)</option>
+                  {KNOWLEDGE_TOPIC_ORDER.map((k) => (
+                    <option key={k} value={k}>
+                      {KNOWLEDGE_TOPIC_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">Título curto</label>
+                <input
+                  value={kbForm.title}
+                  onChange={(e) => setKbForm((f) => (f ? { ...f, title: e.target.value } : f))}
+                  className={`w-full border rounded-lg px-3 py-2 ${theme.isDark ? "bg-slate-800 border-slate-700" : "bg-white border-slate-300"}`}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">Pergunta</label>
+                <textarea
+                  value={kbForm.question}
+                  onChange={(e) => setKbForm((f) => (f ? { ...f, question: e.target.value } : f))}
+                  rows={2}
+                  className={`w-full border rounded-lg px-3 py-2 ${theme.isDark ? "bg-slate-800 border-slate-700" : "bg-white border-slate-300"}`}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">Resposta certa</label>
+                <textarea
+                  value={kbForm.answer}
+                  onChange={(e) => setKbForm((f) => (f ? { ...f, answer: e.target.value } : f))}
+                  rows={4}
+                  placeholder="Escreva a resposta que o agente deve dar."
+                  className={`w-full border rounded-lg px-3 py-2 ${theme.isDark ? "bg-slate-800 border-slate-700" : "bg-white border-slate-300"}`}
+                />
+              </div>
+            </div>
+            {kbStatus && (
+              <p className={`text-[11px] font-semibold ${kbStatus.type === "success" ? "text-emerald-500" : "text-red-500"}`}>
+                {kbStatus.text}
+              </p>
+            )}
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-500/20">
+              <button onClick={() => setKbForm(null)} className="px-3 py-1.5 text-xs rounded-lg opacity-70 hover:opacity-100">
+                Cancelar
+              </button>
+              <button
+                onClick={saveKnowledge}
+                disabled={kbSaving || !kbForm.question.trim() || !kbForm.answer.trim()}
+                className="px-4 py-1.5 bg-violet-500 hover:bg-violet-600 disabled:opacity-50 text-white text-xs rounded-lg font-bold"
+              >
+                {kbSaving ? "Salvando..." : "Salvar"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

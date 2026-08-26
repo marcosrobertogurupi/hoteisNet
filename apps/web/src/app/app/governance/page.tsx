@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Sparkles, Timer, X, User, MoveRight } from "lucide-react";
+import { Sparkles, Timer, X, User, MoveRight, DoorClosed } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import LoadingOverlay from "@/components/LoadingOverlay";
 
@@ -47,7 +47,10 @@ export default function TenantGovernancePage() {
   const [assignmentMode, setAssignmentMode] = useState<"RECEPTION" | "QUEUE">("RECEPTION");
   const [housekeepers, setHousekeepers] = useState<Housekeeper[]>([]);
   const [tasksByRoom, setTasksByRoom] = useState<Record<string, HousekeepingTask>>({});
+  // Quartos ocupados cuja arrumação de hoje a governanta marcou como "não perturbe" (modo QUEUE).
+  const [dndRoomIds, setDndRoomIds] = useState<string[]>([]);
   const [assigningRoomId, setAssigningRoomId] = useState<string | null>(null);
+  const [reopeningRoomId, setReopeningRoomId] = useState<string | null>(null);
 
   // Id do quarto/governanta que está recebendo o hover do arrasto no momento — usado só para
   // destacar visualmente o alvo válido durante o drag, não afeta os dados.
@@ -76,6 +79,11 @@ export default function TenantGovernancePage() {
           for (const t of tasksData.tasks) map[t.roomId] = t;
           setTasksByRoom((prev) => (JSON.stringify(prev) === JSON.stringify(map) ? prev : map));
         }
+        if (tasksData.success && Array.isArray(tasksData.dndTodayRoomIds)) {
+          setDndRoomIds((prev) =>
+            JSON.stringify(prev) === JSON.stringify(tasksData.dndTodayRoomIds) ? prev : tasksData.dndTodayRoomIds
+          );
+        }
       })
       .catch((e) => console.error("Erro ao carregar dados de governança de limpeza:", e));
   }, []);
@@ -83,7 +91,7 @@ export default function TenantGovernancePage() {
   // `silent` evita o overlay de carregamento nas atualizações automáticas em segundo plano.
   const loadRooms = useCallback((silent = false) => {
     if (!silent) setIsLoadingRooms(true);
-    return fetch(`/api/reservations/rooms?tenantId=tenant-hoteisnet-demo`)
+    return fetch(`/api/reservations/rooms`)
       .then((r) => r.json())
       .then((data) => {
         if (data.success && Array.isArray(data.rooms)) {
@@ -145,6 +153,30 @@ export default function TenantGovernancePage() {
     } finally {
       setAssigningRoomId(null);
       setDragOverId(null);
+    }
+  };
+
+  const handleReopen = async (roomId: string) => {
+    const room = rooms.find((r) => r.id === roomId);
+    setReopeningRoomId(roomId);
+    try {
+      const res = await fetch("/api/tenant/housekeeping-tasks/reopen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        notify("error", data.error || "Erro ao devolver o quarto à fila.");
+        return;
+      }
+      setDndRoomIds((prev) => prev.filter((id) => id !== roomId));
+      notify("success", `Arrumação do quarto ${room?.number ?? ""} devolvida à fila.`);
+      loadHousekeepingData();
+    } catch (err: any) {
+      notify("error", err.message || "Erro de rede ao devolver o quarto à fila.");
+    } finally {
+      setReopeningRoomId(null);
     }
   };
 
@@ -299,6 +331,25 @@ export default function TenantGovernancePage() {
                     {isOccupiedType ? "Ocupado" : "Pós check-out"}
                   </span>
                 </div>
+
+                {assignmentMode === "QUEUE" && !task && dndRoomIds.includes(room.id) && (
+                  <div className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${
+                    isDark ? "bg-amber-500/10 text-amber-300" : "bg-amber-100 text-amber-700"
+                  }`}>
+                    <span className="flex items-center gap-1.5">
+                      <DoorClosed className="w-3.5 h-3.5 shrink-0" /> Não perturbe hoje
+                    </span>
+                    <button
+                      onClick={() => handleReopen(room.id)}
+                      disabled={reopeningRoomId === room.id}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition shrink-0 disabled:opacity-60 ${
+                        isDark ? "bg-slate-800 text-emerald-400 hover:bg-emerald-600 hover:text-white" : "bg-white text-emerald-600 hover:bg-emerald-600 hover:text-white"
+                      }`}
+                    >
+                      {reopeningRoomId === room.id ? "..." : "Devolver à fila"}
+                    </button>
+                  </div>
+                )}
 
                 {task?.status === "IN_PROGRESS" ? (
                   <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold animate-pulse ${

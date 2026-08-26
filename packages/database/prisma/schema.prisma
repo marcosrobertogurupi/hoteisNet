@@ -46,84 +46,107 @@ model Municipality {
 }
 
 model Tenant {
-  id                      String                  @id @default(uuid())
-  name                    String
-  tradeName               String?
-  cnpj                    String?                 @unique
-  cadastur                String?
-  status                  TenantStatus            @default(TRIAL)
-  email                   String
-  phone                   String?
-  city                    String?
-  state                   String?
-  address                 String?
-  zipCode                 String?
-  logoUrl                 String?
-  createdAt               DateTime                @default(now())
-  updatedAt               DateTime                @updatedAt
-  dailyRolloverTime       String                  @default("14:30")
-  allowNegativeStock      Boolean                 @default(false)
-  breakfastHours          String? // ex: "07:00 às 10:00" — usado pelo agente de atendimento (get_hotel_info)
-  cpfQueryQuotaMonthly    Int                     @default(100)
-  cpfQueryUsed            Int                     @default(0)
-  cpfQueryCycleStart      DateTime                @default(now())
+  id                         String                  @id @default(uuid())
+  name                       String
+  tradeName                  String?
+  cnpj                       String?                 @unique
+  cadastur                   String?
+  status                     TenantStatus            @default(TRIAL)
+  email                      String
+  phone                      String?
+  // Endereço estruturado do hotel — equivalente aos campos Hot_Logradouro/Hot_Numero/Hot_Bairro/
+  // Hot_Cidade/Hot_UF/Hot_CEP da tabela Hotel.fic do sistema legado WinDev (ver memória
+  // tenant-is-the-windev-hotel-cadastro). `address` (texto livre) está deprecado — usar os campos
+  // estruturados; tenantHeader.ts monta a linha de endereço a partir deles.
+  street                     String?
+  number                     String?
+  neighborhood               String?
+  city                       String?
+  state                      String?
+  address                    String? // DEPRECADO — usar street/number/neighborhood
+  zipCode                    String?
+  // Inscrição Estadual (Hot_IE) e regime tributário (Hot_Regime: 01 Simples Nacional / 02 Lucro
+  // Presumido / 03 Lucro Real / 04 MEI). Editáveis pelo assinante em Configurações > Dados do Hotel.
+  stateRegistration          String?
+  taxRegime                  TaxRegime?
+  // Site do hotel (Hot_Site) e percentual de juros de mora para títulos em atraso (Hot_Juros).
+  website                    String?
+  interestRate               Decimal?                @db.Decimal(5, 2)
+  logoUrl                    String?
+  createdAt                  DateTime                @default(now())
+  updatedAt                  DateTime                @updatedAt
+  dailyRolloverTime          String                  @default("14:30")
+  allowNegativeStock         Boolean                 @default(false)
+  breakfastHours             String? // ex: "07:00 às 10:00" — horário padrão (seg-sáb), usado pelo agente de atendimento (get_hotel_info)
+  // Horário do café da manhã aos domingos e feriados, quando difere do padrão (comum em hotéis/pousadas).
+  // Opcional: se ficar vazio, o agente usa breakfastHours para todos os dias. Ver get_hotel_info / Configurações.
+  breakfastHoursHoliday      String?
+  cpfQueryQuotaMonthly       Int                     @default(100)
+  cpfQueryUsed               Int                     @default(0)
+  cpfQueryCycleStart         DateTime                @default(now())
   // Liga/desliga o serviço de consulta de CPF (Hub do Desenvolvedor) por assinante — controle
   // exclusivo do Painel SuperAdmin, distinto da cota mensal: um assinante pode ter cota > 0 e
   // ainda assim estar com o recurso desabilitado no plano contratado.
-  cpfQueryEnabled         Boolean                 @default(true)
+  cpfQueryEnabled            Boolean                 @default(true)
   // Percentual máximo de desconto que um operador comum pode aplicar no check-in sem autorização
   // de administrador (ShieldCheck/AdminAuthorizationModal). Configurável pelo próprio assinante em
   // Configurações — acima desse percentual, exige senha de admin, igual à cortesia de madrugada.
-  maxDiscountPercent      Decimal                 @default(20) @db.Decimal(5, 2)
+  maxDiscountPercent         Decimal                 @default(20) @db.Decimal(5, 2)
   // Exige preenchimento + assinatura da FNRH pelo hóspede antes de liberar o check-in (reserva ou
   // avulso). Configurável pelo assinante em Configurações — default false preserva o comportamento atual.
-  fnrhMandatoryBeforeCheckin Boolean              @default(false)
-  accountPlans            AccountPlan[]
-  aiAgentSettings         AIAgentSetting?
-  aiUsageLogs             AIUsageLog[]
-  cashRegisters           CashRegister[]          @relation("TenantCashRegisters")
-  companies               Company[]
-  banks                   Bank[]
-  employees               Employee[]
-  productGroups           ProductGroup[]
-  salesPoints             SalesPoint[]
-  dishes                  Dish[]
-  hotelTables             HotelTable[]
-  emailSettings           EmailSetting?
-  floors                  Floor[]
-  guests                  Guest[]
-  housekeepers            Housekeeper[]
-  housekeepingTasks       HousekeepingTask[]
-  housekeepingSettings    HousekeepingSetting?
-  paymentMethods          PaymentMethod[]
-  accountsReceivable      AccountsReceivable[]
-  accountsPayable         AccountsPayable[]
-  guestBalanceEntries     GuestBalanceEntry[]
-  posLocations            POSLocation[]
-  products                Product[]
-  reservations            Reservation[]           @relation("TenantReservations")
-  roomCategories          RoomCategory[]
-  rooms                   Room[]
-  occupancySnapshots      RoomOccupancySnapshot[]
-  subscriptions           SaASSubscription[]
-  preCheckinLinks         PreCheckinLink[]
-  checkins                StayCheckin[]
-  debitTransfers          StayDebitTransfer[]
-  suppliers               Supplier[]
-  supportTickets          SupportTicket[]
-  supportKnowledgeBase    SupportKnowledgeBase[]
-  operationalAlertLogs    OperationalAlertLog[]
-  humanEscalations        HumanEscalation[]
-  hotelServices           HotelService[]
-  tariffs                 Tariff[]
-  activityLogs            AuditLog[]
-  uazapiSettings          UazapiSetting?
-  snrhosSettings          SNRHosSetting?
-  users                   User[]
-  vehicles                Vehicle[]
-  whatsappMessageSettings WhatsappMessageSetting?
-  whatsappMessages        WhatsappMessage[]
-  conversationMemories    ConversationMemory[]
+  fnrhMandatoryBeforeCheckin Boolean                 @default(false)
+  // Minutos de inatividade (sem mouse/teclado) até a tela travar e exigir novo login. 0 = desativado.
+  // Configurável só pelo admin em Configurações. Serve também para troca rápida de operador no terminal
+  // (quem autenticar na tela de bloqueio assume a sessão). Ver components/InactivityLock.tsx.
+  screenLockMinutes          Int                     @default(0)
+  accountPlans               AccountPlan[]
+  aiAgentSettings            AIAgentSetting?
+  aiUsageLogs                AIUsageLog[]
+  cashRegisters              CashRegister[]          @relation("TenantCashRegisters")
+  companies                  Company[]
+  banks                      Bank[]
+  employees                  Employee[]
+  productGroups              ProductGroup[]
+  salesPoints                SalesPoint[]
+  dishes                     Dish[]
+  hotelTables                HotelTable[]
+  emailSettings              EmailSetting?
+  floors                     Floor[]
+  guests                     Guest[]
+  housekeepers               Housekeeper[]
+  housekeepingTasks          HousekeepingTask[]
+  housekeepingSettings       HousekeepingSetting?
+  paymentMethods             PaymentMethod[]
+  accountsReceivable         AccountsReceivable[]
+  accountsPayable            AccountsPayable[]
+  guestBalanceEntries        GuestBalanceEntry[]
+  posLocations               POSLocation[]
+  products                   Product[]
+  reservations               Reservation[]           @relation("TenantReservations")
+  roomCategories             RoomCategory[]
+  rooms                      Room[]
+  occupancySnapshots         RoomOccupancySnapshot[]
+  subscriptions              SaASSubscription[]
+  preCheckinLinks            PreCheckinLink[]
+  checkins                   StayCheckin[]
+  debitTransfers             StayDebitTransfer[]
+  suppliers                  Supplier[]
+  supportTickets             SupportTicket[]
+  supportKnowledgeBase       SupportKnowledgeBase[]
+  knowledgeTopics            HotelKnowledgeTopic[]
+  knowledgeRevisions         KnowledgeRevision[]
+  operationalAlertLogs       OperationalAlertLog[]
+  humanEscalations           HumanEscalation[]
+  hotelServices              HotelService[]
+  tariffs                    Tariff[]
+  activityLogs               AuditLog[]
+  uazapiSettings             UazapiSetting?
+  snrhosSettings             SNRHosSetting?
+  users                      User[]
+  vehicles                   Vehicle[]
+  whatsappMessageSettings    WhatsappMessageSetting?
+  whatsappMessages           WhatsappMessage[]
+  conversationMemories       ConversationMemory[]
 
   @@map("tenants")
 }
@@ -155,7 +178,7 @@ model User {
   active              Boolean         @default(true)
   // Incrementado ao desativar o usuário, trocar senha ou mudar o role — invalida instantaneamente
   // qualquer JWT de sessão já emitido antes da mudança (ver getSessionUser em lib/auth.ts).
-  tokenVersion         Int            @default(0)
+  tokenVersion        Int             @default(0)
   // Proteção contra força bruta no login (ver checkAndRegisterLoginAttempt em lib/auth.ts).
   failedLoginAttempts Int             @default(0)
   lockedUntil         DateTime?
@@ -238,20 +261,31 @@ model TicketMessage {
 // salva quando um humano resolve algo que o agente não soube, consultada em conversas parecidas
 // no futuro). Ver Fase G em PLANO_AGENTE_IA.md.
 model SupportKnowledgeBase {
-  id         String             @id @default(uuid())
-  tenantId   String
-  agentType  KnowledgeAgentType @default(SUPPORT)
-  sourceType String             @default("MANUAL") // MANUAL | HUMAN_CORRECTION | ESCALATION_RESOLVED
-  title      String
-  category   String
-  question   String
-  resolution String
-  verified   Boolean            @default(true)
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @updatedAt
-  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id             String               @id @default(uuid())
+  tenantId       String
+  agentType      KnowledgeAgentType   @default(SUPPORT)
+  // MANUAL | HUMAN_CORRECTION | ESCALATION_RESOLVED | ESCALATION_SUGGESTED
+  // ESCALATION_SUGGESTED = rascunho criado pelo agente ao escalar por não saber algo; nasce com
+  // status PENDING_REVIEW e só é consultado pelos agentes depois que um humano aprova (status ACTIVE).
+  sourceType     String               @default("MANUAL")
+  title          String
+  category       String
+  // Categorização opcional numa das 12 áreas canônicas de dúvida do hóspede (ver HotelKnowledgeTopic).
+  topicKey       KnowledgeTopicKey?
+  question       String
+  resolution     String
+  // Substitui o antigo booleano `verified`: ACTIVE = aprovada e usada pelos agentes;
+  // PENDING_REVIEW = sugestão do agente aguardando um humano; ARCHIVED = desativada sem apagar.
+  status         KnowledgeEntryStatus @default(ACTIVE)
+  verified       Boolean              @default(true)
+  lastReviewedAt DateTime?
+  updatedByName  String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, agentType])
+  @@index([tenantId, status])
   @@map("support_knowledge_base")
 }
 
@@ -260,22 +294,100 @@ enum KnowledgeAgentType {
   OPERATIONAL
 }
 
+// As 12 áreas canônicas de dúvida de hóspede no atendimento por WhatsApp (levantamento do setor,
+// ver o markdown de origem em PLANO_AGENTE_IA.md / Base de Conhecimento). Cada tenant tem um
+// HotelKnowledgeTopic por chave, com um texto livre que o hotel mantém e que o agente de
+// atendimento consulta antes de responder.
+enum KnowledgeTopicKey {
+  RESERVA_PRECO
+  CANCELAMENTO
+  CHECKIN_CHECKOUT
+  LOCALIZACAO_ACESSO
+  QUARTO_COMODIDADES
+  REGRAS_CRIANCAS_PETS
+  PAGAMENTO_TAXAS
+  SERVICOS_HORARIOS
+  PEDIDOS_ESPECIAIS_ACESSIBILIDADE
+  PROBLEMAS_ESTADIA
+  BAGAGEM_ENCOMENDAS
+  RECOMENDACOES_LOCAIS
+}
+
+enum KnowledgeEntryStatus {
+  ACTIVE
+  PENDING_REVIEW
+  ARCHIVED
+}
+
+// Quem originou uma alteração registrada em KnowledgeRevision.
+enum KnowledgeChangeSource {
+  MANUAL
+  AGENT_SUPPORT
+  AGENT_OPERATIONAL
+}
+
+// Documento por tópico que o hotel mantém — o "manual" que o agente de atendimento consulta.
+// Uma linha por (tenant, topicKey), semeada com um texto-guia na primeira vez que a tela é aberta
+// (ver ensureKnowledgeTopics). `content` é texto livre; o agente recebe apenas trechos relevantes,
+// truncados, via a tool search_knowledge_base — nunca o documento inteiro (controle de custo/prompt).
+model HotelKnowledgeTopic {
+  id                 String            @id @default(uuid())
+  tenantId           String
+  topicKey           KnowledgeTopicKey
+  title              String
+  content            String            @default("")
+  active             Boolean           @default(true)
+  // Última vez que um humano confirmou que o conteúdo está atualizado ("Marcar como revisado") —
+  // o Agente Operacional alerta quando isso fica mais velho que AIAgentSetting.knowledgeReviewIntervalDays.
+  lastReviewedAt     DateTime?
+  lastReviewedByName String?
+  updatedByName      String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  tenant             Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, topicKey])
+  @@map("hotel_knowledge_topics")
+}
+
+// Histórico append-only de toda alteração de conteúdo da base de conhecimento (tópicos e entradas),
+// para auditoria e para o "Desfazer" de 1 clique — inclusive as edições automáticas feitas pelo
+// Agente Operacional (changeSource = AGENT_OPERATIONAL), que ficam destacadas na tela.
+model KnowledgeRevision {
+  id            String                @id @default(uuid())
+  tenantId      String
+  targetType    String // "TOPIC" | "ENTRY"
+  targetId      String
+  contentBefore String
+  contentAfter  String
+  changeSource  KnowledgeChangeSource @default(MANUAL)
+  changedByName String
+  reason        String?
+  reverted      Boolean               @default(false)
+  createdAt     DateTime              @default(now())
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, targetType, targetId])
+  @@index([tenantId, createdAt])
+  @@map("knowledge_revisions")
+}
+
 model RoomCategory {
-  id          String  @id @default(uuid())
+  id          String           @id @default(uuid())
   tenantId    String
   name        String
   // Preenchidos hoje por padrão; o valor real da diária e a capacidade de hóspedes
   // são definidos no cadastro de Tarifas, não neste pré-cadastro de categoria.
-  dailyPrice  Decimal @default(0) @db.Decimal(10, 2)
-  capacity    Int     @default(1)
+  dailyPrice  Decimal          @default(0) @db.Decimal(10, 2)
+  capacity    Int              @default(1)
   description String?
-  active      Boolean @default(true)
+  active      Boolean          @default(true)
   // LODGING = quarto de hospedagem normal. EVENT_SPACE = auditório, sala de reunião, espaço para
   // palestras etc. — NÃO é vendido como diária pelo agente de atendimento (ver
   // apps/web/src/lib/aiAgent/tools.ts): fica de fora da disponibilidade de quartos e qualquer
   // pedido de reserva desse tipo é encaminhado para a recepção.
   kind        RoomCategoryKind @default(LODGING)
-  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rooms       Room[]
 
   @@map("room_categories")
@@ -500,23 +612,35 @@ model HousekeepingTask {
   roomId          String
   housekeeperId   String?
   // CHECKOUT: limpeza profunda de quarto vago após check-out (pode entrar na fila automática no
-  // modo QUEUE). OCCUPIED: arrumação de quarto com hóspede hospedado — nunca cai em fila, sempre
-  // atribuída manualmente pela recepção, porque só ela sabe se o hóspede está no quarto/autoriza.
+  // modo QUEUE). OCCUPIED: arrumação de quarto com hóspede hospedado — no modo RECEPTION é sempre
+  // atribuída manualmente pela recepção; no modo QUEUE é gerada automaticamente uma por dia por
+  // quarto ocupado (ver ensureDailyArrumacaoTasks em apps/web/src/lib/housekeeping.ts).
   type            HousekeepingTaskType   @default(CHECKOUT)
   status          HousekeepingTaskStatus @default(PENDING)
+  // Preenchido só quando status = SKIPPED — motivo de a arrumação ter sido encerrada sem limpeza
+  // (ex.: hóspede em "não perturbe", reportado pela própria governanta no app dela).
+  skipReason      HousekeepingSkipReason?
   notes           String?
   assignedAt      DateTime?
   startedAt       DateTime?
+  // Momento em que a tarefa foi encerrada — vale para DONE (limpou) e para SKIPPED (não limpou).
   finishedAt      DateTime?
   durationSeconds Int?
+  // Dia (meia-noite de Brasília, ver lib/brasiliaDate.ts) ao qual a arrumação diária pertence.
+  // Só é preenchido nas tarefas OCCUPIED geradas automaticamente no modo QUEUE — NULL para
+  // limpeza pós check-out e para atribuições manuais da recepção. O @@unique abaixo garante no
+  // máximo uma arrumação diária por quarto por dia (múltiplos NULL não colidem no Postgres).
+  serviceDate     DateTime?
   createdAt       DateTime               @default(now())
   updatedAt       DateTime               @updatedAt
   tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   room            Room                   @relation(fields: [roomId], references: [id], onDelete: Cascade)
   housekeeper     Housekeeper?           @relation(fields: [housekeeperId], references: [id])
 
+  @@unique([roomId, type, serviceDate])
   @@index([tenantId, status])
   @@index([roomId, status])
+  @@index([tenantId, serviceDate])
   @@map("housekeeping_tasks")
 }
 
@@ -525,6 +649,11 @@ model HousekeepingSetting {
   id             String                     @id @default(uuid())
   tenantId       String                     @unique
   assignmentMode HousekeepingAssignmentMode @default(RECEPTION)
+  // Só valem no modo QUEUE. autoDailyArrumacao: gera automaticamente uma arrumação por dia para
+  // cada quarto ocupado. arrumacaoSkipCheckinDay: não gera arrumação no próprio dia do check-in
+  // (o quarto acabou de ser preparado para a chegada).
+  autoDailyArrumacao      Boolean            @default(true)
+  arrumacaoSkipCheckinDay Boolean            @default(true)
   createdAt      DateTime                   @default(now())
   updatedAt      DateTime                   @updatedAt
   tenant         Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1095,6 +1224,14 @@ model AIAgentSetting {
   alertPhone              String? // número WhatsApp que recebe alertas do agente operacional
   operationalAutonomyMode OperationalAutonomyMode @default(ALERT_ONLY)
 
+  // --- Base de Conhecimento (assinante) ---
+  // Dias sem revisão até o Agente Operacional alertar que um tópico/entrada está desatualizado.
+  knowledgeReviewIntervalDays Int     @default(90)
+  // Opt-in dedicado (além de operationalAutonomyMode = AUTONOMOUS_LIMITED) para o Agente Operacional
+  // corrigir sozinho valores desatualizados (preços, horários) na base quando divergirem do cadastro.
+  // Escopo restrito definido em apps/worker/src/operationalAgent.ts (Fase 3). Padrão false.
+  knowledgeAutoRewriteEnabled Boolean @default(false)
+
   updatedAt DateTime @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -1120,13 +1257,20 @@ enum OperationalAutonomyMode {
 // cada ciclo do cron — um registro por (tenant, tipo de problema, entidade) enquanto o problema
 // segue não resolvido; removido/expira quando o problema deixa de ser detectado.
 model OperationalAlertLog {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   tenantId       String
   issueType      String // ex: "SNRHOS_STUCK" | "PRECHECKIN_PENDING" | "ROOM_MAINTENANCE_STUCK" | "ROOM_DIRTY_STUCK" | "WHATSAPP_DISCONNECTED"
   entityId       String // id da entidade com problema (FNRHRecord, Reservation, Room, etc.) ou tenantId quando não há entidade específica
-  firstAlertedAt DateTime @default(now())
-  lastAlertedAt  DateTime @default(now())
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  firstAlertedAt DateTime  @default(now())
+  lastAlertedAt  DateTime  @default(now())
+  // A linha é criada ANTES do envio do WhatsApp e o @@unique abaixo é a trava que impede dois
+  // ciclos concorrentes do worker de alertarem o mesmo problema (ver runOperationalAgent).
+  // notifiedAt = instante em que o envio ao WhatsApp foi confirmado; null = ainda não enviado,
+  // então os próximos ciclos re-tentam o envio (sem recriar a escalação no sino) até notifyAttempts
+  // atingir o teto — evita ficar tentando pra sempre um alerta que nunca sai (ex.: WhatsApp caído).
+  notifiedAt     DateTime?
+  notifyAttempts Int       @default(0)
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, issueType, entityId])
   @@map("operational_alert_logs")
@@ -1425,6 +1569,14 @@ enum TenantStatus {
   CANCELLED
 }
 
+// Regime tributário do hotel — combo CBX_Regime do sistema legado WinDev (01–04 → Hot_Regime).
+enum TaxRegime {
+  SIMPLES_NACIONAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+  MEI
+}
+
 enum UserRole {
   SUPER_ADMIN
   TENANT_ADMIN
@@ -1464,11 +1616,18 @@ enum HousekeepingTaskStatus {
   PENDING
   IN_PROGRESS
   DONE
+  // Tarefa encerrada sem limpeza — hoje só usada para "não perturbe" (ver skipReason).
+  SKIPPED
 }
 
 enum HousekeepingTaskType {
   CHECKOUT
   OCCUPIED
+}
+
+enum HousekeepingSkipReason {
+  DO_NOT_DISTURB
+  OTHER
 }
 
 enum HousekeepingAssignmentMode {

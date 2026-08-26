@@ -16,7 +16,10 @@ export async function getTenantHeaderInfo(tenantId: string): Promise<TenantHeade
       name: true,
       tradeName: true,
       cnpj: true,
-      address: true,
+      street: true,
+      number: true,
+      neighborhood: true,
+      address: true, // legado — fallback enquanto houver tenants sem endereço estruturado
       city: true,
       state: true,
       zipCode: true,
@@ -28,7 +31,12 @@ export async function getTenantHeaderInfo(tenantId: string): Promise<TenantHeade
     return { name: "", cnpj: "", addressLine: "" };
   }
 
-  const locationParts = [tenant.address, tenant.city, tenant.state].filter(Boolean);
+  // Endereço a partir dos campos estruturados (Hot_Logradouro/Numero/Bairro/Cidade/UF/CEP do
+  // sistema legado WinDev); cai para o campo `address` (texto livre, deprecado) se ainda não houver
+  // endereço estruturado cadastrado.
+  const structuredStreet = [tenant.street, tenant.number].filter(Boolean).join(", ");
+  const streetPart = structuredStreet || tenant.address || "";
+  const locationParts = [streetPart, tenant.neighborhood, tenant.city, tenant.state].filter(Boolean);
   let addressLine = locationParts.join(" - ");
   if (tenant.zipCode) addressLine += `${addressLine ? " " : ""}CEP: ${tenant.zipCode}`;
   if (tenant.phone) addressLine += `${addressLine ? " - " : ""}${tenant.phone}`;
