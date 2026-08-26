@@ -349,7 +349,7 @@ const DEFAULT_CHECK_OUT_TIME = "12:00";
 async function createReservationForAgent(
   tenantId: string,
   guestPhone: string,
-  params: { checkIn: Date; checkOut: Date; categoryName?: string; roomNumber?: string; guestName: string; guestCpf?: string; adults: number }
+  params: { checkIn: Date; checkOut: Date; categoryName?: string; roomNumber?: string; floor?: string; guestName: string; guestCpf?: string; adults: number }
 ) {
   // Se o hóspede pediu um quarto específico pelo número, é o quarto que manda — a categoria é
   // derivada dele, não do que o modelo passou. O número vem do modelo, então é revalidado contra o
@@ -378,10 +378,27 @@ async function createReservationForAgent(
     };
   }
 
+  const floorPref = params.floor?.trim() || null;
+
   const result = await prisma.$transaction(async (tx) => {
-    const rooms = requestedRoom
+    let rooms = requestedRoom
       ? await tx.room.findMany({ where: { tenantId, id: requestedRoom.id, active: true } })
       : await tx.room.findMany({ where: { tenantId, categoryId: category.id, active: true } });
+
+    // Preferência de andar do hóspede: filtra os candidatos ANTES de escolher — nunca reservar em
+    // outro andar quando ele deixou claro que quer um específico (caso real: hóspede pediu "segundo
+    // andar" três vezes e o agente reservou no 109, 1º andar, porque a tool só recebia a categoria).
+    if (floorPref && !requestedRoom) {
+      const onFloor = rooms.filter((r) => floorMatches(r.floor, floorPref));
+      if (onFloor.length === 0) {
+        return {
+          sucesso: false as const,
+          erro: `A categoria ${category.name} não tem quartos no andar "${params.floor}". Ofereça outro andar ou outra categoria — nunca reserve num andar diferente do que o hóspede pediu.`,
+        };
+      }
+      rooms = onFloor;
+    }
+
     let freeRoom: (typeof rooms)[number] | null = null;
     for (const room of rooms) {
       const [conflict, openStay] = await Promise.all([
@@ -400,7 +417,9 @@ async function createReservationForAgent(
         sucesso: false as const,
         erro: requestedRoom
           ? `O quarto ${requestedRoom.number} não está livre no período pedido. Ofereça outro quarto da mesma categoria (${category.name}).`
-          : "Não há mais quartos livres nessa categoria para o período pedido.",
+          : floorPref
+            ? `Não há quarto livre da categoria ${category.name} no andar "${params.floor}" para o período. Ofereça outro andar ou categoria — nunca reserve num andar diferente do pedido.`
+            : "Não há mais quartos livres nessa categoria para o período pedido.",
       };
     }
 
@@ -446,6 +465,7 @@ async function createReservationForAgent(
       numeroReserva: reservationNumber,
       status,
       quarto: freeRoom.number,
+      andar: freeRoom.floor || "Térreo",
       categoria: category.name,
       diarias: nights,
       valorTotal: totalAmount,
@@ -755,17 +775,18 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     create_reservation: tool({
       description:
-        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Informe `roomNumber` quando o hóspede tiver pedido um quarto específico pelo número — a reserva sai nesse quarto exato; se ele não estiver livre a tool avisa e você oferece outro. Sem `roomNumber`, o sistema escolhe um quarto livre da categoria. Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando a recepção — informe o resultado exato que a tool devolver, não invente. Se o retorno tiver precisaEscalar:true (ex: categoria é espaço de eventos), use escalate_to_human. O retorno inclui horarioCheckIn/horarioCheckOut — sempre informe os dois horários na confirmação, junto com as datas.",
+        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Informe `roomNumber` quando o hóspede tiver pedido um quarto específico pelo número — a reserva sai nesse quarto exato. Informe `floor` quando ele tiver pedido um andar específico ('quero no segundo andar') — a reserva só sai num quarto daquele andar; se não houver, a tool avisa e você oferece outro andar/categoria, NUNCA reserve num andar diferente do que ele pediu. Sem `roomNumber`/`floor`, o sistema escolhe qualquer quarto livre da categoria. Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando a recepção — informe o resultado exato que a tool devolver, não invente. Se o retorno tiver precisaEscalar:true (ex: categoria é espaço de eventos), use escalate_to_human. O retorno inclui `quarto`, `andar`, horarioCheckIn/horarioCheckOut — informe o quarto, o andar e os dois horários na confirmação, junto com as datas.",
       inputSchema: z.object({
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
         checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
         categoryName: z.string().optional().describe("Nome da categoria de apartamento, como retornado por check_availability/list_room_categories. Opcional se roomNumber for informado."),
         roomNumber: z.string().optional().describe("Número de um quarto específico pedido pelo hóspede (ex: '207'). Quando informado, a categoria é derivada do próprio quarto."),
+        floor: z.string().optional().describe("Andar pedido pelo hóspede, como ele falou (ex: 'segundo andar', '2'). Obrigatório quando ele expressou preferência de andar e não escolheu um quarto pelo número."),
         guestName: z.string().describe("Nome completo do hóspede"),
         guestCpf: z.string().optional().describe("CPF do hóspede, se já identificado"),
         adults: z.number().int().min(1).default(1),
       }),
-      execute: async ({ checkIn, checkOut, categoryName, roomNumber, guestName, guestCpf, adults }) => {
+      execute: async ({ checkIn, checkOut, categoryName, roomNumber, floor, guestName, guestCpf, adults }) => {
         const inDate = new Date(checkIn);
         const outDate = new Date(checkOut);
         if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
@@ -777,7 +798,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
         if (!categoryName && !roomNumber) {
           return { sucesso: false, erro: "Informe categoryName ou roomNumber." };
         }
-        return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, roomNumber, guestName, guestCpf, adults });
+        return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, roomNumber, floor, guestName, guestCpf, adults });
       },
     }),
 

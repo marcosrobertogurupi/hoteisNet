@@ -170,8 +170,11 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   Desenvolvedor), `list_room_categories`, `get_hotel_info`, `search_knowledge_base`,
   `create_reservation` (transação atômica, guardrail `autoConfirmReservations` decidido em código,
   nunca pelo modelo; aceita `roomNumber` opcional — revalidado contra o tenant, regra 4 do
-  CLAUDE.md — para reservar o quarto exato pedido pelo hóspede; recusa categorias `EVENT_SPACE`,
-  encaminhando para a recepção), `cancel_reservation` (soft-cancel, `status=CANCELLED`, nunca apaga a linha;
+  CLAUDE.md — para reservar o quarto exato pedido pelo hóspede, e `floor` opcional para restringir
+  a escolha ao andar que ele pediu; se não houver quarto livre naquele quarto/andar a tool devolve
+  erro e o agente oferece alternativa, nunca reserva num andar diferente — achado em teste real:
+  hóspede pediu "segundo andar" três vezes e o agente reservou no 109, 1º andar, porque a tool só
+  recebia a categoria; recusa categorias `EVENT_SPACE`, encaminhando para a recepção), `cancel_reservation` (soft-cancel, `status=CANCELLED`, nunca apaga a linha;
   gated por `AIAgentSetting.allowAgentCancelReservation`, default desligado; nunca cancela
   `CHECKED_IN` — escala pra recepção), `resend_fnrh_link` (reenvia o link de pré-check-in sob
   demanda, reaproveitando `sendPreCheckinLink`), `escalate_to_human`, `send_photo` (envia fotos
