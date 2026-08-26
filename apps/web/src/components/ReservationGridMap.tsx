@@ -1766,11 +1766,22 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
                               : `🔹 RESERVA CONFIRMADA\nHóspede: ${res.guestName}\nChegada: ${formatDateBr(res.checkInDate)} às ${res.checkInTime}\nSaída: ${formatDateBr(res.checkOutDate)} às ${res.checkOutTime}\n(Arraste para mover | 2x clique para alterar | Delete para excluir)`
                           }
                         >
-                          {/* Block Header */}
-                          <div className="flex items-start justify-between gap-1 overflow-hidden">
-                            <span className={`font-bold text-[11px] truncate uppercase leading-tight flex items-center gap-1 ${isHospedagem ? "text-slate-950" : "text-slate-100"}`}>
+                          {/* Block Header — shrink-0 é essencial: como este bloco tem overflow-hidden, a
+                              especificação de flexbox permite que ele seja espremido até ~0px de altura
+                              quando o card fica sem espaço vertical (ex: com o botão de FNRH abaixo),
+                              fazendo o nome do hóspede "sumir" mesmo com o texto renderizado corretamente
+                              no DOM. shrink-0 garante que o nome nunca seja o item sacrificado. */}
+                          {/* Layout em 3 linhas x 2 colunas, cada linha com shrink-0 (essencial: os
+                              itens têm overflow-hidden/truncate, e sem shrink-0 a especificação de
+                              flexbox permite que sejam espremidos a ~0px de altura quando o card fica
+                              sem espaço vertical — foi isso que fazia o nome do hóspede "sumir"):
+                              Linha 1: Nome do hóspede           | Categoria do quarto
+                              Linha 2: Previsão de chegada       | Situação da FNRH
+                              Linha 3: Previsão de saída */}
+                          <div className="flex items-start justify-between gap-1 overflow-hidden shrink-0">
+                            <span className={`font-bold text-[11px] truncate uppercase leading-tight flex items-center gap-1 min-w-0 ${isHospedagem ? "text-slate-950" : "text-slate-100"}`}>
                               {isHospedagem && <Lock className="w-3 h-3 text-amber-800 shrink-0" />}
-                              <span className="truncate">{res.guestName}</span>
+                              <span className="truncate min-w-0">{res.guestName}</span>
                             </span>
                             {isHospedagem ? (
                               <span className="text-[8px] bg-amber-950 text-amber-300 font-black px-1.5 py-0.5 rounded shrink-0 uppercase tracking-wide flex items-center gap-0.5 shadow-sm border border-amber-800/60">
@@ -1785,52 +1796,49 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
                             )}
                           </div>
 
-                          {/* Block Check-in & Check-out details */}
-                          <div className={`text-[9px] font-mono space-y-0.5 mt-0.5 ${isHospedagem ? "text-slate-900 font-semibold" : "text-slate-300"}`}>
-                            <div className="truncate">
+                          <div className={`flex items-center justify-between gap-1 overflow-hidden shrink-0 text-[9px] font-mono mt-0.5 ${isHospedagem ? "text-slate-900 font-semibold" : "text-slate-300"}`}>
+                            <span className="truncate min-w-0">
                               <span className={isHospedagem ? "text-amber-900 font-bold" : "text-slate-400"}>
-                                {isHospedagem ? "Check-in realizado:" : "Data chegada:"}
+                                {isHospedagem ? "Check-in realizado:" : "Previsão chegada:"}
                               </span>{" "}
                               {formatDateBr(res.checkInDate)} {res.checkInTime}
-                            </div>
-                            <div className="truncate">
-                              <span className={isHospedagem ? "text-amber-900 font-bold" : "text-slate-400"}>
-                                Dt.Prev.Saída:
-                              </span>{" "}
-                              {formatDateBr(res.checkOutDate)} {res.checkOutTime}
-                            </div>
+                            </span>
+                            {!isHospedagem && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSendPreCheckinLink(res);
+                                }}
+                                disabled={sendingPreCheckinId === res.id}
+                                title="Enviar/reenviar FNRH via WhatsApp"
+                                className={`shrink-0 px-1.5 py-0.5 rounded text-[8px] font-bold border flex items-center gap-1 transition-colors disabled:opacity-60 ${
+                                  res.fnrhCompleted
+                                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                                    : res.precheckinSent
+                                    ? "bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25"
+                                    : "bg-slate-700/50 text-slate-300 border-slate-600 hover:bg-slate-600/60"
+                                }`}
+                              >
+                                <WhatsAppIcon className="w-2.5 h-2.5 shrink-0" />
+                                <span className="whitespace-nowrap">
+                                  {sendingPreCheckinId === res.id
+                                    ? "Enviando..."
+                                    : res.fnrhCompleted
+                                    ? "FNRH OK"
+                                    : res.precheckinSent
+                                    ? "Reenviar FNRH"
+                                    : "Enviar FNRH"}
+                                </span>
+                              </button>
+                            )}
                           </div>
 
-                          {/* Envio de FNRH direto na reserva — mesma ação do toolbar/menu de contexto,
-                              mas sem precisar selecionar a reserva antes. */}
-                          {!isHospedagem && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleSendPreCheckinLink(res);
-                              }}
-                              disabled={sendingPreCheckinId === res.id}
-                              title="Enviar/reenviar FNRH via WhatsApp"
-                              className={`mt-1 px-1.5 py-0.5 rounded text-[8px] font-bold border flex items-center gap-1 truncate transition-colors disabled:opacity-60 ${
-                                res.fnrhCompleted
-                                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
-                                  : res.precheckinSent
-                                  ? "bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25"
-                                  : "bg-slate-700/50 text-slate-300 border-slate-600 hover:bg-slate-600/60"
-                              }`}
-                            >
-                              <WhatsAppIcon className="w-2.5 h-2.5 shrink-0" />
-                              <span className="truncate">
-                                {sendingPreCheckinId === res.id
-                                  ? "Enviando..."
-                                  : res.fnrhCompleted
-                                  ? "FNRH OK"
-                                  : res.precheckinSent
-                                  ? "Reenviar FNRH"
-                                  : "Enviar FNRH"}
-                              </span>
-                            </button>
-                          )}
+                          <div className={`shrink-0 text-[9px] font-mono truncate ${isHospedagem ? "text-slate-900 font-semibold" : "text-slate-300"}`}>
+                            <span className={isHospedagem ? "text-amber-900 font-bold" : "text-slate-400"}>
+                              Previsão saída:
+                            </span>{" "}
+                            {formatDateBr(res.checkOutDate)} {res.checkOutTime}
+                          </div>
 
                           {/* Badge de alerta: expira em breve (menos de 2 horas) */}
                           {(() => {
