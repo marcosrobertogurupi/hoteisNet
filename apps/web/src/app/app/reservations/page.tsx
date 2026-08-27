@@ -24,14 +24,23 @@ export default function TenantReservationsPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [reservations, setReservations] = useState<any[]>([]);
+  // Quartos (estado enxuto) e tarefas de governança vêm no mesmo tick e são repassados ao
+  // ReservationGridMap — antes o componente buscava os dois por conta própria, somando 3
+  // requisições por tick nesta tela.
+  const [gridRooms, setGridRooms] = useState<any[]>([]);
+  const [housekeepingTasks, setHousekeepingTasks] = useState<any[]>([]);
 
   const fetchReservations = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/reservations?tenantId=TNT-01");
+      // Uma única requisição por tick — /api/mapa/reservas-tick devolve reservas + quartos +
+      // tarefas de governança juntos, com ETag/304 quando nada mudou.
+      const res = await fetch("/api/mapa/reservas-tick");
       const data = await res.json();
-      if (data.success && Array.isArray(data.reservations)) {
-        setReservations(data.reservations);
+      if (data.success) {
+        if (Array.isArray(data.reservations)) setReservations(data.reservations);
+        if (Array.isArray(data.gridRooms)) setGridRooms(data.gridRooms);
+        if (Array.isArray(data.housekeepingTasks)) setHousekeepingTasks(data.housekeepingTasks);
       }
     } catch (err) {
       console.error("Erro ao buscar reservas:", err);
@@ -182,7 +191,12 @@ export default function TenantReservationsPage() {
 
       {/* RENDER VIEW BASED ON TAB */}
       {activeTab === "GRID" ? (
-        <ReservationGridMap apiReservations={reservations} onRefresh={fetchReservations} />
+        <ReservationGridMap
+          apiReservations={reservations}
+          gridRooms={gridRooms}
+          housekeepingTasks={housekeepingTasks}
+          onRefresh={fetchReservations}
+        />
       ) : (
         <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between">

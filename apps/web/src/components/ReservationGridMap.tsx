@@ -34,7 +34,6 @@ import VisualizarReservaModal from "@/components/VisualizarReservaModal";
 import { generateReservaPdfBase64 } from "@/utils/pdfGenerator";
 import { isReservationExpired, getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
-import { usePolling } from "@/lib/usePolling";
 
 export interface ReservationItem {
   id: string;
@@ -291,10 +290,19 @@ const DEFAULT_RESERVATIONS: ReservationItem[] = [
 
 export interface ReservationGridMapProps {
   apiReservations?: any[];
+  // Estado enxuto dos quartos e tarefas de governança — vêm da página (mesmo tick de polling que
+  // busca as reservas), não mais de fetches próprios deste componente.
+  gridRooms?: any[];
+  housekeepingTasks?: any[];
   onRefresh?: () => void;
 }
 
-export default function ReservationGridMap({ apiReservations, onRefresh }: ReservationGridMapProps = {}) {
+export default function ReservationGridMap({
+  apiReservations,
+  gridRooms,
+  housekeepingTasks,
+  onRefresh,
+}: ReservationGridMapProps = {}) {
   const { theme, defaultCheckInTime, defaultCheckOutTime, reservationToleranceHours } = useTheme();
   const toast = useToast();
   const now = new Date();
@@ -310,74 +318,48 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
     housekeeperName: string | null;
   }>>({});
 
-  const syncHousekeepingTasks = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/tenant/housekeeping-tasks`);
-      const data = await res.json();
-      if (!data || !data.success || !Array.isArray(data.tasks)) return;
-      const map: Record<string, { type: "CHECKOUT" | "OCCUPIED"; housekeeperName: string | null }> = {};
-      for (const t of data.tasks) {
-        if (t.status === "IN_PROGRESS") {
-          map[t.roomId] = { type: t.type, housekeeperName: t.housekeeper?.name || null };
-        }
+  // Tarefas de governança IN_PROGRESS → mapa por roomId (selo "em limpeza"). Alimentado pela prop
+  // `housekeepingTasks` (mesmo tick que traz as reservas), não mais por fetch próprio.
+  useEffect(() => {
+    if (!Array.isArray(housekeepingTasks)) return;
+    const map: Record<string, { type: "CHECKOUT" | "OCCUPIED"; housekeeperName: string | null }> = {};
+    for (const t of housekeepingTasks) {
+      if (t.status === "IN_PROGRESS") {
+        map[t.roomId] = { type: t.type, housekeeperName: t.housekeeper?.name || null };
       }
-      setHousekeepingByRoomId(map);
-    } catch (err) {
-      console.warn("[ReservationGridMap] Erro ao sincronizar tarefas de governança:", err);
     }
-  }, []);
+    setHousekeepingByRoomId((prev) => (JSON.stringify(prev) === JSON.stringify(map) ? prev : map));
+  }, [housekeepingTasks]);
 
-  usePolling(syncHousekeepingTasks, 3000);
+  // Estado enxuto dos quartos (manutenção, categoria, diária) → prop `gridRooms`. Mantém a mesma
+  // referência de objeto quando nada mudou, para não repintar a grade a cada tick.
+  useEffect(() => {
+    if (!Array.isArray(gridRooms) || gridRooms.length === 0) return;
+    setRooms((prevRooms) => {
+      const prevMap = new Map(prevRooms.map((r) => [r.number, r]));
+      const updatedList: RoomDefinition[] = gridRooms.map((r: any) => {
+        const roomNum = String(r.number);
+        const existing = prevMap.get(roomNum);
+        const isMaint = r.status === "MAINTENANCE";
+        const catName = r.category || r.room_categories?.name || "Standard";
+        const rate = r.ratePerNight || 180;
 
-  const syncGridRooms = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/reservations/rooms/status`);
-      const data = await res.json();
-      if (!data || !data.success || !Array.isArray(data.rooms) || data.rooms.length === 0) return;
-
-      setRooms((prevRooms) => {
-        const prevMap = new Map(prevRooms.map((r) => [r.number, r]));
-
-        const updatedList: RoomDefinition[] = data.rooms.map((r: any) => {
-          const roomNum = String(r.number);
-          const existing = prevMap.get(roomNum);
-          const isMaint = r.status === "MAINTENANCE";
-          const catName = r.category || r.room_categories?.name || "Standard";
-          const rate = r.ratePerNight || 180;
-
-          if (existing) {
-            if (
-              existing.isMaintenance === isMaint &&
-              existing.category === catName &&
-              existing.ratePerNight === rate
-            ) {
-              return existing;
-            }
-            return {
-              ...existing,
-              category: catName,
-              ratePerNight: rate,
-              isMaintenance: isMaint,
-            };
+        if (existing) {
+          if (
+            existing.isMaintenance === isMaint &&
+            existing.category === catName &&
+            existing.ratePerNight === rate
+          ) {
+            return existing;
           }
+          return { ...existing, category: catName, ratePerNight: rate, isMaintenance: isMaint };
+        }
 
-          return {
-            id: r.id,
-            number: roomNum,
-            category: catName,
-            ratePerNight: rate,
-            isMaintenance: isMaint,
-          };
-        });
-
-        return updatedList;
+        return { id: r.id, number: roomNum, category: catName, ratePerNight: rate, isMaintenance: isMaint };
       });
-    } catch (err) {
-      console.warn("[ReservationGridMap] Erro ao sincronizar quartos do banco:", err);
-    }
-  }, []);
-
-  usePolling(syncGridRooms, 3000);
+      return updatedList;
+    });
+  }, [gridRooms]);
 
   // Date Calculation
   const today = new Date();

@@ -36,6 +36,12 @@ function volatileFallback(context: string, err: unknown): string {
   return `nover-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Junta várias versões (ex.: reservas + quartos + governança) num único carimbo, para as rotas
+// consolidadas /api/mapa/*-tick.
+export function combineVersions(...versions: string[]): string {
+  return hashParts(versions);
+}
+
 function sigToPart(label: string, rows: TableSig[]): string {
   const r = rows[0];
   const count = r ? Number(r.c) : 0;

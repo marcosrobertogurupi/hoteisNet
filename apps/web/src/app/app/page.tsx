@@ -273,35 +273,28 @@ export default function TenantDashboardPage() {
   // Sincronização automática e transparente a partir do banco de dados (sem piscamento de tela)
   const syncRoomsFromDatabase = useCallback(async () => {
     try {
-      const [res, housekeepingRes] = await Promise.all([
-        fetch(`/api/reservations/rooms/status`),
-        fetch(`/api/tenant/housekeeping-tasks`).catch(() => null),
-      ]);
-
-      if (housekeepingRes) {
-        const housekeepingData = await housekeepingRes.json().catch(() => null);
-        if (housekeepingData?.success && Array.isArray(housekeepingData.tasks)) {
-          const map: Record<string, { type: "CHECKOUT" | "OCCUPIED"; housekeeperName: string | null }> = {};
-          for (const t of housekeepingData.tasks) {
-            if (t.status === "IN_PROGRESS") {
-              map[t.roomId] = { type: t.type, housekeeperName: t.housekeeper?.name || null };
-            }
-          }
-          setHousekeepingByRoomId(map);
-
-          const dndIds: string[] = Array.isArray(housekeepingData.dndTodayRoomIds)
-            ? housekeepingData.dndTodayRoomIds
-            : [];
-          setDndTodayRoomIds((prev) => {
-            const next = new Set(dndIds);
-            if (prev.size === next.size && [...prev].every((id) => next.has(id))) return prev;
-            return next;
-          });
-        }
-      }
-
+      // Uma única requisição por tick — /api/mapa/quartos-tick devolve status dos quartos,
+      // chegadas do dia e tarefas de governança juntos, com ETag/304 quando nada mudou.
+      const res = await fetch(`/api/mapa/quartos-tick`);
       const data = await res.json();
       if (!data || !data.success || !Array.isArray(data.rooms)) return;
+
+      if (Array.isArray(data.housekeepingTasks)) {
+        const map: Record<string, { type: "CHECKOUT" | "OCCUPIED"; housekeeperName: string | null }> = {};
+        for (const t of data.housekeepingTasks) {
+          if (t.status === "IN_PROGRESS") {
+            map[t.roomId] = { type: t.type, housekeeperName: t.housekeeper?.name || null };
+          }
+        }
+        setHousekeepingByRoomId(map);
+
+        const dndIds: string[] = Array.isArray(data.dndTodayRoomIds) ? data.dndTodayRoomIds : [];
+        setDndTodayRoomIds((prev) => {
+          const next = new Set(dndIds);
+          if (prev.size === next.size && [...prev].every((id) => next.has(id))) return prev;
+          return next;
+        });
+      }
 
       // Reservas que chegam hoje (selos de overbooking / "próximo check-in") — agora vêm junto
       // com o polling de 3s, então a badge aparece/some sozinha quando outro terminal faz o

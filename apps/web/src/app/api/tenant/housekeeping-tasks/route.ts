@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
-import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 import { housekeepingTasksVersion, notModifiedResponse } from "@/lib/mapVersion";
+import { housekeepingTasksPayload } from "@/lib/mapQueries";
 
 // GET /api/tenant/housekeeping-tasks — tarefas de limpeza em aberto do tenant da sessão, usado na
 // tela de atribuição manual (Governança) e no selo visual do Mapa de Quartos. Retorna as tarefas
@@ -24,44 +24,12 @@ export async function GET(req: NextRequest) {
     const notModified = notModifiedResponse(req, etag);
     if (notModified) return notModified;
 
-    const today = dateOnlyBrasilia(new Date());
-
-    const [tasks, dndToday] = await Promise.all([
-      prisma.housekeepingTask.findMany({
-        where: {
-          tenantId: resolvedTenantId,
-          OR: [
-            { status: "IN_PROGRESS" },
-            // PENDING só quando é atribuição de verdade: tem governanta, ou é limpeza pós check-out
-            // (serviceDate nulo). Exclui a arrumação diária automática ainda na fila geral.
-            { status: "PENDING", housekeeperId: { not: null } },
-            { status: "PENDING", serviceDate: null },
-          ],
-        },
-        include: {
-          housekeeper: { select: { id: true, name: true, photoUrl: true } },
-          room: { select: { id: true, number: true } },
-        },
-        orderBy: { createdAt: "asc" },
-      }),
-      prisma.housekeepingTask.findMany({
-        where: {
-          tenantId: resolvedTenantId,
-          type: "OCCUPIED",
-          status: "SKIPPED",
-          skipReason: "DO_NOT_DISTURB",
-          serviceDate: today,
-        },
-        select: { roomId: true },
-      }),
-    ]);
+    // Montagem do payload em lib/mapQueries.ts, compartilhada com /api/mapa/quartos-tick e
+    // /api/mapa/reservas-tick.
+    const { tasks, dndTodayRoomIds } = await housekeepingTasksPayload(resolvedTenantId);
 
     return NextResponse.json(
-      {
-        success: true,
-        tasks,
-        dndTodayRoomIds: dndToday.map((t) => t.roomId),
-      },
+      { success: true, tasks, dndTodayRoomIds },
       { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
     );
   } catch (error: any) {

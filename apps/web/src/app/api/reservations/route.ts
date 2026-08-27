@@ -4,31 +4,20 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
+import { reservationsMapPayload } from "@/lib/mapQueries";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
 class ReservationConflictError extends Error {}
-
-// Calcula até quando o quarto está efetivamente ocupado, com base nas diárias já lançadas na
-// hospedagem (StayCheckin.dailiesCount, incrementado pelo rollover automático de diária). Retorna
-// o maior valor entre a data prevista de saída e checkInDate + dailiesCount, para que a barra do
-// Mapa de Reservas acompanhe extensões de estadia sem alterar a data prevista de saída em si.
-function occupiedUntilDate(
-  expectedCheckOut: Date,
-  stayCheckin: { checkInDate: Date; dailiesCount: number; isClosed: boolean } | null | undefined
-): Date {
-  if (!stayCheckin || stayCheckin.isClosed) return expectedCheckOut;
-  const billedThrough = new Date(stayCheckin.checkInDate);
-  billedThrough.setDate(billedThrough.getDate() + stayCheckin.dailiesCount);
-  return billedThrough > expectedCheckOut ? billedThrough : expectedCheckOut;
-}
 
 // Toda Reservation vive sob este tenantId fixo por convenção histórica deste projeto — o
 // isolamento real por hotel é sempre via Reservation.room.tenantId (ver comentário em
 // lib/preCheckinSender.ts). Nunca usar o tenantId do cliente/sessão como valor deste campo.
 const RESERVATION_TENANT_ID = "TNT-01";
 
-// GET /api/reservations — lista reservas do tenant da sessão
+// GET /api/reservations — lista reservas do tenant da sessão (Mapa de Reservas / lista sintética).
+// A montagem do payload vive em lib/mapQueries.ts (reservationsMapPayload), compartilhada com a
+// rota consolidada /api/mapa/reservas-tick.
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
@@ -43,168 +32,10 @@ export async function GET(req: NextRequest) {
     const notModified = notModifiedResponse(req, etag);
     if (notModified) return notModified;
 
-    // Mapa de Reservas só precisa do horizonte operacional: hoje até 6 meses à frente. Reservas já
-    // finalizadas (passado) nunca aparecem aqui — só no relatório dedicado — o que evita que a
-    // resposta cresça sem limite conforme o hotel acumula histórico. A exceção é status CHECKED_IN:
-    // uma hospedagem em andamento continua aparecendo mesmo que o checkOutDate original (antes de
-    // diárias extras por checkout atrasado) já tenha passado.
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    const sixMonthsAhead = new Date(startOfToday);
-    sixMonthsAhead.setMonth(sixMonthsAhead.getMonth() + 6);
-
-    // `select` explícito (em vez de `include` + spread `...r`): o Mapa de Reservas e a lista só
-    // desenham este subconjunto de campos, e a resposta é baixada a cada 3 s pelo polling. Trazer
-    // a linha inteira da Reservation (notes, roomDescription, operatorName, discountAmount, flags
-    // de WhatsApp, etc.) a cada tick era boa parte do egress do Supabase nessa tela.
-    const reservations = await prisma.reservation.findMany({
-      where: {
-        room: { tenantId: session.tenantId },
-        OR: [
-          { status: "CHECKED_IN" },
-          { checkOutDate: { gte: startOfToday }, checkInDate: { lte: sixMonthsAhead } },
-        ],
-      },
-      select: {
-        id: true,
-        roomId: true,
-        status: true,
-        checkInDate: true,
-        checkOutDate: true,
-        guestName: true,
-        guestPhone: true,
-        guestCpf: true,
-        dailyRate: true,
-        depositPaid: true,
-        totalAmount: true,
-        tariffName: true,
-        notes: true,
-        roomDescription: true,
-        reservationNumber: true,
-        preCheckinSent: true,
-        room: {
-          select: {
-            id: true,
-            number: true,
-            floor: true,
-            status: true,
-            category: { select: { name: true, description: true } },
-          },
-        },
-        stayCheckin: { select: { checkInDate: true, dailiesCount: true, isClosed: true } },
-        _count: { select: { fnrhRecords: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
-
-    const formatted = reservations.map((r) => ({
-      id: r.id,
-      roomId: r.roomId,
-      status: r.status,
-      checkInDate: r.checkInDate,
-      checkOutDate: r.checkOutDate,
-      guestName: r.guestName,
-      guestPhone: r.guestPhone,
-      guestCpf: r.guestCpf,
-      dailyRate: r.dailyRate,
-      depositPaid: r.depositPaid,
-      totalAmount: r.totalAmount,
-      tariffName: r.tariffName,
-      notes: r.notes,
-      roomDescription: r.roomDescription,
-      reservationNumber: r.reservationNumber,
-      preCheckinSent: r.preCheckinSent,
-      // Data até onde o quarto está efetivamente ocupado, considerando diárias extras já
-      // lançadas na hospedagem (ex: rollover automático) que estenderam a estadia além da
-      // "Dt.Prev.Saída" original. Usado só para a barra visual do Mapa de Reservas — a data
-      // prevista de saída (checkOutDate) do hóspede não é alterada por isso.
-      occupiedUntilDate: occupiedUntilDate(r.checkOutDate, r.stayCheckin),
-      // true quando o hóspede já preencheu o pré-check-in/FNRH pelo link (existe ao menos um
-      // FNRHRecord vinculado a esta reserva) — distinto de preCheckinSent, que só indica que o
-      // link foi disparado.
-      fnrhCompleted: r._count.fnrhRecords > 0,
-      rooms: r.room
-        ? {
-            id: r.room.id,
-            floor: r.room.floor,
-            number: r.room.number,
-            status: r.room.status,
-            room_categories: r.room.category
-              ? { name: r.room.category.name, description: r.room.category.description || r.room.category.name }
-              : null,
-          }
-        : null,
-    }));
-
-    // Toda hospedagem em aberto (StayCheckin com isClosed: false) precisa aparecer no Mapa de
-    // Reservas como "vigente", mesmo que — por dessincronização histórica de dados (ex: check-in
-    // feito antes do vínculo reservationId existir, ou uma Reservation que caiu para CHECKED_OUT
-    // por engano) — não haja uma Reservation com status CHECKED_IN correspondente. Sem isso, o
-    // operador pode achar um quarto "livre" no mapa de reservas enquanto ele está, na prática,
-    // ocupado — o mesmo dado que o Mapa de Quartos já mostra corretamente.
-    // Deduplicar por QUARTO, não pelo vínculo reservationId — em dados legados esse vínculo pode
-    // estar nulo mesmo quando já existe uma Reservation CHECKED_IN correta para o quarto, e o que
-    // importa aqui é nunca mostrar o mesmo quarto duas vezes no mapa.
-    const roomIdsAlreadyCheckedIn = new Set(
-      formatted.filter((r) => r.status === "CHECKED_IN").map((r) => r.roomId)
-    );
-
-    const activeStays = await prisma.stayCheckin.findMany({
-      where: { isClosed: false, tenantId: session.tenantId },
-      select: {
-        id: true,
-        roomId: true,
-        checkInDate: true,
-        expectedCheckOut: true,
-        dailiesCount: true,
-        isClosed: true,
-        totalDaily: true,
-        primaryGuest: { select: { fullName: true, cpf: true, phone: true } },
-        room: {
-          select: {
-            id: true,
-            number: true,
-            floor: true,
-            status: true,
-            category: { select: { name: true, description: true } },
-          },
-        },
-      },
-    });
-
-    const unlinkedStays = activeStays.filter((s) => !roomIdsAlreadyCheckedIn.has(s.roomId));
-
-    const syntheticFromStays = unlinkedStays.map((s) => ({
-      id: `stay-${s.id}`,
-      tenantId: RESERVATION_TENANT_ID,
-      roomId: s.roomId,
-      guestName: s.primaryGuest.fullName,
-      guestCpf: s.primaryGuest.cpf,
-      guestPhone: s.primaryGuest.phone,
-      checkInDate: s.checkInDate,
-      checkOutDate: s.expectedCheckOut,
-      occupiedUntilDate: occupiedUntilDate(s.expectedCheckOut, { checkInDate: s.checkInDate, dailiesCount: s.dailiesCount, isClosed: s.isClosed }),
-      totalAmount: s.totalDaily,
-      depositPaid: 0,
-      status: "CHECKED_IN" as const,
-      preCheckinSent: false,
-      fnrhCompleted: false,
-      notes: null,
-      reservationNumber: null,
-      tariffName: s.room.category?.name || null,
-      rooms: {
-        id: s.room.id,
-        floor: s.room.floor,
-        number: s.room.number,
-        status: s.room.status,
-        room_categories: s.room.category
-          ? { name: s.room.category.name, description: s.room.category.description || s.room.category.name }
-          : null,
-      },
-    }));
+    const reservations = await reservationsMapPayload(session.tenantId);
 
     return NextResponse.json(
-      { success: true, reservations: [...formatted, ...syntheticFromStays] },
+      { success: true, reservations },
       { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
     );
   } catch (error: any) {
