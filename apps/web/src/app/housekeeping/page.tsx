@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 import {
   Sparkles,
   Phone,

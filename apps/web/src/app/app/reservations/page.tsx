@@ -9,7 +9,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { isReservationExpired } from "@/utils/reservationTolerance";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 
 export default function TenantReservationsPage() {
   const { defaultCheckInTime, reservationToleranceHours } = useTheme();

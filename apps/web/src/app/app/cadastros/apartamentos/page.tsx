@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 import { 
   BedDouble, 
   Plus, 

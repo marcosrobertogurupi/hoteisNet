@@ -11,7 +11,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
 import { useOperator } from "@/context/OperatorContext";
 import { playHumanInterventionSound } from "@/utils/notificationSound";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 
 const ROLE_LABELS: Record<string, string> = {
   SUPER_ADMIN: "Super Admin",

@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { Package, ArrowRightLeft, Building2, ShoppingBag, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Filter, ScanBarcode, Trash2, X, Loader2 } from "lucide-react";
 import LoadingOverlay from "@/components/LoadingOverlay";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 
 interface ProductBarcode {
   id: string;

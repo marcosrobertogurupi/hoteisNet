@@ -34,7 +34,7 @@ import VisualizarReservaModal from "@/components/VisualizarReservaModal";
 import { generateReservaPdfBase64 } from "@/utils/pdfGenerator";
 import { isReservationExpired, getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 
 export interface ReservationItem {
   id: string;

@@ -56,7 +56,7 @@ import TransferenciaDebitoModal from "@/components/TransferenciaDebitoModal";
 import HistoricoLimpezaModal from "@/components/HistoricoLimpezaModal";
 import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/SelecaoReservaQuartoModal";
 import LoadingOverlay from "@/components/LoadingOverlay";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 
 // Converte "DD/MM/YYYY HH:MM:SS" (formato usado pelo modal de check-in) para ISO "YYYY-MM-DDTHH:MM:SS",
 // formato exigido pela coluna timestamp do Postgres na API /api/reservations.

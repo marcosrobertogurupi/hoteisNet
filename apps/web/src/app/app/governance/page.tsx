@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Sparkles, Timer, X, User, MoveRight, DoorClosed } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import LoadingOverlay from "@/components/LoadingOverlay";
-import { usePolling } from "@/hooks/usePolling";
+import { usePolling } from "@/lib/usePolling";
 
 interface Housekeeper {
   id: string;
