@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Sparkles, Timer, X, User, MoveRight, DoorClosed } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import LoadingOverlay from "@/components/LoadingOverlay";
+import { usePolling } from "@/hooks/usePolling";
 
 interface Housekeeper {
   id: string;
@@ -91,7 +92,9 @@ export default function TenantGovernancePage() {
   // `silent` evita o overlay de carregamento nas atualizações automáticas em segundo plano.
   const loadRooms = useCallback((silent = false) => {
     if (!silent) setIsLoadingRooms(true);
-    return fetch(`/api/reservations/rooms`)
+    // Endpoint enxuto (só status/categoria/andar) — a Governança não precisa de fotos, hóspede
+    // completo nem categoria inteira, que era o que /api/reservations/rooms trazia a cada tick.
+    return fetch(`/api/reservations/rooms/status`)
       .then((r) => r.json())
       .then((data) => {
         if (data.success && Array.isArray(data.rooms)) {
@@ -115,17 +118,20 @@ export default function TenantGovernancePage() {
       });
   }, []);
 
+  // Atualização automática pelo banco. 15 s (antes 4 s) é suficiente para refletir check-outs,
+  // check-ins e atribuições feitas em outra tela/tablet — a Governança não é um mapa de ocupação
+  // em tempo real. Pausa com a aba em segundo plano (usePolling).
+  const syncGovernance = useCallback(() => {
+    loadRooms(true);
+    loadHousekeepingData();
+  }, [loadRooms, loadHousekeepingData]);
+
   useEffect(() => {
     loadRooms();
     loadHousekeepingData();
-    // Atualização automática e transparente pelo banco a cada 4s, para a tela nunca ficar
-    // desatualizada em relação a check-outs, check-ins ou atribuições feitas em outra tela/tablet.
-    const interval = setInterval(() => {
-      loadRooms(true);
-      loadHousekeepingData();
-    }, 4000);
-    return () => clearInterval(interval);
   }, [loadRooms, loadHousekeepingData]);
+
+  usePolling(syncGovernance, 15000, { runOnMount: false });
 
   const handleAssign = async (roomId: string, housekeeperId: string) => {
     const room = rooms.find((r) => r.id === roomId);

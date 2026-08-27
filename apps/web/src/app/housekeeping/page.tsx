@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { usePolling } from "@/hooks/usePolling";
 import {
   Sparkles,
   Phone,
@@ -116,13 +117,13 @@ export default function HousekeepingAppPage() {
   }, [loadMe]);
 
   useEffect(() => {
-    if (!housekeeper) return;
-    loadRooms();
-    // Atualização automática e transparente pelo banco, a cada 4s, enquanto a governanta está
-    // olhando a lista de quartos — sem recarregar a tela nem mostrar indicador de carregamento.
-    const interval = setInterval(() => loadRooms(true), 4000);
-    return () => clearInterval(interval);
+    if (housekeeper) loadRooms();
   }, [housekeeper, loadRooms]);
+
+  // Atualização automática e transparente pelo banco enquanto a governanta olha a lista — a cada
+  // 10 s (antes 4 s), sem recarregar a tela. Pausa quando não há governanta logada e quando a aba
+  // está em segundo plano (usePolling).
+  usePolling(() => loadRooms(true), 10000, { paused: !housekeeper, runOnMount: false });
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();

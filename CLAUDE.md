@@ -119,3 +119,13 @@ Qualquer campo preenchido por hóspede/usuário (nome, observações, mensagens)
 - [ ] Texto livre de usuário é escapado antes de virar HTML?
 
 Se qualquer resposta for "não", a rota não está pronta.
+
+---
+
+## Implementações futuras planejadas
+
+### Métrica de volume de dados (egress) por assinante no painel do admin master
+
+O painel do admin master (`apps/web/src/app/admin/**`) deve ganhar uma métrica de **volume de dados / egress do Supabase por assinante (tenant)**. Objetivo: identificar qual hotel está gerando mais tráfego de banco (o consumo do Supabase hoje é dominado por "Shared Pooler Egress", ~90%, que corresponde às consultas via Prisma — incluindo o polling de 3s dos mapas). Sem essa quebra por tenant não dá para saber quem puxa a fatura para cima nem cobrar/limitar de forma justa.
+
+Abordagem sugerida: instrumentar as rotas de API (ou o cliente Prisma) para contabilizar bytes de resposta por `tenantId` e agregar por período, exibindo no painel do admin junto das demais métricas por assinante. Não expor essa métrica ao próprio tenant.

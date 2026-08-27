@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
+import { usePolling } from "@/hooks/usePolling";
 import {
   ArrowLeft,
   Play,
@@ -112,11 +113,12 @@ export default function HousekeepingRoomPage() {
 
   useEffect(() => {
     loadRoom();
-    // Atualização automática e transparente pelo banco — pega, por exemplo, um cancelamento feito
-    // pela recepção sem precisar recarregar a página nem interromper o preenchimento da observação.
-    const interval = setInterval(() => loadRoom(true), 4000);
-    return () => clearInterval(interval);
   }, [loadRoom]);
+
+  // Atualização automática e transparente pelo banco a cada 10 s (antes 4 s) — pega, por exemplo,
+  // um cancelamento feito pela recepção sem recarregar a página nem interromper a digitação da
+  // observação. Pausa com a aba em segundo plano (usePolling).
+  usePolling(() => loadRoom(true), 10000, { runOnMount: false });
 
   const handleStart = async () => {
     setActionError(null);

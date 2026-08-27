@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
+import { usePolling } from "@/hooks/usePolling";
 import { 
   BedDouble, 
   Plus, 
@@ -100,12 +101,9 @@ export default function ApartamentosPage() {
     }
   };
 
-  // Polling em segundo plano a cada 3 segundos
-  useEffect(() => {
-    syncApartamentosFromDatabase();
-    const interval = setInterval(syncApartamentosFromDatabase, 3000);
-    return () => clearInterval(interval);
-  }, []);
+  // Cadastro de apartamentos não muda "sozinho" para quem está nesta tela (as edições locais já
+  // aparecem na hora). 30 s de frescor basta; antes eram 3 s. Pausa com a aba em segundo plano.
+  usePolling(syncApartamentosFromDatabase, 30000);
 
   const filteredAptos = apartamentos.filter((a) => {
     const matchesSearch =

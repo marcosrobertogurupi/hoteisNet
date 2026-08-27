@@ -45,6 +45,10 @@ export async function GET(req: NextRequest) {
     const sixMonthsAhead = new Date(startOfToday);
     sixMonthsAhead.setMonth(sixMonthsAhead.getMonth() + 6);
 
+    // `select` explícito (em vez de `include` + spread `...r`): o Mapa de Reservas e a lista só
+    // desenham este subconjunto de campos, e a resposta é baixada a cada 3 s pelo polling. Trazer
+    // a linha inteira da Reservation (notes, roomDescription, operatorName, discountAmount, flags
+    // de WhatsApp, etc.) a cada tick era boa parte do egress do Supabase nessa tela.
     const reservations = await prisma.reservation.findMany({
       where: {
         room: { tenantId: session.tenantId },
@@ -53,18 +57,55 @@ export async function GET(req: NextRequest) {
           { checkOutDate: { gte: startOfToday }, checkInDate: { lte: sixMonthsAhead } },
         ],
       },
-      include: {
+      select: {
+        id: true,
+        roomId: true,
+        status: true,
+        checkInDate: true,
+        checkOutDate: true,
+        guestName: true,
+        guestPhone: true,
+        guestCpf: true,
+        dailyRate: true,
+        depositPaid: true,
+        totalAmount: true,
+        tariffName: true,
+        notes: true,
+        roomDescription: true,
+        reservationNumber: true,
+        preCheckinSent: true,
         room: {
-          include: { category: true },
+          select: {
+            id: true,
+            number: true,
+            floor: true,
+            status: true,
+            category: { select: { name: true, description: true } },
+          },
         },
         stayCheckin: { select: { checkInDate: true, dailiesCount: true, isClosed: true } },
-        fnrhRecords: { select: { id: true } },
+        _count: { select: { fnrhRecords: true } },
       },
       orderBy: { createdAt: "desc" },
     });
 
     const formatted = reservations.map((r) => ({
-      ...r,
+      id: r.id,
+      roomId: r.roomId,
+      status: r.status,
+      checkInDate: r.checkInDate,
+      checkOutDate: r.checkOutDate,
+      guestName: r.guestName,
+      guestPhone: r.guestPhone,
+      guestCpf: r.guestCpf,
+      dailyRate: r.dailyRate,
+      depositPaid: r.depositPaid,
+      totalAmount: r.totalAmount,
+      tariffName: r.tariffName,
+      notes: r.notes,
+      roomDescription: r.roomDescription,
+      reservationNumber: r.reservationNumber,
+      preCheckinSent: r.preCheckinSent,
       // Data até onde o quarto está efetivamente ocupado, considerando diárias extras já
       // lançadas na hospedagem (ex: rollover automático) que estenderam a estadia além da
       // "Dt.Prev.Saída" original. Usado só para a barra visual do Mapa de Reservas — a data
@@ -73,8 +114,7 @@ export async function GET(req: NextRequest) {
       // true quando o hóspede já preencheu o pré-check-in/FNRH pelo link (existe ao menos um
       // FNRHRecord vinculado a esta reserva) — distinto de preCheckinSent, que só indica que o
       // link foi disparado.
-      fnrhCompleted: r.fnrhRecords.length > 0,
-      fnrhRecords: undefined,
+      fnrhCompleted: r._count.fnrhRecords > 0,
       rooms: r.room
         ? {
             id: r.room.id,
@@ -86,8 +126,6 @@ export async function GET(req: NextRequest) {
               : null,
           }
         : null,
-      room: undefined,
-      stayCheckin: undefined,
     }));
 
     // Toda hospedagem em aberto (StayCheckin com isClosed: false) precisa aparecer no Mapa de
@@ -105,7 +143,25 @@ export async function GET(req: NextRequest) {
 
     const activeStays = await prisma.stayCheckin.findMany({
       where: { isClosed: false, tenantId: session.tenantId },
-      include: { room: { include: { category: true } }, primaryGuest: true },
+      select: {
+        id: true,
+        roomId: true,
+        checkInDate: true,
+        expectedCheckOut: true,
+        dailiesCount: true,
+        isClosed: true,
+        totalDaily: true,
+        primaryGuest: { select: { fullName: true, cpf: true, phone: true } },
+        room: {
+          select: {
+            id: true,
+            number: true,
+            floor: true,
+            status: true,
+            category: { select: { name: true, description: true } },
+          },
+        },
+      },
     });
 
     const unlinkedStays = activeStays.filter((s) => !roomIdsAlreadyCheckedIn.has(s.roomId));

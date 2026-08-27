@@ -79,11 +79,11 @@ export default function CadastroTarifasModal({
     }
   }, []);
 
+  // Carrega as tarifas ao abrir o modal. Não há polling: tarifa é cadastro, muda por ação do
+  // próprio operador (e as alterações locais já são refletidas na hora) — manter uma consulta a
+  // cada 3 s com o modal aberto só gastava egress do Supabase à toa.
   useEffect(() => {
-    if (!isOpen) return;
-    syncTariffsFromDatabase();
-    const interval = setInterval(syncTariffsFromDatabase, 3000);
-    return () => clearInterval(interval);
+    if (isOpen) syncTariffsFromDatabase();
   }, [isOpen, syncTariffsFromDatabase]);
 
   // Create / Edit Sub-modal State

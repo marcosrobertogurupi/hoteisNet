@@ -34,6 +34,7 @@ import VisualizarReservaModal from "@/components/VisualizarReservaModal";
 import { generateReservaPdfBase64 } from "@/utils/pdfGenerator";
 import { isReservationExpired, getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
+import { usePolling } from "@/hooks/usePolling";
 
 export interface ReservationItem {
   id: string;
@@ -326,11 +327,7 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
     }
   }, []);
 
-  useEffect(() => {
-    syncHousekeepingTasks();
-    const interval = setInterval(syncHousekeepingTasks, 3000);
-    return () => clearInterval(interval);
-  }, [syncHousekeepingTasks]);
+  usePolling(syncHousekeepingTasks, 3000);
 
   const syncGridRooms = useCallback(async () => {
     try {
@@ -380,12 +377,8 @@ export default function ReservationGridMap({ apiReservations, onRefresh }: Reser
     }
   }, []);
 
-  useEffect(() => {
-    syncGridRooms();
-    const interval = setInterval(syncGridRooms, 3000);
-    return () => clearInterval(interval);
-  }, [syncGridRooms]);
-  
+  usePolling(syncGridRooms, 3000);
+
   // Date Calculation
   const today = new Date();
   const todayYear = today.getFullYear();

@@ -56,6 +56,7 @@ import TransferenciaDebitoModal from "@/components/TransferenciaDebitoModal";
 import HistoricoLimpezaModal from "@/components/HistoricoLimpezaModal";
 import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/SelecaoReservaQuartoModal";
 import LoadingOverlay from "@/components/LoadingOverlay";
+import { usePolling } from "@/hooks/usePolling";
 
 // Converte "DD/MM/YYYY HH:MM:SS" (formato usado pelo modal de check-in) para ISO "YYYY-MM-DDTHH:MM:SS",
 // formato exigido pela coluna timestamp do Postgres na API /api/reservations.
@@ -450,12 +451,9 @@ export default function TenantDashboardPage() {
     showSelecaoReservaModal;
 
   // Polling em segundo plano a cada 3 segundos — pausado enquanto qualquer modal estiver aberto
-  useEffect(() => {
-    if (anyModalOpen) return;
-    syncRoomsFromDatabase();
-    const interval = setInterval(syncRoomsFromDatabase, 3000);
-    return () => clearInterval(interval);
-  }, [syncRoomsFromDatabase, anyModalOpen]);
+  // e também enquanto a aba estiver em segundo plano (ver usePolling), para não gastar egress do
+  // Supabase com telas que ninguém está olhando.
+  usePolling(syncRoomsFromDatabase, 3000, { paused: anyModalOpen });
 
   // Espelha anyModalOpen num ref para ser lido dentro do intervalo de diária extra abaixo, sem
   // precisar reiniciar esse intervalo toda vez que um modal abre/fecha.

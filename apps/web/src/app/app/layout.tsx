@@ -11,6 +11,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
 import { useOperator } from "@/context/OperatorContext";
 import { playHumanInterventionSound } from "@/utils/notificationSound";
+import { usePolling } from "@/hooks/usePolling";
 
 const ROLE_LABELS: Record<string, string> = {
   SUPER_ADMIN: "Super Admin",
@@ -60,11 +61,10 @@ function HumanEscalationBell() {
     }
   }, [humanInterventionSoundEnabled]);
 
-  useEffect(() => {
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, [load]);
+  // O sino de intervenção humana só é montado no Mapa de Quartos e no Mapa de Reservas. 15 s é
+  // frescor de sobra para um alerta secundário — antes eram 5 s somados ao polling de 3 s de cada
+  // mapa, gastando egress do Supabase à toa. Também pausa com a aba em segundo plano (usePolling).
+  usePolling(load, 15000);
 
   const resolve = async (id: string) => {
     setEscalations((prev) => prev.filter((e) => e.id !== id));

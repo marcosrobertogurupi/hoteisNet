@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { Package, ArrowRightLeft, Building2, ShoppingBag, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Filter, ScanBarcode, Trash2, X, Loader2 } from "lucide-react";
 import LoadingOverlay from "@/components/LoadingOverlay";
+import { usePolling } from "@/hooks/usePolling";
 
 interface ProductBarcode {
   id: string;
@@ -88,11 +89,10 @@ export default function TenantStockPage() {
     }
   }, []);
 
-  useEffect(() => {
-    syncStockFromDatabase();
-    const interval = setInterval(syncStockFromDatabase, 3000);
-    return () => clearInterval(interval);
-  }, [syncStockFromDatabase]);
+  // O estoque não muda "sozinho" da perspectiva de quem está nesta tela (as baixas por consumo
+  // são pontuais e as edições locais já são refletidas na hora). 30 s é frescor de sobra; antes
+  // eram 3 s. Pausa com a aba em segundo plano (usePolling).
+  usePolling(syncStockFromDatabase, 30000);
 
   const openBarcodeModal = async (product: any) => {
     setBarcodeProduct(product);

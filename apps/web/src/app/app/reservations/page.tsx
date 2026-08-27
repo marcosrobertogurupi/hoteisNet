@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { CalendarDays, Plus, Layers, Search, Building2, CheckCircle2, Clock, LayoutGrid, List, RefreshCw } from "lucide-react";
 import ReservationGridMap from "@/components/ReservationGridMap";
 import LancarReservaModal from "@/components/LancarReservaModal";
@@ -9,6 +9,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { isReservationExpired } from "@/utils/reservationTolerance";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
+import { usePolling } from "@/hooks/usePolling";
 
 export default function TenantReservationsPage() {
   const { defaultCheckInTime, reservationToleranceHours } = useTheme();
@@ -44,12 +45,9 @@ export default function TenantReservationsPage() {
   // modal "Lançar Nova Reserva" estiver aberto, para não sobrescrever dados que o operador esteja
   // digitando (padrão herdado do projeto original em WinDev: telas de mapa atualizam sozinhas,
   // janelas abertas por cima pausam a atualização).
-  useEffect(() => {
-    if (showLancarModal || showMultiplasModal) return;
-    fetchReservations();
-    const interval = setInterval(fetchReservations, 3000);
-    return () => clearInterval(interval);
-  }, [fetchReservations, showLancarModal, showMultiplasModal]);
+  // Pausa também enquanto a aba está em segundo plano (ver usePolling) — o Mapa de Reservas só
+  // precisa estar online para o operador que está de fato olhando para ele.
+  usePolling(fetchReservations, 3000, { paused: showLancarModal || showMultiplasModal });
 
   const handleSendUazapiLink = async (resId: string) => {
     setSendingLinkId(resId);
