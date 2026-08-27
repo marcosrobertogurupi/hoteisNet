@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getHousekeeperSession } from "@/lib/housekeeperAuth";
 import { prisma } from "@/lib/prisma";
-import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 import { ensureDailyArrumacaoTasks } from "@/lib/housekeeping";
 
 // Ordena andar e número de quarto numericamente quando possível ("2" antes de "10"), com
@@ -13,11 +12,13 @@ function naturalCompare(a: string, b: string): number {
   return a.localeCompare(b, "pt-BR", { numeric: true });
 }
 
-// GET /api/housekeeping/rooms — quartos que a governanta logada deve ver no app, agrupados por
-// andar, com dois blocos por andar:
-//  - `pending`       — o que ainda falta fazer (aparece em "A limpar").
-//  - `resolvedToday` — arrumações de quarto ocupado já resolvidas hoje no modo QUEUE (limpas ou
-//                      marcadas como "não perturbe"), para "Resolvidos hoje".
+// GET /api/housekeeping/rooms — quartos que a governanta logada ainda precisa tratar, agrupados
+// por andar em um único bloco `pending` ("A limpar").
+//
+// Assim que um quarto é resolvido (limpeza pós check-out concluída, arrumação de quarto ocupado
+// concluída ou marcada como "não perturbe"), ele SAI por completo da relação da governanta — o
+// app dela não mostra "resolvidos hoje". O acompanhamento do que já foi feito no dia fica na
+// recepção (Mapa de Quartos / Governança / Histórico de Limpeza), não no celular da governanta.
 //
 // Regras de visibilidade (ver PLANO_GOVERNANCA_FILA.md):
 //  - CHECKOUT (limpeza pós check-out de quarto vago): modo RECEPTION mostra só o que foi atribuído
@@ -41,7 +42,6 @@ export async function GET(req: NextRequest) {
 
     const setting = await prisma.housekeepingSetting.findUnique({ where: { tenantId: session.tenantId } });
     const assignmentMode = setting?.assignmentMode || "RECEPTION";
-    const today = dateOnlyBrasilia(new Date());
 
     const rooms = await prisma.room.findMany({
       where: { tenantId: session.tenantId, active: true },
@@ -52,12 +52,7 @@ export async function GET(req: NextRequest) {
         status: true,
         category: { select: { name: true } },
         housekeepingTasks: {
-          where: {
-            OR: [
-              { status: { in: ["PENDING", "IN_PROGRESS"] } },
-              { type: "OCCUPIED", serviceDate: today, status: { in: ["DONE", "SKIPPED"] } },
-            ],
-          },
+          where: { status: { in: ["PENDING", "IN_PROGRESS"] } },
           orderBy: { createdAt: "desc" },
           select: {
             id: true,
@@ -65,11 +60,7 @@ export async function GET(req: NextRequest) {
             status: true,
             notes: true,
             startedAt: true,
-            finishedAt: true,
-            skipReason: true,
-            serviceDate: true,
             housekeeperId: true,
-            housekeeper: { select: { name: true } },
           },
         },
       },
@@ -89,34 +80,11 @@ export async function GET(req: NextRequest) {
       notes: string | null;
       startedAt: Date | null;
     };
-    type ResolvedRoom = {
-      id: string;
-      number: string;
-      floor: string;
-      category: string | null;
-      taskId: string;
-      outcome: "CLEANED" | "DND";
-      resolvedAt: Date | null;
-      resolvedByName: string | null;
-      notes: string | null;
-    };
 
     const pending: PendingRoom[] = [];
-    const resolved: ResolvedRoom[] = [];
 
     for (const room of rooms) {
-      const tasks = room.housekeepingTasks;
-      const active = tasks.find((t) => t.status === "PENDING" || t.status === "IN_PROGRESS") || null;
-      const resolvedToday =
-        assignmentMode === "QUEUE"
-          ? tasks.find(
-              (t) =>
-                t.type === "OCCUPIED" &&
-                (t.status === "DONE" || t.status === "SKIPPED") &&
-                t.serviceDate != null &&
-                new Date(t.serviceDate).getTime() === today.getTime()
-            ) || null
-          : null;
+      const active = room.housekeepingTasks[0] || null;
 
       const base = {
         id: room.id,
@@ -146,18 +114,6 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      if (resolvedToday) {
-        resolved.push({
-          ...base,
-          taskId: resolvedToday.id,
-          outcome: resolvedToday.status === "SKIPPED" ? "DND" : "CLEANED",
-          resolvedAt: resolvedToday.finishedAt,
-          resolvedByName: resolvedToday.housekeeper?.name || null,
-          notes: resolvedToday.notes,
-        });
-        continue;
-      }
-
       // Sem tarefa ativa: só a fila espontânea de limpeza pós check-out, e só no modo QUEUE.
       if (assignmentMode === "QUEUE" && room.status === "VACANT_DIRTY") {
         pending.push({
@@ -172,9 +128,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const floorKeys = Array.from(
-      new Set([...pending.map((r) => r.floor), ...resolved.map((r) => r.floor)])
-    ).sort(naturalCompare);
+    const floorKeys = Array.from(new Set(pending.map((r) => r.floor))).sort(naturalCompare);
 
     const floors = floorKeys.map((floor) => ({
       floor,
@@ -191,19 +145,6 @@ export async function GET(req: NextRequest) {
           status: r.status,
           notes: r.notes,
           startedAt: r.startedAt,
-        })),
-      resolvedToday: resolved
-        .filter((r) => r.floor === floor)
-        .sort((a, b) => naturalCompare(a.number, b.number))
-        .map((r) => ({
-          id: r.id,
-          number: r.number,
-          category: r.category,
-          taskId: r.taskId,
-          outcome: r.outcome,
-          resolvedAt: r.resolvedAt,
-          resolvedByName: r.resolvedByName,
-          notes: r.notes,
         })),
     }));
 

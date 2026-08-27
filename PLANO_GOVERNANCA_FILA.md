@@ -6,6 +6,16 @@ Todos os itens abaixo foram implementados e verificados de ponta a ponta contra 
 (dev = produção), incluindo regressão do modo `RECEPTION`. Migration aplicada via `prisma db push`
 + arquivo SQL em `supabase/migrations/20260826150000_housekeeping_daily_arrumacao_and_dnd.sql`.
 
+### Ajuste posterior (27/08/2026) — "Resolvidos hoje" saiu do app da governanta
+
+Testando no celular de uma governanta real, o usuário decidiu que **quarto resolvido no dia
+(limpeza pós check-out concluída, arrumação de quarto ocupado concluída ou "não perturbe") deve
+sumir por completo da relação da governanta** — com hóspede ou sem. O bloco recolhido "Resolvidos
+hoje" por andar foi removido de `apps/web/src/app/housekeeping/**`. `GET /api/housekeeping/rooms`
+não retorna mais `resolvedToday` (payload só tem `pending`) e só busca tarefas `PENDING`/
+`IN_PROGRESS`. O acompanhamento do que já foi feito no dia continua na recepção (Mapa de Quartos,
+Governança, Histórico de Limpeza). Só afeta o modo `QUEUE`; `RECEPTION` não foi tocado.
+
 Ajustes que só apareceram durante a implementação (além do plano):
 
 - `GET /api/tenant/housekeeping-tasks` passou a **excluir** a arrumação diária automática ainda sem

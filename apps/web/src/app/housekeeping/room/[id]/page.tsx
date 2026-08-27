@@ -20,26 +20,12 @@ interface RoomView {
   number: string;
   category: string | null;
   floor: string;
-  // "pending" ou "resolved" — de qual bloco da listagem o quarto veio.
-  section: "pending" | "resolved";
-  // Campos de pendente:
   roomStatus?: "VACANT_CLEAN" | "VACANT_DIRTY" | "OCCUPIED" | "MAINTENANCE";
   taskId?: string | null;
   type?: "CHECKOUT" | "OCCUPIED";
   status?: "PENDING" | "IN_PROGRESS";
   notes?: string | null;
   startedAt?: string | null;
-  // Campos de resolvido:
-  outcome?: "CLEANED" | "DND";
-  resolvedAt?: string | null;
-  resolvedByName?: string | null;
-}
-
-function formatTimeBR(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export default function HousekeepingRoomPage() {
@@ -84,12 +70,7 @@ export default function HousekeepingRoomPage() {
         for (const f of data.floors || []) {
           const p = (f.pending || []).find((r: any) => r.id === roomId);
           if (p) {
-            found = { ...p, floor: f.floor, section: "pending" };
-            break;
-          }
-          const r = (f.resolvedToday || []).find((x: any) => x.id === roomId);
-          if (r) {
-            found = { ...r, floor: f.floor, section: "resolved" };
+            found = { ...p, floor: f.floor };
             break;
           }
         }
@@ -259,39 +240,7 @@ export default function HousekeepingRoomPage() {
       </div>
 
       <div className="px-4 py-6 space-y-6 max-w-md mx-auto">
-        {room.section === "resolved" && (
-          <div className="text-center space-y-4 py-10">
-            <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mx-auto border ${
-              room.outcome === "DND"
-                ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
-                : "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
-            }`}>
-              {room.outcome === "DND" ? <DoorClosed className="w-9 h-9" /> : <CheckCircle2 className="w-9 h-9" />}
-            </div>
-            <div>
-              <p className="text-base font-bold">
-                {room.outcome === "DND" ? "Registrado em \"não perturbe\"" : "Arrumação concluída"}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                {formatTimeBR(room.resolvedAt)}
-                {room.resolvedByName ? ` · ${room.resolvedByName}` : ""}
-              </p>
-            </div>
-            {room.notes && (
-              <p className="text-xs text-slate-300 bg-slate-900/60 border border-slate-800 rounded-xl px-3 py-2">
-                {room.notes}
-              </p>
-            )}
-            <button
-              onClick={() => router.push("/housekeeping")}
-              className="w-full py-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm transition"
-            >
-              Voltar para a lista
-            </button>
-          </div>
-        )}
-
-        {room.section === "pending" && room.status === "PENDING" && (
+        {room.status === "PENDING" && (
           <div className="space-y-5 py-6">
             <div className="text-center space-y-4">
               <div className="w-20 h-20 rounded-3xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto">
@@ -359,7 +308,7 @@ export default function HousekeepingRoomPage() {
           </div>
         )}
 
-        {room.section === "pending" && room.status === "IN_PROGRESS" && (
+        {room.status === "IN_PROGRESS" && (
           <div className="space-y-6">
             <div className="flex items-center justify-center gap-2 py-2">
               <Sparkles className="w-4 h-4 text-sky-400 animate-pulse" />
