@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
+import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
@@ -34,6 +35,13 @@ export async function GET(req: NextRequest) {
     if (!session?.tenantId) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
+
+    // Resposta condicional: se nada que o Mapa de Reservas desenha mudou desde a última vez, o
+    // navegador recebe 304 (sem corpo) e o polling de 3 s não baixa o dataset de novo. Só as
+    // consultas de contagem/timestamp (baratas) rodam nesse caso. Ver lib/mapVersion.ts.
+    const etag = `"resv-${await reservationsMapVersion(session.tenantId)}"`;
+    const notModified = notModifiedResponse(req, etag);
+    if (notModified) return notModified;
 
     // Mapa de Reservas só precisa do horizonte operacional: hoje até 6 meses à frente. Reservas já
     // finalizadas (passado) nunca aparecem aqui — só no relatório dedicado — o que evita que a
@@ -195,7 +203,10 @@ export async function GET(req: NextRequest) {
       },
     }));
 
-    return NextResponse.json({ success: true, reservations: [...formatted, ...syntheticFromStays] });
+    return NextResponse.json(
+      { success: true, reservations: [...formatted, ...syntheticFromStays] },
+      { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
+    );
   } catch (error: any) {
     console.error("[GET /api/reservations] Erro:", error);
     return NextResponse.json({ success: false, error: error.message });

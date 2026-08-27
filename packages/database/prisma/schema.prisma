@@ -835,6 +835,10 @@ model Reservation {
   status                 ReservationStatus @default(PRE_RESERVATION)
   preCheckinSent         Boolean           @default(false)
   createdAt              DateTime          @default(now())
+  // Última alteração no registro (Prisma bumpa em qualquer campo). Usado pelo polling dos mapas
+  // como parte do "carimbo de versão" que decide se o Mapa de Reservas precisa rebaixar o payload
+  // ou pode receber um 304 (ver apps/web/src/lib/mapVersion.ts).
+  updatedAt              DateTime          @default(now()) @updatedAt
   guestId                String?
   tariffId               String?
   tariffName             String?
@@ -933,6 +937,9 @@ model StayCheckin {
   totalAdvance              Decimal              @default(0) @db.Decimal(10, 2)
   balanceDue                Decimal              @default(0) @db.Decimal(10, 2)
   otherDebits               Decimal              @default(0) @db.Decimal(10, 2)
+  // Última alteração no registro (rollover de diária, consumo, fechamento...). Parte do "carimbo
+  // de versão" do polling dos mapas — ver apps/web/src/lib/mapVersion.ts.
+  updatedAt                 DateTime             @default(now()) @updatedAt
   fnrhRecords               FNRHRecord[]
   charges                   StayCharge[]
   primaryGuest              Guest                @relation(fields: [primaryGuestId], references: [id])
@@ -1322,6 +1329,9 @@ model WhatsappMessage {
   read       Boolean      @default(true) // mensagens IN começam false até o operador abrir a conversa
   sentBy     String? // só em mensagens OUT: "AI" (agente de atendimento) | "HUMAN" (operador). null em mensagens IN.
   createdAt  DateTime     @default(now())
+  // Bumpa quando a mensagem é marcada como lida — parte do "carimbo de versão" do polling dos
+  // mapas, para o badge de não lidas do card do quarto não ficar preso (ver lib/mapVersion.ts).
+  updatedAt  DateTime     @default(now()) @updatedAt
   tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stay       StayCheckin? @relation(fields: [stayId], references: [id], onDelete: SetNull)
 

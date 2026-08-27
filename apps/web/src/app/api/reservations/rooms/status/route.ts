@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
+import { roomsStatusMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 
 // GET /api/reservations/rooms/status — versão enxuta de /api/reservations/rooms usada pelo
 // polling de 3s do Mapa de Quartos. Traz só os campos que realmente mudam em tempo real (status,
@@ -15,6 +16,11 @@ export async function GET(req: NextRequest) {
     if (!session?.tenantId) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
+
+    // Resposta condicional (304) para o polling de 3 s do Mapa de Quartos — ver lib/mapVersion.ts.
+    const etag = `"roomsst-${await roomsStatusMapVersion(session.tenantId)}"`;
+    const notModified = notModifiedResponse(req, etag);
+    if (notModified) return notModified;
 
     const rooms = await prisma.room.findMany({
       where: { tenantId: session.tenantId },
@@ -102,7 +108,10 @@ export async function GET(req: NextRequest) {
       reservationNumber: r.reservationNumber || r.id,
     }));
 
-    return NextResponse.json({ success: true, rooms: formatted, todayReservations });
+    return NextResponse.json(
+      { success: true, rooms: formatted, todayReservations },
+      { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
+    );
   } catch (error: any) {
     console.error("[GET /api/reservations/rooms/status] Erro ao buscar status dos quartos:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
