@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
 
 // Mesma constante usada em /api/stay/transfer-debit — forma pré-cadastrada usada para "quitar" no
@@ -31,7 +32,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "caixaMovimentoId é obrigatório." }, { status: 400 });
     }
 
-    await prisma.$transaction(async (tx) => {
+    await txWithRetry(async (tx) => {
       const ct = await tx.cashTransaction.findUnique({
         where: { id: caixaMovimentoId },
         include: { stay: true, cashRegister: { select: { tenantId: true } } },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
 
 // POST /api/cadastros/contas-pagar/baixa — registra a baixa (quitação, total ou parcial) de um
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
     // e memória do projeto sobre lógica de data em America/Sao_Paulo).
     const paidAtDate = paidAt ? new Date(`${paidAt}T12:00:00Z`) : new Date();
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const payable = await tx.accountsPayable.findFirst({ where: { id: accountsPayableId, tenantId: session.tenantId! } });
       if (!payable) throw new Error("Título de contas a pagar não encontrado.");
       if (payable.isPaid) throw new Error("Este título já está totalmente quitado.");

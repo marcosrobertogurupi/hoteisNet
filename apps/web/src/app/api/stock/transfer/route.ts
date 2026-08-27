@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
 
 // POST /api/stock/transfer — transfere unidades do Estoque Geral (Almoxarifado Central) de um
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const product = await tx.product.findFirst({ where: { id: productId, tenantId: session.tenantId! } });
       if (!product) throw new Error("Produto não encontrado.");
       const posLocation = await tx.pOSLocation.findFirst({ where: { id: posLocationId, tenantId: session.tenantId! } });

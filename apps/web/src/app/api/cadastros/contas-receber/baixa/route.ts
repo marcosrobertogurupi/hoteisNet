@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
 
 // POST /api/cadastros/contas-receber/baixa — registra a baixa (quitação, total ou parcial) de um
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Informe um valor de baixa maior que zero." }, { status: 400 });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const receivable = await tx.accountsReceivable.findFirst({ where: { id: accountsReceivableId, tenantId: session.tenantId! } });
       if (!receivable) throw new Error("Título de contas a receber não encontrado.");
       if (receivable.isPaid) throw new Error("Este título já está totalmente quitado.");

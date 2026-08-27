@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const caixa = await prisma.$transaction(async (tx) => {
+    const caixa = await txWithRetry(async (tx) => {
       const created = await tx.cashRegister.create({
         data: {
           tenantId: session.tenantId!,

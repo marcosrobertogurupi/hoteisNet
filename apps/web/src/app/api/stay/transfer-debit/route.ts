@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
     const opId = operatorId || "USR-001";
     const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const [fromStay, toStay] = await Promise.all([
         tx.stayCheckin.findUnique({
           where: { id: fromStayCheckinId },

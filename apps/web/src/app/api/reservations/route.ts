@@ -5,6 +5,7 @@ import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/li
 import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
+import { txWithRetry } from "@/lib/dbTx";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const realRoomId = await resolveRoomId(tx as any, String(roomId), session.tenantId!);
       const checkIn = new Date(checkInDate);
       const checkOut = new Date(checkOutDate);
@@ -243,7 +244,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: "ID da reserva é obrigatório." }, { status: 400 });
     }
 
-    await prisma.$transaction(async (tx) => {
+    await txWithRetry(async (tx) => {
       const existing = await tx.reservation.findFirst({ where: { id, room: { tenantId: session.tenantId! } } });
       if (!existing) {
         throw new Error(`Reserva ${id} não encontrada.`);

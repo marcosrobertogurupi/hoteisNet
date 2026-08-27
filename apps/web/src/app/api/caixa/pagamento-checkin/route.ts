@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
 
     const desc = descricao || `Pagamento de diárias — Quarto ${roomTarget}`;
 
-    const { cashTransactionId } = await prisma.$transaction((tx) =>
+    const { cashTransactionId } = await txWithRetry((tx) =>
       processPaymentLine(tx, {
         tenantId: stay!.tenantId,
         cashRegisterId: caixa.id,

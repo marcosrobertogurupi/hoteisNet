@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { supabaseAdmin } from "@/utils/supabaseClient";
 import { validatePreCheckinToken } from "@/lib/preCheckinLink";
 import { validateCPF } from "@/lib/documentValidation";
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const body = await request.json();
 
   try {
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const validation = await validatePreCheckinToken(tx, token);
       if (!validation.ok) {
         throw new Error(`TOKEN_${validation.reason}`);

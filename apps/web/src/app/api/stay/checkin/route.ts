@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { sendUazapiText } from "@/lib/uazapi";
@@ -237,7 +238,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "O valor da diária/hospedagem deve ser maior que zero." }, { status: 400 });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const room = await tx.room.findFirst({
         where: {
           OR: [{ id: roomTarget }, { number: roomTarget }],
@@ -607,7 +608,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });
     }
 
-    const stay = await prisma.$transaction(async (tx) => {
+    const stay = await txWithRetry(async (tx) => {
       // Trava a linha da hospedagem ANTES de ler/agregar o saldo devedor (Postgres Read Committed
       // não trava nada em um SELECT comum — só a partir do primeiro UPDATE nesta linha um lock de
       // escrita seria adquirido). Sem isso, um consumo lançado por outro terminal (POST

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { findConflictingReservation } from "@/lib/reservationHelpers";
@@ -37,7 +38,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: "expectedCheckOut inválido." }, { status: 400 });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const stay = await tx.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId! } });
       if (!stay) {
         throw new Error(`Hospedagem ${stayCheckinId} não encontrada.`);

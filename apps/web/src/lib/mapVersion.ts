@@ -17,13 +17,31 @@ import { prisma } from "@/lib/prisma";
  * (mudança de status de reserva, virada de diária, marcação de mensagem como lida, etc.).
  */
 
-interface TableSig {
+interface LabeledSig {
+  lbl: string;
   c: bigint | number;
   ts: Date | null;
 }
 
 function hashParts(parts: string[]): string {
   return createHash("sha1").update(parts.join("|")).digest("hex").slice(0, 16);
+}
+
+// Roda todas as sub-consultas de contagem/timestamp num ÚNICO SELECT (UNION ALL), usando UMA
+// conexão do pooler por chamada em vez de uma por tabela. `$1` é o tenantId, repetido em cada
+// fragmento. Cada fragmento deve ter a forma: SELECT '<lbl>' AS lbl, COUNT(*)::int AS c, <ts> AS ts
+async function combinedSig(tenantId: string, fragments: { label: string; sql: string }[]): Promise<string> {
+  const query = fragments.map((f) => f.sql).join("\nUNION ALL\n");
+  const rows = await prisma.$queryRawUnsafe<LabeledSig[]>(query, tenantId);
+  const byLabel = new Map(rows.map((r) => [r.lbl, r]));
+  return hashParts(
+    fragments.map((f) => {
+      const r = byLabel.get(f.label);
+      const count = r ? Number(r.c) : 0;
+      const ts = r?.ts ? new Date(r.ts).getTime() : 0;
+      return `${f.label}:${count}:${ts}`;
+    }),
+  );
 }
 
 // Fallback quando o cálculo da versão falha — ex.: a migração que adiciona `updatedAt` a
@@ -42,13 +60,6 @@ export function combineVersions(...versions: string[]): string {
   return hashParts(versions);
 }
 
-function sigToPart(label: string, rows: TableSig[]): string {
-  const r = rows[0];
-  const count = r ? Number(r.c) : 0;
-  const ts = r?.ts ? new Date(r.ts).getTime() : 0;
-  return `${label}:${count}:${ts}`;
-}
-
 // Mapa de Reservas — GET /api/reservations
 export async function reservationsMapVersion(tenantId: string): Promise<string> {
   try {
@@ -58,30 +69,12 @@ export async function reservationsMapVersion(tenantId: string): Promise<string> 
   }
 }
 
-async function computeReservationsMapVersion(tenantId: string): Promise<string> {
-  const [resv, stays, fnrh, rooms] = await Promise.all([
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "reservations" WHERE "tenantId" = $1`,
-      tenantId,
-    ),
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("checkInDate"), 'epoch')) AS ts FROM "stay_checkins" WHERE "tenantId" = $1`,
-      tenantId,
-    ),
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, COALESCE(MAX(fr."createdAt"), 'epoch') AS ts FROM "fnrh_records" fr JOIN "reservations" r ON fr."reservationId" = r.id WHERE r."tenantId" = $1`,
-      tenantId,
-    ),
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "rooms" WHERE "tenantId" = $1`,
-      tenantId,
-    ),
-  ]);
-  return hashParts([
-    sigToPart("resv", resv),
-    sigToPart("stay", stays),
-    sigToPart("fnrh", fnrh),
-    sigToPart("room", rooms),
+function computeReservationsMapVersion(tenantId: string): Promise<string> {
+  return combinedSig(tenantId, [
+    { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "reservations" WHERE "tenantId" = $1` },
+    { label: "stay", sql: `SELECT 'stay' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("checkInDate"), 'epoch')) AS ts FROM "stay_checkins" WHERE "tenantId" = $1` },
+    { label: "fnrh", sql: `SELECT 'fnrh' AS lbl, COUNT(*)::int AS c, COALESCE(MAX(fr."createdAt"), 'epoch') AS ts FROM "fnrh_records" fr JOIN "reservations" r ON fr."reservationId" = r.id WHERE r."tenantId" = $1` },
+    { label: "room", sql: `SELECT 'room' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "rooms" WHERE "tenantId" = $1` },
   ]);
 }
 
@@ -94,41 +87,21 @@ export async function roomsStatusMapVersion(tenantId: string): Promise<string> {
   }
 }
 
-async function computeRoomsStatusMapVersion(tenantId: string): Promise<string> {
-  const [rooms, stays, msgs, resv] = await Promise.all([
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "rooms" WHERE "tenantId" = $1`,
-      tenantId,
-    ),
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("checkInDate"), 'epoch')) AS ts FROM "stay_checkins" WHERE "tenantId" = $1 AND "isClosed" = false`,
-      tenantId,
-    ),
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "whatsapp_messages" WHERE "tenantId" = $1 AND "direction" = 'IN'`,
-      tenantId,
-    ),
-    prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "reservations" WHERE "tenantId" = $1`,
-      tenantId,
-    ),
-  ]);
-  return hashParts([
-    sigToPart("room", rooms),
-    sigToPart("stay", stays),
-    sigToPart("msg", msgs),
-    sigToPart("resv", resv),
+function computeRoomsStatusMapVersion(tenantId: string): Promise<string> {
+  return combinedSig(tenantId, [
+    { label: "room", sql: `SELECT 'room' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "rooms" WHERE "tenantId" = $1` },
+    { label: "stay", sql: `SELECT 'stay' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("checkInDate"), 'epoch')) AS ts FROM "stay_checkins" WHERE "tenantId" = $1 AND "isClosed" = false` },
+    { label: "msg", sql: `SELECT 'msg' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "whatsapp_messages" WHERE "tenantId" = $1 AND "direction" = 'IN'` },
+    { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "reservations" WHERE "tenantId" = $1` },
   ]);
 }
 
 // Selos de governança nos dois mapas — GET /api/tenant/housekeeping-tasks
 export async function housekeepingTasksVersion(tenantId: string): Promise<string> {
   try {
-    const rows = await prisma.$queryRawUnsafe<TableSig[]>(
-      `SELECT COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "housekeeping_tasks" WHERE "tenantId" = $1`,
-      tenantId,
-    );
-    return hashParts([sigToPart("hk", rows)]);
+    return await combinedSig(tenantId, [
+      { label: "hk", sql: `SELECT 'hk' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "housekeeping_tasks" WHERE "tenantId" = $1` },
+    ]);
   } catch (err) {
     return volatileFallback("housekeepingTasksVersion", err);
   }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
 import { createPreCheckinLink } from "@/lib/preCheckinLink";
 import { logActivity } from "@/lib/audit";
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
     }
 
     const tenantId = reservation.room.tenantId;
-    const { url } = await prisma.$transaction((tx) =>
+    const { url } = await txWithRetry((tx) =>
       createPreCheckinLink(tx, { tenantId, reservationId: reservation.id, checkInDate: reservation.checkInDate })
     );
 

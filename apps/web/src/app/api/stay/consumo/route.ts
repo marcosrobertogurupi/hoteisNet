@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
 
 function mapConsumption(c: {
@@ -139,7 +140,7 @@ export async function POST(req: NextRequest) {
 
     const totalPrice = qty * price;
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       // Trava a linha da hospedagem ANTES de gravar o consumo — mesmo lock adquirido pelo checkout
       // (ver /api/stay/checkin PATCH). Sem isso na ponta do consumo, o lock do checkout sozinho não
       // impede a corrida: esta transação não tentaria adquirir o mesmo lock e poderia commitar um
@@ -226,7 +227,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "consumptionId é obrigatório." }, { status: 400 });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const consumption = await tx.stayConsumption.findFirst({
         where: { id: consumptionId, stayCheckin: { tenantId: session.tenantId! } },
       });
