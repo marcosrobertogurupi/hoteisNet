@@ -1170,9 +1170,10 @@ export default function TenantDashboardPage() {
                   </div>
                 )}
 
-                {/* 🧹 SELO: LIMPEZA EM ANDAMENTO (governança) — some quando a governanta conclui pelo app */}
+                {/* 🧹 SELO: LIMPEZA EM ANDAMENTO (governança) — some quando a governanta conclui pelo app.
+                    Fica no rodapé-direita para não colidir com o banner "RESERVA HOJE" (topo-centro). */}
                 {housekeepingByRoomId[room.id] && (
-                  <div className={`absolute -top-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap animate-pulse ${
+                  <div className={`absolute -bottom-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap animate-pulse ${
                     housekeepingByRoomId[room.id].type === "OCCUPIED"
                       ? "bg-violet-600 text-white border-violet-400 shadow-violet-600/40"
                       : "bg-amber-500 text-white border-amber-300 shadow-amber-500/40"
@@ -1183,9 +1184,10 @@ export default function TenantDashboardPage() {
                   </div>
                 )}
 
-                {/* 🚪 SELO: HÓSPEDE EM "NÃO PERTURBE" HOJE — registrado pela governanta no app dela */}
+                {/* 🚪 SELO: HÓSPEDE EM "NÃO PERTURBE" HOJE — registrado pela governanta no app dela.
+                    Mesmo canto do selo de limpeza (rodapé-direita); os dois nunca aparecem juntos. */}
                 {!housekeepingByRoomId[room.id] && dndTodayRoomIds.has(room.id) && (
-                  <div className="absolute -top-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap bg-slate-700 text-amber-200 border-amber-400/50">
+                  <div className="absolute -bottom-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap bg-slate-700 text-amber-200 border-amber-400/50">
                     <DoorClosed className="w-3 h-3 shrink-0" />
                     Não perturbe hoje
                   </div>
@@ -1277,7 +1279,7 @@ export default function TenantDashboardPage() {
                       <div className={`flex items-center justify-between ${theme.textMuted}`}>
                         <span>Período / Status:</span>
                         <span className={`font-mono ${theme.isDark ? "text-slate-200" : "text-slate-800"}`}>
-                          {/* Evita contradição com o selo "Em limpeza" acima quando já existe governanta atuando */}
+                          {/* Evita contradição com o selo "Em limpeza" no rodapé quando já existe governanta atuando */}
                           {housekeepingByRoomId[room.id] ? "Em limpeza" : room.dates}
                         </span>
                       </div>
