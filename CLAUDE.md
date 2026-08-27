@@ -107,6 +107,59 @@ Qualquer campo preenchido por hóspede/usuário (nome, observações, mensagens)
 
 ---
 
+## ⚡ Performance — regras obrigatórias para toda busca de dados
+
+Em 27/08/2026 o projeto estourou a cota do Supabase (Free) e foi **restrito em produção** — a causa foi egress: consultas que traziam a linha inteira dos registros a cada tick de polling de 3 s (ver `PRD.md` Fase 18). **Egress (bytes de saída do banco) é a métrica limitante do Supabase** — cada campo desnecessário numa resposta, multiplicado por polling × nº de terminais × 30 dias, vira GB e vira restrição/fatura. As regras abaixo valem para **tudo que lê do banco**: rotas `apps/web/src/app/api/**`, Server Components, o worker (`apps/worker`), scripts. **Sinalize e corrija qualquer violação ao revisar código, antes de prosseguir.**
+
+### 1. Toda leitura traz só as colunas que serão usadas — `select` explícito, sempre
+
+Nunca `prisma.model.findMany()` / `findFirst()` "pelado" (traz todas as colunas) quando o consumidor usa 3 campos. Liste em `select` exatamente o que a resposta desenha.
+
+```ts
+// ❌ NUNCA — traz a linha inteira (notes, cpf, telefone, timestamps, flags…) para mostrar nome
+const guest = await prisma.guest.findFirst({ where: { id } });
+return NextResponse.json({ nome: guest.fullName, cpf: guest.cpf });
+
+// ✅ SEMPRE
+const guest = await prisma.guest.findFirst({ where: { id, tenantId: session!.tenantId! }, select: { fullName: true, cpf: true } });
+```
+
+### 2. Relações: `select` aninhado, nunca `include`
+
+`include: { room: true }` puxa **todas** as colunas de `room`. Use `select` aninhado com os campos necessários.
+
+```ts
+// ❌ include: { room: { include: { category: true } } }
+// ✅
+select: { id: true, room: { select: { number: true, status: true, category: { select: { name: true } } } } }
+```
+
+### 3. Nunca fazer spread do registro do Prisma na resposta
+
+Monte o objeto de resposta **campo a campo**, com o que o front consome. `return NextResponse.json({ ...registro })` foi a causa direta do incidente de egress — vazava dezenas de colunas que a tela nem lia, a cada 3 s.
+
+### 4. Contar sem baixar: `_count`
+
+Para saber se/quantos relacionados existem, use `_count`, não traga o array só para ler `.length`.
+
+```ts
+// ❌ include: { fnrhRecords: { select: { id: true } } }  →  r.fnrhRecords.length > 0
+// ✅ _count: { select: { fnrhRecords: true } }           →  r._count.fnrhRecords > 0
+```
+
+### 5. Polling e listas: padrão enxuto + só a janela necessária
+
+Endpoint consultado em loop (mapas, telas que atualizam sozinhas) **nunca** baixa histórico nem o dataset completo: filtra pela janela operacional (ex.: `/api/reservations` = hoje até 6 meses à frente) e traz só os campos que mudam / são desenhados. Se a tela precisa de dados ricos (fotos, cadastro completo) só na carga inicial, isso vem de um endpoint separado, chamado **uma vez**, não no polling.
+
+### 6. Referências de implementação correta
+
+- `apps/web/src/lib/mapQueries.ts` — montagem enxuta compartilhada dos payloads dos mapas.
+- `apps/web/src/app/api/reservations/rooms/status/route.ts` — endpoint enxuto de polling.
+- `apps/web/src/app/api/reservations/route.ts` (GET) — `select` explícito + `_count` + janela operacional.
+- `apps/web/src/lib/mapVersion.ts` — resposta condicional (ETag/304): quando nada mudou, o polling nem baixa o payload.
+
+---
+
 ## Checklist rápido ao criar/revisar uma rota de API
 
 - [ ] A rota chama `getSessionUser` (ou é uma das 4 rotas explicitamente públicas, documentadas como tal em comentário)?
@@ -117,6 +170,8 @@ Qualquer campo preenchido por hóspede/usuário (nome, observações, mensagens)
 - [ ] Nenhum segredo/token de API hardcoded — sempre `process.env`?
 - [ ] Se a rota faz proxy para um serviço externo, as credenciais vêm do tenant salvo no banco, nunca do body da requisição?
 - [ ] Texto livre de usuário é escapado antes de virar HTML?
+- [ ] Toda leitura usa `select` explícito (sem `findMany()` pelado, sem `include`, sem spread do registro na resposta), traz só os campos usados e `_count` no lugar de arrays só para contar? (ver seção ⚡ Performance)
+- [ ] Se o endpoint é consultado em polling, filtra pela janela operacional e não baixa histórico/dataset completo?
 
 Se qualquer resposta for "não", a rota não está pronta.
 
