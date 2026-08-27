@@ -115,6 +115,19 @@ async function computeRoomsStatusMapVersion(tenantId: string): Promise<string> {
   ]);
 }
 
+// Selos de governança nos dois mapas — GET /api/tenant/housekeeping-tasks
+export async function housekeepingTasksVersion(tenantId: string): Promise<string> {
+  try {
+    const rows = await prisma.$queryRawUnsafe<TableSig[]>(
+      `SELECT COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "housekeeping_tasks" WHERE "tenantId" = $1`,
+      tenantId,
+    );
+    return hashParts([sigToPart("hk", rows)]);
+  } catch (err) {
+    return volatileFallback("housekeepingTasksVersion", err);
+  }
+}
+
 /**
  * Helper comum às rotas: se o `If-None-Match` do cliente bate com a versão atual, devolve a
  * resposta 304 (sem corpo) a ser retornada; senão devolve null e a rota segue montando o payload.

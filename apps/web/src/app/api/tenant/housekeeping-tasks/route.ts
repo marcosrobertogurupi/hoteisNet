@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { housekeepingTasksVersion, notModifiedResponse } from "@/lib/mapVersion";
 
 // GET /api/tenant/housekeeping-tasks — tarefas de limpeza em aberto do tenant da sessão, usado na
 // tela de atribuição manual (Governança) e no selo visual do Mapa de Quartos. Retorna as tarefas
@@ -16,6 +17,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
     const resolvedTenantId = session.tenantId;
+
+    // Resposta condicional (304) — este endpoint é consultado no polling de 3 s tanto do Mapa de
+    // Quartos quanto do Mapa de Reservas. Ver lib/mapVersion.ts.
+    const etag = `"hktasks-${await housekeepingTasksVersion(resolvedTenantId)}"`;
+    const notModified = notModifiedResponse(req, etag);
+    if (notModified) return notModified;
+
     const today = dateOnlyBrasilia(new Date());
 
     const [tasks, dndToday] = await Promise.all([
@@ -48,11 +56,14 @@ export async function GET(req: NextRequest) {
       }),
     ]);
 
-    return NextResponse.json({
-      success: true,
-      tasks,
-      dndTodayRoomIds: dndToday.map((t) => t.roomId),
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        tasks,
+        dndTodayRoomIds: dndToday.map((t) => t.roomId),
+      },
+      { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
+    );
   } catch (error: any) {
     console.error("[GET /api/tenant/housekeeping-tasks] Erro:", error);
     return NextResponse.json(
