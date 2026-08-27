@@ -137,6 +137,141 @@ function computeFnrhDeadlineExclusive(checkInDate: Date): Date {
 // da lista de alertas só porque a janela dos 48h ficou pra trás).
 const FNRH_DEADLINE_WARNING_HOURS = 48;
 
+// ─────────────── Reserva chegando para um quarto ainda ocupado ───────────────
+//
+// Quando um quarto está OCUPADO e existe uma reserva chegando hoje ou amanhã para esse mesmo
+// quarto, a equipe precisa entrar em contato com o hóspede atual para confirmar se a saída vai
+// acontecer na data prevista. Dois cuidados extras entram na mensagem do alerta:
+//  - se o hotel está lotado (ou quase) na data de chegada da reserva, o hóspede atual NÃO pode
+//    estender a estadia;
+//  - se não há outro quarto livre da mesma categoria para remanejar a reserva que está chegando,
+//    o hóspede atual também NÃO pode estender (não dá para realocar o próximo hóspede).
+// É sempre só alerta — o agente nunca move reserva nem mexe na hospedagem sozinho.
+
+// Janela de antecedência: check-in da reserva de hoje (00:00 Brasília) até o fim de amanhã.
+const INCOMING_RESERVATION_LOOKAHEAD_DAYS = 2;
+// Com no máximo este número de quartos livres na noite de chegada, o hotel é tratado como lotado
+// ("ou com previsão de lotar") e o hóspede atual não pode estender.
+const HOTEL_NEAR_FULL_FREE_ROOMS = 1;
+
+// Início do dia (00:00 em Brasília, UTC-3 fixo desde 2019) N dias à frente, como instante UTC —
+// mesmo ancoramento usado em computeFnrhDeadlineExclusive acima.
+function brDayStartUtc(daysFromToday: number): Date {
+  const key = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + daysFromToday, 3, 0, 0));
+}
+
+function brDayLabel(d: Date): string {
+  return d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit" });
+}
+
+// Ids de quartos (dentre os passados) ocupados no período — reserva ativa/futura que se sobrepõe
+// ou hospedagem em aberto que se sobrepõe. Mesma lógica de busyRoomIdsForPeriod em
+// apps/web/src/lib/aiAgent/tools.ts (o worker é um processo separado e não importa apps/web).
+async function busyRoomIds(roomIds: string[], checkIn: Date, checkOut: Date): Promise<Set<string>> {
+  if (roomIds.length === 0) return new Set();
+  const [reservations, openStays] = await Promise.all([
+    prisma.reservation.findMany({
+      where: {
+        roomId: { in: roomIds },
+        status: { in: ["PRE_RESERVATION", "CONFIRMED", "CHECKED_IN"] },
+        checkInDate: { lt: checkOut },
+        checkOutDate: { gt: checkIn },
+      },
+      select: { roomId: true },
+    }),
+    prisma.stayCheckin.findMany({
+      where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut }, expectedCheckOut: { gt: checkIn } },
+      select: { roomId: true },
+    }),
+  ]);
+  return new Set<string>([...reservations.map((r) => r.roomId), ...openStays.map((s) => s.roomId)]);
+}
+
+async function detectOccupiedRoomsWithIncomingReservation(tenantId: string): Promise<DetectedIssue[]> {
+  const issues: DetectedIssue[] = [];
+  const windowStart = brDayStartUtc(0);
+  const windowEnd = brDayStartUtc(INCOMING_RESERVATION_LOOKAHEAD_DAYS);
+
+  // Reservas ainda não realizadas (pré-reserva/confirmada) chegando na janela, cujo quarto está
+  // OCUPADO agora. NO_SHOW/CANCELLED/CHECKED_IN/CHECKED_OUT ficam de fora.
+  const incoming = await prisma.reservation.findMany({
+    where: {
+      tenantId,
+      status: { in: ["PRE_RESERVATION", "CONFIRMED"] },
+      checkInDate: { gte: windowStart, lt: windowEnd },
+      room: { active: true, status: "OCCUPIED" },
+    },
+    select: {
+      id: true,
+      guestName: true,
+      checkInDate: true,
+      checkOutDate: true,
+      room: { select: { id: true, number: true, categoryId: true, category: { select: { name: true } } } },
+    },
+    orderBy: { checkInDate: "asc" },
+  });
+  if (incoming.length === 0) return issues;
+
+  // Total de quartos ativos do hotel (para a checagem de lotação) e a hospedagem em aberto de cada
+  // quarto envolvido (para saber o hóspede atual e a saída prevista).
+  const [activeRoomIds, openStays] = await Promise.all([
+    prisma.room.findMany({ where: { tenantId, active: true }, select: { id: true } }).then((rs) => rs.map((r) => r.id)),
+    prisma.stayCheckin.findMany({
+      where: { tenantId, isClosed: false, roomId: { in: incoming.map((r) => r.room.id) } },
+      select: { roomId: true, expectedCheckOut: true, primaryGuest: { select: { fullName: true } } },
+    }),
+  ]);
+  const stayByRoom = new Map(openStays.map((s) => [s.roomId, s]));
+
+  for (const res of incoming) {
+    const stay = stayByRoom.get(res.room.id);
+    const currentGuest = stay?.primaryGuest.fullName || "o hóspede atual";
+    const checkInLabel = brDayLabel(res.checkInDate);
+    const outPart = stay
+      ? `com saída prevista para ${brDayLabel(stay.expectedCheckOut)}`
+      : "sem data de saída registrada no sistema";
+
+    // Existe outro quarto livre da MESMA categoria para remanejar a reserva que está chegando?
+    const sameCategoryRoomIds = (
+      await prisma.room.findMany({
+        where: { tenantId, active: true, categoryId: res.room.categoryId, id: { not: res.room.id } },
+        select: { id: true },
+      })
+    ).map((r) => r.id);
+    const busyAlternatives = await busyRoomIds(sameCategoryRoomIds, res.checkInDate, res.checkOutDate);
+    const hasAlternative = sameCategoryRoomIds.some((id) => !busyAlternatives.has(id));
+
+    // O hotel fica lotado (ou quase) na noite de chegada da reserva?
+    const nightEnd = new Date(res.checkInDate.getTime() + 24 * 60 * 60 * 1000);
+    const occupiedThatNight = (await busyRoomIds(activeRoomIds, res.checkInDate, nightEnd)).size;
+    const freeThatNight = activeRoomIds.length - occupiedThatNight;
+    const hotelFull = freeThatNight <= HOTEL_NEAR_FULL_FREE_ROOMS;
+
+    let guidance: string;
+    if (hotelFull) {
+      guidance = `O hotel está lotado (ou com previsão de lotar) em ${checkInLabel}, então ${currentGuest} NÃO poderá estender a estadia — a equipe precisa confirmar a saída e avisar isso ao hóspede.`;
+    } else if (!hasAlternative) {
+      guidance = `Não há outro quarto livre da categoria ${res.room.category.name} para remanejar a reserva que está chegando, então ${currentGuest} NÃO poderá estender a estadia neste quarto — a equipe precisa avisar isso ao hóspede.`;
+    } else {
+      guidance = `Se ${currentGuest} quiser ficar mais tempo, a equipe pode remanejar a reserva que está chegando para outro quarto da categoria ${res.room.category.name} (confirmar disponibilidade antes).`;
+    }
+
+    // entityId é o id da reserva: o alerta some sozinho quando ela é realizada (check-in),
+    // cancelada, ou o quarto é liberado (ver resolvedKeys em runOperationalAgentInner). A mensagem
+    // não é reavaliada depois de disparada — se a situação de lotação mudar, a equipe já está em
+    // contato com o hóspede por causa da escalação aberta.
+    issues.push({
+      issueType: "OCCUPIED_ROOM_INCOMING_RESERVATION",
+      entityId: res.id,
+      description: `Quarto ${res.room.number} está ocupado por ${currentGuest} (${outPart}) e tem uma nova reserva chegando em ${checkInLabel} (${res.guestName}). A equipe precisa entrar em contato com ${currentGuest} para confirmar se a saída será na data combinada; se não for, remanejar a reserva que está chegando (quando possível). ${guidance}`,
+    });
+  }
+
+  return issues;
+}
+
 async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   const issues: DetectedIssue[] = [];
   const now = new Date();
@@ -233,6 +368,11 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
       description: `O WhatsApp do hotel está desconectado — é preciso reconectar em Configurações para continuar enviando mensagens automáticas.`,
     });
   }
+
+  // 6) Reserva chegando (hoje/amanhã) para um quarto que ainda está ocupado — a equipe precisa
+  // confirmar a saída do hóspede atual e, se o hotel estiver lotado ou sem quarto alternativo,
+  // avisar que não dá para estender.
+  issues.push(...(await detectOccupiedRoomsWithIncomingReservation(tenantId)));
 
   return issues;
 }

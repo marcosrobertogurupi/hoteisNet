@@ -65,7 +65,13 @@ incluindo poder bloquear o uso de IA de um assinante específico independente do
 - **Agente Operacional v1** (`apps/worker/src/operationalAgent.ts`, cron a cada 15min): detecção
   100% determinística (sem LLM) de: FNRH travada no SNRHos (`snrhosAttempts>=5`), pré-check-in não
   enviado com check-in próximo, quarto em `MAINTENANCE` >24h parado, quarto `VACANT_DIRTY` >6h
-  parado, WhatsApp do hotel desconectado. Quando há problema **novo** (dedupe via
+  parado, WhatsApp do hotel desconectado, e **reserva chegando hoje/amanhã para um quarto ainda
+  ocupado** (`OCCUPIED_ROOM_INCOMING_RESERVATION`) — o alerta manda a equipe confirmar a saída do
+  hóspede atual e, quando o hotel está lotado na noite de chegada (`freeThatNight <= 1`) ou não há
+  outro quarto livre da mesma categoria para remanejar a reserva, avisa que o hóspede atual **não
+  pode** estender a estadia. Sempre só alerta — nunca move reserva nem mexe na hospedagem.
+  `entityId` é o id da reserva, então o alerta se fecha sozinho no check-in/cancelamento. Quando
+  há problema **novo** (dedupe via
   `OperationalAlertLog`), o LLM só compõe o resumo em linguagem natural, e o alerta é enviado por
   WhatsApp para `alertPhone`. Roda apenas para tenants com `monitoringEnabled=true` e
   `blocked=false`.
