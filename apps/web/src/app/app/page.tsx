@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
+import { useOperator } from "@/context/OperatorContext";
 import AlterarPeriodoModal from "@/components/AlterarPeriodoModal";
 
 import AlterarTarifaHospedagemModal from "@/components/AlterarTarifaHospedagemModal";
@@ -109,6 +110,7 @@ type FilterType = "ALL" | "VACANT_CLEAN" | "OCCUPIED" | "CLEANING" | "MAINTENANC
 export default function TenantDashboardPage() {
   const { theme, hotelLogo, hotelName, showLogoInPrint, whatsappSoundEnabled } = useTheme();
   const toast = useToast();
+  const { operatorId: activeOperatorId, operatorName: activeOperatorName } = useOperator();
 
   // Modals & Action States
 
@@ -1162,9 +1164,10 @@ export default function TenantDashboardPage() {
                 )}
 
                 {/* 🧹 SELO: LIMPEZA EM ANDAMENTO (governança) — some quando a governanta conclui pelo app.
-                    Fica no rodapé-direita para não colidir com o banner "RESERVA HOJE" (topo-centro). */}
+                    Fica DENTRO do card (rodapé-direita) para não colidir com o banner "RESERVA HOJE"
+                    do card da linha de baixo (que projeta para cima em -top-3). */}
                 {housekeepingByRoomId[room.id] && (
-                  <div className={`absolute -bottom-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap animate-pulse ${
+                  <div className={`absolute bottom-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap animate-pulse ${
                     housekeepingByRoomId[room.id].type === "OCCUPIED"
                       ? "bg-violet-600 text-white border-violet-400 shadow-violet-600/40"
                       : "bg-amber-500 text-white border-amber-300 shadow-amber-500/40"
@@ -1178,7 +1181,7 @@ export default function TenantDashboardPage() {
                 {/* 🚪 SELO: HÓSPEDE EM "NÃO PERTURBE" HOJE — registrado pela governanta no app dela.
                     Mesmo canto do selo de limpeza (rodapé-direita); os dois nunca aparecem juntos. */}
                 {!housekeepingByRoomId[room.id] && dndTodayRoomIds.has(room.id) && (
-                  <div className="absolute -bottom-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap bg-slate-700 text-amber-200 border-amber-400/50">
+                  <div className="absolute bottom-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold shadow-lg border whitespace-nowrap bg-slate-700 text-amber-200 border-amber-400/50">
                     <DoorClosed className="w-3 h-3 shrink-0" />
                     Não perturbe hoje
                   </div>
@@ -2543,7 +2546,7 @@ export default function TenantDashboardPage() {
               const res = await fetch("/api/stay/checkin", {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ stayCheckinId: stayId }),
+                body: JSON.stringify({ stayCheckinId: stayId, operatorId: activeOperatorId, operatorName: activeOperatorName }),
               });
               const data = await res.json();
               if (!data.success) {

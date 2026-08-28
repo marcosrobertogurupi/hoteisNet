@@ -679,7 +679,9 @@ export default function LancarPagamentoHospedagemModal({
   // Efetiva o check-out, mas antes bloqueia e exige a impressão do Resumo de Hospedagem se houver
   // pagamento por Parcelamento (fatura) — sem a assinatura do hóspede nesse resumo, a empresa
   // faturada não aceita a cobrança.
-  const proceedToCheckout = async () => {
+  // Retorna true quando o check-out foi efetivado (tela fechada); false quando a operação não
+  // se concluiu e o botão de check-out deve voltar a ficar habilitado, sem sair da tela.
+  const proceedToCheckout = async (): Promise<boolean> => {
     if (hasInstallmentPayment() && !resumoAcknowledgedForSignature) {
       const wantsPrint = await confirmDialog({
         title: "Impressão Obrigatória — Pagamento por Fatura",
@@ -693,7 +695,7 @@ export default function LancarPagamentoHospedagemModal({
         setResumoAcknowledgedForSignature(true);
         onOpenResumo?.();
       }
-      return;
+      return false;
     }
 
     // onCheckoutConfirmed chama o PATCH /api/stay/checkin, que revalida o saldo devedor dentro da
@@ -702,7 +704,7 @@ export default function LancarPagamentoHospedagemModal({
     // (ex.: outro terminal lançou consumo/débito depois que esta tela abriu), a tela permanece
     // aberta com os dados já atualizados pela consulta acima, para o operador regularizar o saldo.
     const success = onCheckoutConfirmed ? await onCheckoutConfirmed() : true;
-    if (success === false) return;
+    if (success === false) return false;
 
     if (creditoGerado > 0.001) {
       toast.success(
@@ -711,6 +713,7 @@ export default function LancarPagamentoHospedagemModal({
       );
     }
     onClose();
+    return true;
   };
 
   // Consulta o estado financeiro REAL da hospedagem no servidor (não confia nos valores que esta
@@ -764,15 +767,35 @@ export default function LancarPagamentoHospedagemModal({
   // direto (sem perguntar de novo — o usuário já expressou essa intenção ao abrir esta tela pelo
   // duplo-clique no quarto ou pelo item "Encerrar Hospedagem"), e só é bloqueado se ainda houver
   // débito pendente.
+  // Wrapper: assim que o operador clica em "Check-out" / "Salvar Crédito", o botão é desabilitado
+  // imediatamente (isSaving = true) e NUNCA volta a ficar habilitado dentro desta mesma operação
+  // até o servidor devolver o resultado. Sucesso -> a tela fecha (botão continua desabilitado).
+  // Erro/bloqueio -> runSaveCredit retorna false, o botão é reabilitado e a tela permanece aberta
+  // para o operador regularizar a situação.
   const handleSaveCredit = async () => {
-    if (isSaving) return; // evita duplo envio por cliques repetidos enquanto a gravação está em andamento
+    if (isSaving) return; // já em andamento: ignora cliques repetidos
+    setIsSaving(true);
+    let concluido = false;
+    try {
+      concluido = await runSaveCredit();
+    } catch (e: any) {
+      console.error("[LancarPagamentoHospedagemModal] Erro inesperado no check-out/salvar:", e);
+      toast.error(e?.message || "Não foi possível concluir a operação. Tente novamente.", "Erro");
+      concluido = false;
+    } finally {
+      if (!concluido) setIsSaving(false);
+    }
+  };
 
+  // Retorna true quando a operação foi concluída e a tela está sendo fechada; false quando algo
+  // impediu a conclusão e o botão deve voltar a ficar habilitado (sem fechar a tela).
+  const runSaveCredit = async (): Promise<boolean> => {
     // Antes de qualquer coisa em modo check-out, confirma no servidor que o saldo devedor que esta
     // tela está exibindo ainda é o real — evita fechar a hospedagem (ou lançar um pagamento achando
     // que vai zerar o saldo) com base em consumo/débito lançado por outro terminal nesse meio-tempo.
     if (isCheckoutMode) {
       const balanceOk = await verifyBalanceBeforeCheckout();
-      if (!balanceOk) return;
+      if (!balanceOk) return false;
     }
 
     const pendingPayments = payments.filter((p) => !p.caixaMovimentoId);
@@ -782,22 +805,20 @@ export default function LancarPagamentoHospedagemModal({
     if (pendingPayments.length === 0 && pendingDeletions.length === 0 && !discountChanged) {
       if (isCheckoutMode) {
         if (saldoAPagar <= 0.001) {
-          await proceedToCheckout();
-        } else {
-          toast.warning(
-            `Ainda há saldo devedor de ${fmtCurrency(saldoAPagar)} no Quarto ${stayData.roomNumber}. Quite o débito para concluir o check-out.`,
-            "Check-out Não Concluído"
-          );
+          return await proceedToCheckout();
         }
-        return;
+        toast.warning(
+          `Ainda há saldo devedor de ${fmtCurrency(saldoAPagar)} no Quarto ${stayData.roomNumber}. Quite o débito para concluir o check-out.`,
+          "Check-out Não Concluído"
+        );
+        return false;
       }
 
       toast.info("Nenhuma alteração feita na hospedagem", "Nada a Salvar");
       onClose();
-      return;
+      return true;
     }
 
-    setIsSaving(true);
     toast.info("Gravando lançamentos no caixa. Aguarde...", "Salvando Crédito");
 
     try {
@@ -851,12 +872,9 @@ export default function LancarPagamentoHospedagemModal({
         );
       }
     } catch (e: any) {
-      setIsSaving(false);
       toast.error(e.message || "Não foi possível gravar os lançamentos no caixa. Tente novamente.", "Erro ao Salvar");
-      return;
+      return false;
     }
-
-    setIsSaving(false);
 
     if (onSaveSuccess) {
       onSaveSuccess({
@@ -881,19 +899,20 @@ export default function LancarPagamentoHospedagemModal({
         "Crédito Lançado"
       );
       onClose();
-      return;
+      return true;
     }
 
     // Modo "Check-out": débito quitado -> encerra a hospedagem direto (a intenção já foi
     // confirmada ao abrir esta tela). Débito pendente -> salva o pagamento mas NÃO encerra.
     if (isQuitado) {
-      await proceedToCheckout();
+      return await proceedToCheckout();
     } else {
       toast.warning(
         `Pagamento de ${fmtCurrency(totalPagamentos)} registrado, mas ainda há saldo devedor de ${fmtCurrency(saldoAPagar)} no Quarto ${stayData.roomNumber}.\n\n` +
         `Quite o débito para concluir o check-out.`,
         "Check-out Não Concluído"
       );
+      return false;
     }
   };
 
@@ -1410,7 +1429,7 @@ export default function LancarPagamentoHospedagemModal({
                 <button
                   onClick={handleSaveCredit}
                   disabled={isSaving}
-                  title={isSaving ? "Gravando no caixa... Aguarde" : isCheckoutMode ? "Fazer Check-out" : "Salvar Crédito"}
+                  title={isSaving ? (isCheckoutMode ? "Processando check-out... Aguarde o servidor" : "Gravando no caixa... Aguarde") : isCheckoutMode ? "Fazer Check-out" : "Salvar Crédito"}
                   className="w-full py-3 px-4 rounded-xl bg-[#00BCD4] hover:bg-cyan-600 text-white font-extrabold text-base flex items-center justify-center gap-2 shadow-lg transition-all transform active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isSaving ? (
@@ -1420,7 +1439,7 @@ export default function LancarPagamentoHospedagemModal({
                   ) : (
                     <Check className="w-6 h-6 stroke-[3]" />
                   )}
-                  {isSaving ? "Gravando... Aguarde" : isCheckoutMode ? "Check-out" : "Salvar Crédito"}
+                  {isSaving ? (isCheckoutMode ? "Processando... Aguarde" : "Gravando... Aguarde") : isCheckoutMode ? "Check-out" : "Salvar Crédito"}
                 </button>
               </div>
             </div>

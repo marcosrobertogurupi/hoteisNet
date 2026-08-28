@@ -603,6 +603,10 @@ export async function PATCH(req: NextRequest) {
 
     const body = await req.json();
     const { stayCheckinId } = body;
+    // Operador ativo no terminal (OperatorContext) — usado só para saber em qual caixa registrar
+    // o lançamento de controle do check-out com valor zerado (ver abaixo). Nunca define tenant.
+    const opId: string = body.operatorId || "USR-001";
+    const opName: string = String(body.operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
 
     if (!stayCheckinId) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });
@@ -630,9 +634,10 @@ export async function PATCH(req: NextRequest) {
         throw new Error("Esta hospedagem já foi encerrada anteriormente.");
       }
 
-      const [chargesAgg, paymentsAgg] = await Promise.all([
+      const [chargesAgg, paymentsAgg, paymentsCount] = await Promise.all([
         tx.stayCharge.aggregate({ where: { stayCheckinId }, _sum: { amount: true } }),
         tx.cashTransaction.aggregate({ where: { stayCheckinId, type: "ENTRADA" }, _sum: { amount: true } }),
+        tx.cashTransaction.count({ where: { stayCheckinId, type: "ENTRADA" } }),
       ]);
       const totalDiarias = Number(chargesAgg._sum.amount || 0);
       const totalConsumo = Number(stayBeforeClose.totalConsumption);
@@ -663,8 +668,8 @@ export async function PATCH(req: NextRequest) {
           actualCheckOut: new Date(),
           checkedOutByUserId: session?.userId || null,
           checkedOutByUserName: session?.name || null,
-          closingOperatorId: lastPayment?.cashRegister?.operatorId || null,
-          closingOperatorName: lastPayment?.cashRegister?.operatorName || null,
+          closingOperatorId: lastPayment?.cashRegister?.operatorId || (paymentsCount === 0 ? opId : null),
+          closingOperatorName: lastPayment?.cashRegister?.operatorName || (paymentsCount === 0 ? opName : null),
           totalAdvance: totalPago,
           balanceDue: Math.max(0, saldoDevedor),
         },
@@ -674,6 +679,44 @@ export async function PATCH(req: NextRequest) {
         where: { id: closedStay.roomId },
         data: { status: "VACANT_DIRTY", notes: "Pendente troca de enxoval & higienização" },
       });
+
+      // Check-out com valor zerado (cortesia, hospedagem sem diária, desconto total): nenhum
+      // pagamento foi lançado no caixa. Ainda assim registramos um lançamento de CONTROLE com
+      // valor 0 no caixa do operador — não soma nos totais (countsInCashTotal=false), mas garante
+      // que toda saída de quarto apareça na movimentação do turno / relatório de caixa.
+      if (paymentsCount === 0) {
+        let caixa = await tx.cashRegister.findFirst({
+          where: { operatorId: opId, isOpen: true, tenantId: session.tenantId! },
+        });
+        if (!caixa) {
+          caixa = await tx.cashRegister.create({
+            data: {
+              tenantId: session.tenantId!,
+              operatorId: opId,
+              operatorName: opName,
+              openingBalance: 0,
+              isOpen: true,
+            },
+          });
+        }
+        const [roomForLog, guestForLog] = await Promise.all([
+          tx.room.findUnique({ where: { id: closedStay.roomId }, select: { number: true } }),
+          tx.guest.findUnique({ where: { id: closedStay.primaryGuestId }, select: { fullName: true } }),
+        ]);
+        await tx.cashTransaction.create({
+          data: {
+            cashRegisterId: caixa.id,
+            type: "ENTRADA",
+            amount: 0,
+            description: `Check-out sem saldo a pagar — controle de saída do Quarto ${roomForLog?.number || closedStay.roomId} (Hóspede: ${guestForLog?.fullName || "—"})`,
+            paymentMethod: "SEM MOVIMENTO",
+            countsInCashTotal: false,
+            stayCheckinId,
+            roomNumber: roomForLog?.number || null,
+            guestName: guestForLog?.fullName || null,
+          },
+        });
+      }
 
       // Sincroniza a Reservation correspondente na MESMA transação: sem isso, ela fica presa
       // em CHECKED_IN para sempre e a Grid de Reservas continua exibindo "EM VIGÊNCIA" após o checkout.
