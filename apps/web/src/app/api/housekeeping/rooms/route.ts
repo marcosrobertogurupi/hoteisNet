@@ -68,6 +68,26 @@ export async function GET(req: NextRequest) {
 
     const mine = session.housekeeperId;
 
+    // Quartos com reserva CHEGANDO HOJE ainda pendente de check-in — só usado no modo QUEUE para
+    // furar a fila: um quarto em limpeza pós check-out cuja diária de hoje já está reservada precisa
+    // ser priorizado. "Hoje" ancorado no fuso de Brasília (servidor roda em UTC em produção),
+    // mesma janela usada nos mapas (ver apps/web/src/lib/mapQueries.ts).
+    const arrivingTodayRoomIds = new Set<string>();
+    if (assignmentMode === "QUEUE") {
+      const todaySpStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+      const dayStart = new Date(`${todaySpStr}T00:00:00.000Z`);
+      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      const todayArrivals = await prisma.reservation.findMany({
+        where: {
+          tenantId: session.tenantId,
+          status: { notIn: ["CANCELLED", "CHECKED_IN", "CHECKED_OUT", "NO_SHOW"] },
+          checkInDate: { gte: dayStart, lt: dayEnd },
+        },
+        select: { roomId: true },
+      });
+      for (const r of todayArrivals) arrivingTodayRoomIds.add(r.roomId);
+    }
+
     type PendingRoom = {
       id: string;
       number: string;
@@ -79,6 +99,7 @@ export async function GET(req: NextRequest) {
       status: "PENDING" | "IN_PROGRESS";
       notes: string | null;
       startedAt: Date | null;
+      priority: boolean;
     };
 
     const pending: PendingRoom[] = [];
@@ -109,6 +130,7 @@ export async function GET(req: NextRequest) {
             status: active.status as "PENDING" | "IN_PROGRESS",
             notes: active.notes,
             startedAt: active.startedAt,
+            priority: active.type === "CHECKOUT" && arrivingTodayRoomIds.has(room.id),
           });
         }
         continue;
@@ -124,6 +146,7 @@ export async function GET(req: NextRequest) {
           status: "PENDING",
           notes: null,
           startedAt: null,
+          priority: arrivingTodayRoomIds.has(room.id),
         });
       }
     }
@@ -134,7 +157,9 @@ export async function GET(req: NextRequest) {
       floor,
       pending: pending
         .filter((r) => r.floor === floor)
-        .sort((a, b) => naturalCompare(a.number, b.number))
+        // Prioridade primeiro (limpeza pós check-out com reserva chegando hoje), depois ordem
+        // natural de número de quarto dentro do andar.
+        .sort((a, b) => (a.priority === b.priority ? naturalCompare(a.number, b.number) : a.priority ? -1 : 1))
         .map((r) => ({
           id: r.id,
           number: r.number,
@@ -145,6 +170,7 @@ export async function GET(req: NextRequest) {
           status: r.status,
           notes: r.notes,
           startedAt: r.startedAt,
+          priority: r.priority,
         })),
     }));
 

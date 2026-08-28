@@ -13,6 +13,7 @@ import {
   Save,
   BedDouble,
   DoorClosed,
+  CalendarClock,
 } from "lucide-react";
 
 interface RoomView {
@@ -26,6 +27,7 @@ interface RoomView {
   status?: "PENDING" | "IN_PROGRESS";
   notes?: string | null;
   startedAt?: string | null;
+  priority?: boolean;
 }
 
 export default function HousekeepingRoomPage() {
@@ -228,7 +230,12 @@ export default function HousekeepingRoomPage() {
         </div>
       </div>
 
-      <div className="px-4 pt-4">
+      <div className="px-4 pt-4 flex flex-wrap items-center gap-2">
+        {room.priority && (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border bg-rose-500/15 text-rose-300 border-rose-500/40">
+            <CalendarClock className="w-3 h-3" /> Prioridade — reserva chega hoje
+          </span>
+        )}
         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
           isOccupied
             ? "bg-violet-500/15 text-violet-400 border-violet-500/30"

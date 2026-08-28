@@ -14,6 +14,7 @@ import {
   ChevronRight,
   MessageSquare,
   BedDouble,
+  CalendarClock,
 } from "lucide-react";
 
 interface HousekeeperInfo {
@@ -33,6 +34,7 @@ interface RoomEntry {
   status: "PENDING" | "IN_PROGRESS";
   notes: string | null;
   startedAt: string | null;
+  priority?: boolean;
 }
 
 interface FloorGroup {
@@ -292,13 +294,22 @@ export default function HousekeepingAppPage() {
                     <button
                       key={room.id}
                       onClick={() => router.push(`/housekeeping/room/${room.id}`)}
-                      className="w-full flex items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-rose-500/40 transition text-left"
+                      className={`w-full flex items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900/80 border transition text-left ${
+                        room.priority
+                          ? "border-rose-500/60 ring-1 ring-rose-500/30 hover:border-rose-400"
+                          : "border-slate-800 hover:border-rose-500/40"
+                      }`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-11 h-11 rounded-xl bg-slate-950 border border-slate-700 flex items-center justify-center font-mono font-bold text-base">
                           {room.number}
                         </div>
                         <div>
+                          {room.priority && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 mb-1 rounded-full text-[10px] font-bold border bg-rose-500/15 text-rose-300 border-rose-500/40">
+                              <CalendarClock className="w-3 h-3" /> Prioridade — reserva chega hoje
+                            </span>
+                          )}
                           <p className="text-sm font-bold">{room.category || "Quarto"}</p>
                           <p className={`text-[11px] flex items-center gap-1 ${isOccupied ? "text-violet-300" : "text-slate-500"}`}>
                             {isOccupied && <BedDouble className="w-3 h-3" />}
