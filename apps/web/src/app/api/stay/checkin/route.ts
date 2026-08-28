@@ -582,13 +582,15 @@ export async function POST(req: NextRequest) {
 
       // Cobrança de chegada de madrugada / antecipada como StayCharge própria — assim ela entra no
       // saldo devedor do check-out (que soma StayCharges), não só no débito de saldo do hóspede.
-      // referenceDate = véspera do check-in ("noite anterior"), fora do slot da 1ª diária e das
+      // referenceDate = 30s após o horário do check-in: fica no MESMO dia do check-in (para o
+      // Extrato/Resumo, que filtra as diárias pela janela check-in→check-out, não excluir a linha)
+      // e nunca colide com a 1ª diária (no horário exato do check-in, segundos :00) nem com as
       // viradas seguintes (respeita o unique [stayCheckinId, referenceDate]).
       if (earlyArrivalChargeAmount > 0) {
         await tx.stayCharge.create({
           data: {
             stayCheckinId: stay.id,
-            referenceDate: new Date(checkInAt.getTime() - 86_400_000),
+            referenceDate: new Date(checkInAt.getTime() + 30_000),
             description: earlyArrivalDescription || "Chegada antecipada",
             chargeType: "EARLY_ARRIVAL",
             amount: earlyArrivalChargeAmount,
