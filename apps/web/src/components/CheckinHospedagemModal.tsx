@@ -676,7 +676,12 @@ export default function CheckinHospedagemModal({
       const linkRes = await fetch("/api/stay/checkin/assisted-fnrh-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reservationId: targetReservationId }),
+        body: JSON.stringify({
+          reservationId: targetReservationId,
+          documentNumber: docNumber,
+          guestName,
+          phone: phone || undefined,
+        }),
       });
       const linkData = await linkRes.json();
       if (linkData.success) {
@@ -929,7 +934,7 @@ export default function CheckinHospedagemModal({
   // Search Guest Modal
   const [showSearchGuestModal, setShowSearchGuestModal] = useState<boolean>(false);
   const [searchGuestQuery, setSearchGuestQuery] = useState<string>("");
-  const [dbGuests, setDbGuests] = useState<Array<{ name: string; doc: string; phone: string }>>([]);
+  const [dbGuests, setDbGuests] = useState<any[]>([]);
 
   useEffect(() => {
     if (!showSearchGuestModal) return;
@@ -938,11 +943,9 @@ export default function CheckinHospedagemModal({
         const res = await fetch(`/api/cadastros/hospedes?q=${encodeURIComponent(searchGuestQuery)}`);
         const data = await res.json();
         if (data.success && Array.isArray(data.guests)) {
-          setDbGuests(data.guests.map((g: any) => ({
-            name: g.fullName || "",
-            doc: g.cpf || "",
-            phone: g.phone || g.whatsappPhone || "",
-          })));
+          // Guarda o registro completo — a seleção precisa trazer TODOS os dados do cadastro
+          // para a hospedagem (CPF, nome, nascimento, filiação, endereço, contatos), não só nome/doc/telefone.
+          setDbGuests(data.guests);
         } else {
           setDbGuests([]);
         }
@@ -964,13 +967,57 @@ export default function CheckinHospedagemModal({
     identity: "", address: "", email: "",
   });
 
-  const handleSelectSearchGuest = (guest: { name: string; doc: string; phone: string }) => {
-    setGuestName(guest.name);
-    setDocNumber(guest.doc);
-    setPhone(guest.phone);
+  // Seleção de um hóspede da pesquisa ao cadastro: SUBSTITUI por completo a identidade do
+  // hóspede principal da hospedagem pelos dados do cadastro escolhido. Antes só nome/doc/telefone
+  // eram trocados, deixando nascimento, filiação, endereço, e-mail e telefones do hóspede
+  // ANTERIOR grudados — o que permitia efetivar o check-in com o nome de um hóspede e o CPF de
+  // outro. Todo campo que o cadastro escolhido não tiver é explicitamente zerado.
+  const handleSelectSearchGuest = (guest: any) => {
+    const name = (guest.fullName || "").toUpperCase();
+    const cpf = guest.cpf || "";
+    const mainPhone = guest.phone || guest.whatsappPhone || "";
+
+    setDocType(cpf ? "CPF" : guest.passport ? "PASSAPORTE" : "CPF");
+    setDocNumber(cpf || guest.passport || "");
+    setGuestName(name);
+    setPhone(mainPhone);
+
+    setBirthDate(guest.birthDate ? String(guest.birthDate).slice(0, 10) : "");
+    setGender(guest.gender || "");
+    setMotherName(guest.motherName || "");
+    setFatherName(guest.fatherName || "");
+    setIdentity(guest.rgNumber || "");
+    const addressParts = [guest.street, guest.number, guest.neighborhood, guest.city, guest.state, guest.country].filter(Boolean);
+    setFullAddress(guest.fullAddress || addressParts.join(", "));
+    setEmail(guest.email || "");
+    setEmailsList(guest.email ? [guest.email] : []);
+    setTelephonesList(mainPhone ? [mainPhone] : []);
+
+    if (mainPhone) {
+      const wppNumber = guest.whatsappPhone || mainPhone;
+      setVerifiedPhones([{
+        id: "TEL-1",
+        number: wppNumber,
+        hasWhatsapp: !!guest.hasWhatsapp,
+        nomeUsuarioWpp: name.toLowerCase().replace(/\s+/g, ".") + ".wpp",
+        whatsappName: name,
+        isPrimary: true,
+      }]);
+      setWhatsappPhone(wppNumber);
+      setWhatsappName(name);
+      setNomeUsuarioWpp(name.toLowerCase().replace(/\s+/g, ".") + ".wpp");
+      setHasWhatsapp(!!guest.hasWhatsapp);
+    } else {
+      setVerifiedPhones([]);
+      setWhatsappPhone("");
+      setWhatsappName("");
+      setNomeUsuarioWpp("");
+      setHasWhatsapp(false);
+    }
+
     setHubGuestSaved(true);
     setShowGuestData(false);
-    setHubMessage(`✓ Hóspede '${guest.name}' localizado e verificado no cadastro com sucesso.`);
+    setHubMessage(`✓ Hóspede '${name}' carregado do cadastro (CPF, contato e ficha completa).`);
     setShowSearchGuestModal(false);
   };
 
@@ -2861,8 +2908,8 @@ export default function CheckinHospedagemModal({
                       className="w-full px-4 py-3 text-left hover:bg-sky-500/10 transition-colors flex items-center justify-between group"
                     >
                       <div>
-                        <p className={`text-sm font-bold group-hover:text-sky-600 ${isDark ? "text-white" : "text-slate-900"}`}>{g.name}</p>
-                        <p className="text-xs opacity-60 font-mono">{g.doc} · {g.phone}</p>
+                        <p className={`text-sm font-bold group-hover:text-sky-600 ${isDark ? "text-white" : "text-slate-900"}`}>{g.fullName}</p>
+                        <p className="text-xs opacity-60 font-mono">{g.cpf || "sem CPF"} · {g.phone || g.whatsappPhone || "sem telefone"}</p>
                       </div>
                       <CheckCircle2 className="w-4 h-4 text-sky-500 opacity-0 group-hover:opacity-100 transition-opacity" />
                     </button>

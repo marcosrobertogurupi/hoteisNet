@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
           phone: true,
           whatsappPhone: true,
           hasWhatsapp: true,
+          passport: true,
           city: true,
           state: true,
           country: true,
@@ -60,6 +61,10 @@ export async function GET(request: NextRequest) {
           zipCode: true,
           gender: true,
           birthDate: true,
+          motherName: true,
+          fatherName: true,
+          fullAddress: true,
+          rgNumber: true,
           companyId: true,
           company: {
             select: { name: true, cnpj: true },

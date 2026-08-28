@@ -4,6 +4,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
 import { createPreCheckinLink } from "@/lib/preCheckinLink";
 import { logActivity } from "@/lib/audit";
+import { validateCPF, formatCPF } from "@/lib/documentValidation";
 
 // POST /api/stay/checkin/assisted-fnrh-link — gera o link de pré-check-in/FNRH SEM enviar por
 // WhatsApp, para o "Preenchimento Assistido no Balcão": o atendente abre o mesmo formulário do
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { reservationId } = body;
+    const { reservationId, documentNumber, guestName, phone } = body;
     if (!reservationId) {
       return NextResponse.json({ success: false, error: "Reserva é obrigatória." }, { status: 400 });
     }
@@ -31,8 +32,23 @@ export async function POST(request: NextRequest) {
     if (!reservation || reservation.room.tenantId !== session.tenantId) {
       return NextResponse.json({ success: false, error: "Reserva não encontrada." }, { status: 404 });
     }
+
+    // A reserva de origem quase sempre não tem CPF gravado (o hóspede só informa o documento aqui,
+    // no balcão, ao iniciar o check-in). Persistimos o CPF digitado no modal na própria reserva
+    // antes de gerar a ficha — o CPF é a chave de consulta ao Hub do governo.
     if (!reservation.guestCpf) {
-      return NextResponse.json({ success: false, error: "CPF do hóspede é obrigatório para gerar a FNRH." }, { status: 400 });
+      const documentDigits = (documentNumber || "").replace(/\D/g, "");
+      if (documentDigits.length !== 11 || !validateCPF(documentDigits)) {
+        return NextResponse.json({ success: false, error: "CPF do hóspede é obrigatório para gerar a FNRH." }, { status: 400 });
+      }
+      await prisma.reservation.updateMany({
+        where: { id: reservation.id, room: { tenantId: session.tenantId } },
+        data: {
+          guestCpf: formatCPF(documentDigits),
+          ...(guestName ? { guestName: String(guestName).toUpperCase() } : {}),
+          ...(phone ? { guestPhone: String(phone) } : {}),
+        },
+      });
     }
 
     const tenantId = reservation.room.tenantId;
