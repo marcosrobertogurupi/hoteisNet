@@ -135,6 +135,7 @@ export default function TenantDashboardPage() {
     otherDebits: number;
     otherDebitsDetail: { id: string; amount: number; createdAt: string; fromRoomNumber: string; fromGuestName: string; operatorName: string | null }[];
     dailyCharges: { referenceDate: string; amount: number; description: string }[];
+    earlyArrivalCharges?: { referenceDate: string; amount: number; description: string }[];
     guest: { id: string; fullName: string; cpf: string | null; phone: string | null; whatsappPhone: string | null; city: string | null; state: string | null; street: string | null; neighborhood: string | null; zipCode: string | null };
     secondaryGuests: { id: string; name: string; document: string | null }[];
     consumptions: {
@@ -777,6 +778,22 @@ export default function TenantDashboardPage() {
     const reservedNights = Math.max(1, Math.round((expectedCheckOut.getTime() - checkIn.getTime()) / msPerNight));
     const extraDays = Math.max(0, nights - reservedNights);
 
+    // Cobrança de chegada de madrugada/antecipada: já está somada em totalDaily (o backend a
+    // inclui no acumulado). Aqui vira uma linha própria na grade do Extrato/Resumo para o total
+    // exibido bater com a soma das linhas — sem contar como "diária" para nights/extraDays.
+    const earlyArrivalCharges = activeStayDetail.earlyArrivalCharges || [];
+    const earlyArrivalCharge = earlyArrivalCharges.reduce((acc, c) => acc + c.amount, 0);
+    for (const c of earlyArrivalCharges) {
+      const start = new Date(c.referenceDate);
+      tariffList.push({
+        description: c.description || "Chegada antecipada",
+        startDate: formatBrDateTime(start.toISOString()).split(" ")[0],
+        endDate: formatBrDateTime(checkIn.toISOString()).split(" ")[0],
+        dailyRate: c.amount,
+        referenceDateISO: start.toISOString(),
+      });
+    }
+
     const totalDiarias = activeStayDetail.totalDaily;
     const totalConsumo = activeStayDetail.totalConsumption;
     const outrosDebitos = activeStayDetail.otherDebits ?? 0;
@@ -821,6 +838,7 @@ export default function TenantDashboardPage() {
         posLocationName: c.posLocationName,
       })),
       totalDiarias,
+      earlyArrivalCharge,
       totalConsumo,
       outrosDebitos,
       outrosDebitosDetail: activeStayDetail.otherDebitsDetail || [],
@@ -1887,6 +1905,7 @@ export default function TenantDashboardPage() {
                   secondaryGuests: checkinData.secondaryGuests,
                   adults: checkinData.adults,
                   children: checkinData.children,
+                  earlyArrival: checkinData.earlyArrival ?? null,
                 }),
               });
               const stayData = await stayRes.json();

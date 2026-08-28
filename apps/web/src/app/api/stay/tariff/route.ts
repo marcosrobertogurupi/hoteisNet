@@ -62,8 +62,10 @@ export async function PATCH(req: NextRequest) {
         });
       }
 
+      // totalDaily = acumulado de diárias + cobrança de chegada de madrugada/antecipada
+      // (EARLY_ARRIVAL) — não pode cair para "só diárias" quando o operador troca a tarifa.
       const chargesAgg = await tx.stayCharge.aggregate({
-        where: { stayCheckinId, chargeType: "DAILY" },
+        where: { stayCheckinId, chargeType: { in: ["DAILY", "EARLY_ARRIVAL"] } },
         _sum: { amount: true },
         _count: true,
       });

@@ -99,6 +99,27 @@ model Tenant {
   // Configurável só pelo admin em Configurações. Serve também para troca rápida de operador no terminal
   // (quem autenticar na tela de bloqueio assume a sessão). Ver components/InactivityLock.tsx.
   screenLockMinutes          Int                     @default(0)
+  // Horários padrão da propriedade (Configurações → "Horários Padrão de Check-in e Check-out").
+  // Antes viviam só no localStorage do navegador; agora persistidos no Tenant porque o backend
+  // precisa deles para validar chegada antecipada dentro da transação do check-in (o cliente
+  // nunca informa o horário-limite, senão bastaria mandar "00:00" para escapar da penalidade).
+  standardCheckInTime          String                @default("14:00")
+  standardCheckOutTime         String                @default("12:00")
+  // Janela de tolerância (minutos antes de standardCheckInTime) em que a chegada NÃO gera cobrança
+  // de chegada antecipada — cobre a recepção que processa o check-in um pouco antes do horário.
+  // O horário real da chegada é sempre gravado; a tolerância só isenta a cobrança.
+  earlyCheckinToleranceMinutes Int                   @default(60)
+  // Cobrança padrão pré-selecionada quando o hóspede chega ANTES do horário padrão (fora da
+  // tolerância) mas depois do corte de madrugada: EXTRA_NIGHT (1 diária), HALF_NIGHT (meia),
+  // FIXED_FEE (valor fixo em earlyCheckinFixedFeeAmount). Cortesia sempre exige senha de admin.
+  earlyArrivalDefaultCharge    String                @default("EXTRA_NIGHT")
+  // Cobrança padrão pré-selecionada para chegada de madrugada (antes do corte, MADRUGADA_CUTOFF_TIME).
+  overnightArrivalDefaultCharge String               @default("EXTRA_NIGHT")
+  // Valor usado quando *DefaultCharge = FIXED_FEE.
+  earlyCheckinFixedFeeAmount   Decimal               @default(0) @db.Decimal(10, 2)
+  // Texto informativo da política de chegada antecipada exibido ao hóspede (voucher/pré-check-in) —
+  // a Portaria MTur 28/2025 exige que qualquer cobrança de early check-in seja informada previamente.
+  earlyCheckinPolicyText       String?
   accountPlans               AccountPlan[]
   aiAgentSettings            AIAgentSetting?
   aiUsageLogs                AIUsageLog[]

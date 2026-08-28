@@ -92,6 +92,12 @@ export interface ThemeContextType {
   setDefaultCheckInTime: (time: string) => void;
   defaultCheckOutTime: string;
   setDefaultCheckOutTime: (time: string) => void;
+  // Tolerância (minutos antes do horário padrão de check-in) sem cobrança de chegada antecipada.
+  earlyCheckinToleranceMinutes: number;
+  // Cobrança padrão pré-selecionada no painel de decisão de chegada (EXTRA_NIGHT | HALF_NIGHT | FIXED_FEE).
+  earlyArrivalDefaultCharge: string;
+  overnightArrivalDefaultCharge: string;
+  earlyCheckinFixedFeeAmount: number;
   uazapiServerUrl: string;
   setUazapiServerUrl: (url: string) => void;
   uazapiInstanceToken: string;
@@ -138,6 +144,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [showLogoInPrint, setShowLogoInPrintState] = useState<boolean>(true);
   const [defaultCheckInTime, setDefaultCheckInTimeState] = useState<string>("14:00");
   const [defaultCheckOutTime, setDefaultCheckOutTimeState] = useState<string>("12:00");
+  const [earlyCheckinToleranceMinutes, setEarlyCheckinToleranceMinutesState] = useState<number>(60);
+  const [earlyArrivalDefaultCharge, setEarlyArrivalDefaultChargeState] = useState<string>("EXTRA_NIGHT");
+  const [overnightArrivalDefaultCharge, setOvernightArrivalDefaultChargeState] = useState<string>("EXTRA_NIGHT");
+  const [earlyCheckinFixedFeeAmount, setEarlyCheckinFixedFeeAmountState] = useState<number>(0);
 
   // Uazapi Integration default values (Subscriber settings, customizable per tenant)
   const [uazapiServerUrl, setUazapiServerUrlState] = useState<string>("https://netservice.uazapi.com");
@@ -244,6 +254,35 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.error("Failed to load theme settings from localStorage", e);
     }
+  }, []);
+
+  // Horários padrão e tolerância de chegada antecipada são autoritativos no banco (Tenant) —
+  // o localStorage acima é só cache offline até esta busca responder. O backend usa esses mesmos
+  // valores para validar a chegada antecipada dentro da transação do check-in.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/tenant/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || !data?.success || !data.settings) return;
+        const s = data.settings;
+        if (s.standardCheckInTime) {
+          setDefaultCheckInTimeState(s.standardCheckInTime);
+          try { localStorage.setItem("hoteisnet_checkin_time", s.standardCheckInTime); } catch {}
+        }
+        if (s.standardCheckOutTime) {
+          setDefaultCheckOutTimeState(s.standardCheckOutTime);
+          try { localStorage.setItem("hoteisnet_checkout_time", s.standardCheckOutTime); } catch {}
+        }
+        if (typeof s.earlyCheckinToleranceMinutes === "number") {
+          setEarlyCheckinToleranceMinutesState(s.earlyCheckinToleranceMinutes);
+        }
+        if (s.earlyArrivalDefaultCharge) setEarlyArrivalDefaultChargeState(s.earlyArrivalDefaultCharge);
+        if (s.overnightArrivalDefaultCharge) setOvernightArrivalDefaultChargeState(s.overnightArrivalDefaultCharge);
+        if (typeof s.earlyCheckinFixedFeeAmount === "number") setEarlyCheckinFixedFeeAmountState(s.earlyCheckinFixedFeeAmount);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   const setTheme = (themeId: ThemeId) => {
@@ -388,6 +427,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         setDefaultCheckInTime,
         defaultCheckOutTime,
         setDefaultCheckOutTime,
+        earlyCheckinToleranceMinutes,
+        earlyArrivalDefaultCharge,
+        overnightArrivalDefaultCharge,
+        earlyCheckinFixedFeeAmount,
         uazapiServerUrl,
         setUazapiServerUrl,
         uazapiInstanceToken,

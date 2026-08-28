@@ -102,6 +102,13 @@ export default function SubscriberSettingsPage() {
   const [checkInTimeInput, setCheckInTimeInput] = useState(defaultCheckInTime);
   const [checkOutTimeInput, setCheckOutTimeInput] = useState(defaultCheckOutTime);
   const [toleranceInput, setToleranceInput] = useState(String(reservationToleranceHours));
+  // Tolerância (minutos antes do horário padrão de check-in) sem cobrança de chegada antecipada.
+  const [earlyCheckinToleranceInput, setEarlyCheckinToleranceInput] = useState("60");
+  // Política de cobrança de chegada de madrugada / antecipada.
+  const [earlyArrivalDefaultChargeInput, setEarlyArrivalDefaultChargeInput] = useState("EXTRA_NIGHT");
+  const [overnightArrivalDefaultChargeInput, setOvernightArrivalDefaultChargeInput] = useState("EXTRA_NIGHT");
+  const [earlyCheckinFixedFeeInput, setEarlyCheckinFixedFeeInput] = useState("0");
+  const [earlyCheckinPolicyTextInput, setEarlyCheckinPolicyTextInput] = useState("");
 
   // Estados de E-mail / SMTP
   const [smtpHostInput, setSmtpHostInput] = useState(emailSmtpHost);
@@ -446,6 +453,27 @@ export default function SubscriberSettingsPage() {
         if (data.success && typeof data.settings?.screenLockMinutes === "number") {
           setScreenLockMinutesInput(data.settings.screenLockMinutes);
         }
+        if (data.success && data.settings?.standardCheckInTime) {
+          setCheckInTimeInput(data.settings.standardCheckInTime);
+        }
+        if (data.success && data.settings?.standardCheckOutTime) {
+          setCheckOutTimeInput(data.settings.standardCheckOutTime);
+        }
+        if (data.success && typeof data.settings?.earlyCheckinToleranceMinutes === "number") {
+          setEarlyCheckinToleranceInput(String(data.settings.earlyCheckinToleranceMinutes));
+        }
+        if (data.success && data.settings?.earlyArrivalDefaultCharge) {
+          setEarlyArrivalDefaultChargeInput(data.settings.earlyArrivalDefaultCharge);
+        }
+        if (data.success && data.settings?.overnightArrivalDefaultCharge) {
+          setOvernightArrivalDefaultChargeInput(data.settings.overnightArrivalDefaultCharge);
+        }
+        if (data.success && typeof data.settings?.earlyCheckinFixedFeeAmount === "number") {
+          setEarlyCheckinFixedFeeInput(String(data.settings.earlyCheckinFixedFeeAmount));
+        }
+        if (data.success && typeof data.settings?.earlyCheckinPolicyText === "string") {
+          setEarlyCheckinPolicyTextInput(data.settings.earlyCheckinPolicyText);
+        }
         if (data.success && data.settings) {
           const s = data.settings;
           setHotelFantasia(s.tradeName || "");
@@ -616,6 +644,13 @@ export default function SubscriberSettingsPage() {
           maxDiscountPercent: maxDiscountPercentInput,
           fnrhMandatoryBeforeCheckin: fnrhMandatoryInput,
           screenLockMinutes: screenLockMinutesInput,
+          standardCheckInTime: checkInTimeInput,
+          standardCheckOutTime: checkOutTimeInput,
+          earlyCheckinToleranceMinutes: Math.max(0, Math.min(240, Number(earlyCheckinToleranceInput) || 0)),
+          earlyArrivalDefaultCharge: earlyArrivalDefaultChargeInput,
+          overnightArrivalDefaultCharge: overnightArrivalDefaultChargeInput,
+          earlyCheckinFixedFeeAmount: Math.max(0, Number(earlyCheckinFixedFeeInput) || 0),
+          earlyCheckinPolicyText: earlyCheckinPolicyTextInput,
         }),
       });
       const data = await res.json();
@@ -743,6 +778,15 @@ export default function SubscriberSettingsPage() {
     setSendVoucherEmailEnabled(optVoucherInput);
     setSendReceiptEmailEnabled(optReceiptInput);
     setSendPaymentConfirmEmailEnabled(optPaymentInput);
+
+    // Avisa o InactivityLock (montado no layout persistente de /app) para recarregar o
+    // parâmetro de bloqueio de tela imediatamente — sem isso, o timer que já estava rodando
+    // continua com o valor antigo até um refresh completo da página. Ver components/InactivityLock.tsx.
+    try {
+      window.dispatchEvent(new CustomEvent("hoteisnet:tenant-settings-updated"));
+    } catch {
+      // ambiente sem window — ignora
+    }
 
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
@@ -1349,6 +1393,109 @@ export default function SubscriberSettingsPage() {
               Horário limite de término da diária para higienização e turnover.
             </p>
           </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold block">
+              Tolerância de Chegada Antecipada (minutos)
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={240}
+              value={earlyCheckinToleranceInput}
+              onChange={(e) => setEarlyCheckinToleranceInput(e.target.value)}
+              className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+                theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+              }`}
+            />
+            <p className={`text-[11px] ${theme.textMuted}`}>
+              Chegadas até este tempo antes do horário de check-in não geram cobrança de chegada
+              antecipada. O horário real da chegada é sempre registrado.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 3.2: Política de Chegada Antecipada / Madrugada */}
+      <div className={`rounded-2xl border p-6 space-y-6 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-[#F59E0B]/15 border border-[#F59E0B]/30 flex items-center justify-center text-[#F59E0B]">
+            <CalendarClock className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">Política de Chegada Antecipada e de Madrugada</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Cobrança sugerida no check-in quando o hóspede chega antes do horário padrão (fora da
+              tolerância) ou de madrugada. O operador ainda confirma a opção; cortesia e taxa abaixo
+              da meia diária exigem senha de administrador.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold block">Cobrança padrão — chegada antecipada (após 06:00)</label>
+            <select
+              value={earlyArrivalDefaultChargeInput}
+              onChange={(e) => setEarlyArrivalDefaultChargeInput(e.target.value)}
+              className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+                theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+              }`}
+            >
+              <option value="EXTRA_NIGHT">Diária extra (1 diária)</option>
+              <option value="HALF_NIGHT">Meia diária</option>
+              <option value="FIXED_FEE">Taxa fixa</option>
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold block">Cobrança padrão — chegada de madrugada (antes das 06:00)</label>
+            <select
+              value={overnightArrivalDefaultChargeInput}
+              onChange={(e) => setOvernightArrivalDefaultChargeInput(e.target.value)}
+              className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+                theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+              }`}
+            >
+              <option value="EXTRA_NIGHT">Diária extra (noite anterior)</option>
+              <option value="HALF_NIGHT">Meia diária</option>
+              <option value="FIXED_FEE">Taxa fixa</option>
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold block">Valor da taxa fixa (R$)</label>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={earlyCheckinFixedFeeInput}
+              onChange={(e) => setEarlyCheckinFixedFeeInput(e.target.value)}
+              className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+                theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+              }`}
+            />
+            <p className={`text-[11px] ${theme.textMuted}`}>
+              Usado quando a cobrança padrão acima é &quot;Taxa fixa&quot;. Abaixo da meia diária, exige senha de admin no check-in.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs font-semibold block">Texto informado ao hóspede (voucher / pré-check-in)</label>
+          <textarea
+            rows={3}
+            value={earlyCheckinPolicyTextInput}
+            onChange={(e) => setEarlyCheckinPolicyTextInput(e.target.value)}
+            maxLength={2000}
+            placeholder="Ex.: Check-in a partir das 14h. Entrada antecipada sujeita à cobrança de diária adicional, conforme disponibilidade."
+            className={`w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${
+              theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+            }`}
+          />
+          <p className={`text-[11px] ${theme.textMuted}`}>
+            A Portaria MTur 28/2025 exige que qualquer cobrança de early check-in seja informada previamente ao hóspede.
+          </p>
         </div>
       </div>
 

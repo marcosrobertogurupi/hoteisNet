@@ -202,16 +202,24 @@ function isMadrugadaArrival(hhmm: string): boolean {
   return hhmm < MADRUGADA_CUTOFF_TIME;
 }
 
-// Horário efetivo do check-in:
-// - Chegada de madrugada (antes do corte): grava-se o horário REAL da chegada — nunca o
-//   horário padrão, que ficaria no futuro e mascararia a ocupação real do quarto.
-// - Chegada entre o corte e o horário padrão configurado: assume-se o horário padrão
-//   (normaliza pequenas antecipações comuns, ex: recepção processa às 13h50).
-// - Chegada depois do horário padrão: grava-se o horário real (check-in tardio).
-function resolveCheckinTime(defaultCheckInTime: string): string {
-  const hhmm = nowHHMM();
-  if (isMadrugadaArrival(hhmm)) return hhmm;
-  return hhmm > defaultCheckInTime ? hhmm : defaultCheckInTime;
+// Valor numérico → string do input de taxa fixa ("240,00"); 0/inválido volta como "0,00".
+function feeToInput(n: number): string {
+  return Number.isFinite(n) && n > 0 ? n.toFixed(2).replace(".", ",") : "0,00";
+}
+
+// "HH:MM" → minutos desde 00:00 (para comparar horário de chegada com o horário padrão).
+function hhmmToMinutes(hhmm: string): number {
+  const [h, m] = (hhmm || "0:0").split(":").map(Number);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+}
+
+// Horário efetivo do check-in: sempre o horário REAL da chegada (nowHHMM).
+// Antes, chegadas entre o corte de madrugada e o horário padrão eram silenciosamente
+// reescritas para o horário padrão — isso mascarava a ocupação real do quarto e escondia
+// chegadas antecipadas que deveriam gerar cobrança. A decisão de cobrar (ou não, dentro da
+// janela de tolerância) é tomada separadamente, sem alterar o horário gravado.
+function resolveCheckinTime(): string {
+  return nowHHMM();
 }
 
 // Build tomorrow's date string "YYYY-MM-DD"
@@ -246,7 +254,15 @@ export default function CheckinHospedagemModal({
   reservationData,
   onSuccess,
 }: CheckinHospedagemModalProps) {
-  const { defaultCheckInTime, defaultCheckOutTime, theme } = useTheme();
+  const {
+    defaultCheckInTime,
+    defaultCheckOutTime,
+    earlyCheckinToleranceMinutes,
+    earlyArrivalDefaultCharge,
+    overnightArrivalDefaultCharge,
+    earlyCheckinFixedFeeAmount,
+    theme,
+  } = useTheme();
   const toast = useToast();
   const { operatorId: activeOperatorId, operatorName: activeOperatorName } = useOperator();
   const isDark = theme.isDark;
@@ -432,7 +448,7 @@ export default function CheckinHospedagemModal({
       // Período da reserva — o check-in é sempre efetivado na data de hoje (nunca superior
       // nem inferior), independente da data originalmente reservada. Apenas a saída prevista
       // é herdada da reserva (quando ainda for uma data futura válida).
-      setDtChegadaLocal(buildLocalDateTime(todayDateStr(), resolveCheckinTime(defaultCheckInTime)));
+      setDtChegadaLocal(buildLocalDateTime(todayDateStr(), resolveCheckinTime()));
       const reservedCheckoutLocal = reservationData.checkOutDate ? brDateTimeToLocal(reservationData.checkOutDate) : "";
       if (reservedCheckoutLocal && localToDateOnly(reservedCheckoutLocal) > todayDateStr()) {
         setDtSaidaLocal(reservedCheckoutLocal);
@@ -442,7 +458,7 @@ export default function CheckinHospedagemModal({
       setAdults(reservationData.adults || 1);
       setChildren(reservationData.children || 0);
       setEarlyArrivalChoice(null);
-      setEarlyArrivalFixedFeeInput("0,00");
+      setEarlyArrivalFixedFeeInput(feeToInput(earlyCheckinFixedFeeAmount));
       setEarlyArrivalFixedFeeAuthorized(false);
       setEarlyArrivalCourtesyAuthorized(false);
       setEarlyArrivalAuthorizedBy(null);
@@ -515,10 +531,10 @@ export default function CheckinHospedagemModal({
       setDateError(null);
       setAdults(1);
       setChildren(0);
-      setDtChegadaLocal(buildLocalDateTime(todayDateStr(), resolveCheckinTime(defaultCheckInTime)));
+      setDtChegadaLocal(buildLocalDateTime(todayDateStr(), resolveCheckinTime()));
       setDtSaidaLocal(buildLocalDateTime(tomorrowDateStr(), defaultCheckOutTime));
       setEarlyArrivalChoice(null);
-      setEarlyArrivalFixedFeeInput("0,00");
+      setEarlyArrivalFixedFeeInput(feeToInput(earlyCheckinFixedFeeAmount));
       setEarlyArrivalFixedFeeAuthorized(false);
       setEarlyArrivalCourtesyAuthorized(false);
       setEarlyArrivalAuthorizedBy(null);
@@ -806,7 +822,7 @@ export default function CheckinHospedagemModal({
   // Dates & Occupants
   // ── Internal state: stored as datetime-local format "YYYY-MM-DDTHH:MM" ──
   // O check-in é sempre efetivado na data de hoje (nunca superior nem inferior).
-  const buildInitialCheckin = () => buildLocalDateTime(todayDateStr(), resolveCheckinTime(defaultCheckInTime));
+  const buildInitialCheckin = () => buildLocalDateTime(todayDateStr(), resolveCheckinTime());
 
   const buildInitialCheckout = (checkoutTime: string) => {
     if (reservationData?.checkOutDate) {
@@ -1078,9 +1094,31 @@ export default function CheckinHospedagemModal({
     }
   }, [dtChegadaLocal, dtSaidaLocal]);
 
-  // Chegada de madrugada: detectada quando o horário efetivo da chegada (já resolvido em
-  // resolveCheckinTime) cai antes do corte — exige decisão do operador sobre a noite anterior.
-  const isMadrugadaCheckin = isMadrugadaArrival(dtChegadaLocal.split("T")[1] || "00:00");
+  // Classificação da chegada em relação ao horário padrão de check-in:
+  // - "OVERNIGHT": chegada de madrugada (antes do corte MADRUGADA_CUTOFF_TIME) — o hóspede
+  //   efetivamente dormiu a noite anterior no quarto; padrão é cobrar a diária dessa noite.
+  // - "EARLY": chegada depois do corte mas antes de (horário padrão − tolerância) — early
+  //   check-in que, pela política do hotel, cobra a penalidade de chegada antecipada.
+  // - null: chegada dentro da tolerância ou depois do horário padrão — nada a cobrar.
+  // A tolerância só isenta a cobrança; o horário gravado é sempre o real (ver resolveCheckinTime).
+  const arrivalHHMM = dtChegadaLocal.split("T")[1] || "00:00";
+  const isArrivalToday = localToDateOnly(dtChegadaLocal) === todayDateStr();
+  const isMadrugadaCheckin = isArrivalToday && isMadrugadaArrival(arrivalHHMM);
+  const earlyCutoffMinutes = hhmmToMinutes(defaultCheckInTime) - (Number(earlyCheckinToleranceMinutes) || 0);
+  const isEarlyArrival =
+    isArrivalToday &&
+    !isMadrugadaCheckin &&
+    hhmmToMinutes(arrivalHHMM) < earlyCutoffMinutes;
+  const earlyArrivalKind: "OVERNIGHT" | "EARLY" | null = isMadrugadaCheckin
+    ? "OVERNIGHT"
+    : isEarlyArrival
+    ? "EARLY"
+    : null;
+  const needsEarlyArrivalDecision = earlyArrivalKind !== null;
+  // Opção pré-configurada pelo hotel (Configurações → Política de Chegada Antecipada) — mostrada
+  // como "sugerida" no painel; o operador ainda precisa confirmar clicando.
+  const earlyArrivalSuggestedChoice =
+    earlyArrivalKind === "OVERNIGHT" ? overnightArrivalDefaultCharge : earlyArrivalDefaultCharge;
 
   const earlyArrivalFixedFeeValue = parseFloat(earlyArrivalFixedFeeInput.replace(/\./g, "").replace(",", ".")) || 0;
   // Taxa fixa abaixo da metade da diária é tratada como desconto informal — exige autorização
@@ -1088,9 +1126,9 @@ export default function CheckinHospedagemModal({
   const earlyArrivalFixedFeeBelowHalf = earlyArrivalChoice === "FIXED_FEE" && earlyArrivalFixedFeeValue < dailyRate / 2;
   const earlyArrivalFixedFeeNeedsAuth = earlyArrivalFixedFeeBelowHalf && !earlyArrivalFixedFeeAuthorized;
 
-  const earlyArrivalPending = isMadrugadaCheckin && (!earlyArrivalChoice || earlyArrivalFixedFeeNeedsAuth);
+  const earlyArrivalPending = needsEarlyArrivalDecision && (!earlyArrivalChoice || earlyArrivalFixedFeeNeedsAuth);
 
-  const earlyArrivalCharge = !isMadrugadaCheckin
+  const earlyArrivalCharge = !needsEarlyArrivalDecision
     ? 0
     : earlyArrivalChoice === "EXTRA_NIGHT"
     ? dailyRate
@@ -1100,11 +1138,12 @@ export default function CheckinHospedagemModal({
     ? earlyArrivalFixedFeeValue
     : 0; // COURTESY ou ainda não decidido
 
+  const earlyArrivalContext = earlyArrivalKind === "OVERNIGHT" ? "chegada de madrugada" : "chegada antecipada";
   const earlyArrivalLabel =
-    earlyArrivalChoice === "EXTRA_NIGHT" ? "Diária extra (chegada de madrugada)"
-    : earlyArrivalChoice === "HALF_NIGHT" ? "Meia diária (chegada de madrugada)"
-    : earlyArrivalChoice === "FIXED_FEE" ? (earlyArrivalFixedFeeBelowHalf ? `Taxa de chegada antecipada abaixo da meia diária (autorizado por ${earlyArrivalAuthorizedBy || "administrador"})` : "Taxa de chegada antecipada")
-    : earlyArrivalChoice === "COURTESY" ? `Cortesia — chegada de madrugada (autorizado por ${earlyArrivalAuthorizedBy || "administrador"})`
+    earlyArrivalChoice === "EXTRA_NIGHT" ? `Diária extra (${earlyArrivalContext})`
+    : earlyArrivalChoice === "HALF_NIGHT" ? `Meia diária (${earlyArrivalContext})`
+    : earlyArrivalChoice === "FIXED_FEE" ? (earlyArrivalFixedFeeBelowHalf ? `Taxa de ${earlyArrivalContext} abaixo da meia diária (autorizado por ${earlyArrivalAuthorizedBy || "administrador"})` : `Taxa de ${earlyArrivalContext}`)
+    : earlyArrivalChoice === "COURTESY" ? `Cortesia — ${earlyArrivalContext} (autorizado por ${earlyArrivalAuthorizedBy || "administrador"})`
     : "";
 
   // Total calculations
@@ -1336,8 +1375,10 @@ export default function CheckinHospedagemModal({
     // Validations
     if (earlyArrivalPending) {
       toast.error(
-        `Esta chegada foi registrada de madrugada (${dtChegada.slice(11, 16)}), bem antes do horário padrão de check-in.\n\nDefina abaixo como tratar a noite anterior (diária extra, meia diária, taxa fixa ou cortesia) antes de efetivar a hospedagem.`,
-        "Decisão de Chegada de Madrugada Pendente"
+        earlyArrivalKind === "OVERNIGHT"
+          ? `Esta chegada foi registrada de madrugada (${dtChegada.slice(11, 16)}), bem antes do horário padrão de check-in.\n\nDefina abaixo como tratar a noite anterior (diária extra, meia diária, taxa fixa ou cortesia) antes de efetivar a hospedagem.`
+          : `Esta chegada foi registrada às ${dtChegada.slice(11, 16)}, antes do horário padrão de check-in (${defaultCheckInTime}).\n\nDefina abaixo como cobrar a entrada antecipada (diária extra, meia diária, taxa fixa ou cortesia) antes de efetivar a hospedagem.`,
+        "Decisão de Chegada Antecipada Pendente"
       );
       return;
     }
@@ -1458,6 +1499,17 @@ export default function CheckinHospedagemModal({
       })),
       observations: obsList,
       totalBruto: totalDiariasBruto,
+      // Decisão de chegada de madrugada / antecipada. O backend NÃO confia no valor final —
+      // recalcula a partir de `choice` + `dailyRate` e revalida se a chegada é mesmo antecipada.
+      earlyArrival: needsEarlyArrivalDecision && earlyArrivalChoice
+        ? {
+            kind: earlyArrivalKind,
+            choice: earlyArrivalChoice,
+            fixedFeeAmount: earlyArrivalChoice === "FIXED_FEE" ? earlyArrivalFixedFeeValue : undefined,
+            authorizedBy: earlyArrivalAuthorizedBy || undefined,
+            label: earlyArrivalLabel,
+          }
+        : null,
       discount,
       totalAdvance: totalAdiantamento,
       balance: saldoAPagar,
@@ -2303,8 +2355,8 @@ export default function CheckinHospedagemModal({
                     </div>
                   </div>
 
-                  {/* Chegada de madrugada: exige decisão do operador sobre a noite anterior */}
-                  {isMadrugadaCheckin && (
+                  {/* Chegada de madrugada ou antecipada: exige decisão do operador sobre a cobrança */}
+                  {needsEarlyArrivalDecision && (
                     <div className={`rounded-lg border p-2.5 space-y-2 ${
                       earlyArrivalPending
                         ? (isDark ? "bg-red-500/10 border-red-500/40" : "bg-red-50 border-red-300")
@@ -2314,10 +2366,24 @@ export default function CheckinHospedagemModal({
                         <Moon className={`w-4 h-4 shrink-0 mt-0.5 ${earlyArrivalPending ? "text-red-400" : "text-sky-400"}`} />
                         <div className="flex-1">
                           <p className={`text-[11px] font-bold ${earlyArrivalPending ? (isDark ? "text-red-300" : "text-red-700") : (isDark ? "text-slate-200" : "text-slate-800")}`}>
-                            Chegada de madrugada ({dtChegada.slice(11, 16)}) — muito antes do horário padrão de check-in ({defaultCheckInTime}h)
+                            {earlyArrivalKind === "OVERNIGHT"
+                              ? `Chegada de madrugada (${dtChegada.slice(11, 16)}) — muito antes do horário padrão de check-in (${defaultCheckInTime}h)`
+                              : `Chegada antecipada (${dtChegada.slice(11, 16)}) — antes do horário padrão de check-in (${defaultCheckInTime}h)`}
                           </p>
                           <p className={`text-[10px] ${isDark ? "text-slate-400" : "text-slate-600"}`}>
-                            Como tratar a noite anterior à diária oficial?
+                            {earlyArrivalKind === "OVERNIGHT"
+                              ? "Como tratar a noite anterior à diária oficial?"
+                              : "Como cobrar a entrada antes do horário de check-in?"}
+                            {" "}
+                            <span className="opacity-80">
+                              Padrão do hotel:{" "}
+                              {earlyArrivalSuggestedChoice === "HALF_NIGHT"
+                                ? "meia diária"
+                                : earlyArrivalSuggestedChoice === "FIXED_FEE"
+                                ? "taxa fixa"
+                                : "diária extra"}
+                              .
+                            </span>
                           </p>
                         </div>
                       </div>

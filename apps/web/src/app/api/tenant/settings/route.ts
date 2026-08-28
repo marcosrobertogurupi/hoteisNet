@@ -5,6 +5,7 @@ import type { TaxRegime } from "@prisma/client";
 
 const TAX_REGIMES: TaxRegime[] = ["SIMPLES_NACIONAL", "LUCRO_PRESUMIDO", "LUCRO_REAL", "MEI"];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const EARLY_ARRIVAL_CHARGES = ["EXTRA_NIGHT", "HALF_NIGHT", "FIXED_FEE"] as const;
 
 // GET /api/tenant/settings — configurações do tenant da sessão, incluindo os "Dados do Hotel"
 // (equivalente à tabela Hotel.fic do sistema legado WinDev — ver memória
@@ -46,6 +47,13 @@ export async function GET(req: NextRequest) {
         maxDiscountPercent: true,
         fnrhMandatoryBeforeCheckin: true,
         screenLockMinutes: true,
+        standardCheckInTime: true,
+        standardCheckOutTime: true,
+        earlyCheckinToleranceMinutes: true,
+        earlyArrivalDefaultCharge: true,
+        overnightArrivalDefaultCharge: true,
+        earlyCheckinFixedFeeAmount: true,
+        earlyCheckinPolicyText: true,
       },
     });
 
@@ -79,6 +87,13 @@ export async function GET(req: NextRequest) {
         maxDiscountPercent: Number(tenant.maxDiscountPercent),
         fnrhMandatoryBeforeCheckin: tenant.fnrhMandatoryBeforeCheckin,
         screenLockMinutes: tenant.screenLockMinutes,
+        standardCheckInTime: tenant.standardCheckInTime,
+        standardCheckOutTime: tenant.standardCheckOutTime,
+        earlyCheckinToleranceMinutes: tenant.earlyCheckinToleranceMinutes,
+        earlyArrivalDefaultCharge: tenant.earlyArrivalDefaultCharge,
+        overnightArrivalDefaultCharge: tenant.overnightArrivalDefaultCharge,
+        earlyCheckinFixedFeeAmount: Number(tenant.earlyCheckinFixedFeeAmount),
+        earlyCheckinPolicyText: tenant.earlyCheckinPolicyText,
       },
     });
   } catch (error: any) {
@@ -168,6 +183,52 @@ export async function PATCH(req: NextRequest) {
       }
       data.dailyRolloverTime = body.dailyRolloverTime;
     }
+    if (body.standardCheckInTime !== undefined) {
+      if (!HHMM.test(body.standardCheckInTime)) {
+        return NextResponse.json({ success: false, error: "Horário padrão de check-in inválido (use HH:MM)." }, { status: 400 });
+      }
+      data.standardCheckInTime = body.standardCheckInTime;
+    }
+    if (body.standardCheckOutTime !== undefined) {
+      if (!HHMM.test(body.standardCheckOutTime)) {
+        return NextResponse.json({ success: false, error: "Horário padrão de check-out inválido (use HH:MM)." }, { status: 400 });
+      }
+      data.standardCheckOutTime = body.standardCheckOutTime;
+    }
+    if (body.earlyCheckinToleranceMinutes !== undefined) {
+      const parsed = Number(body.earlyCheckinToleranceMinutes);
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > 240) {
+        return NextResponse.json(
+          { success: false, error: "Tolerância de chegada antecipada deve ser um número de minutos entre 0 e 240." },
+          { status: 400 }
+        );
+      }
+      data.earlyCheckinToleranceMinutes = parsed;
+    }
+    if (body.earlyArrivalDefaultCharge !== undefined) {
+      if (!EARLY_ARRIVAL_CHARGES.includes(body.earlyArrivalDefaultCharge)) {
+        return NextResponse.json({ success: false, error: "Cobrança padrão de chegada antecipada inválida." }, { status: 400 });
+      }
+      data.earlyArrivalDefaultCharge = body.earlyArrivalDefaultCharge;
+    }
+    if (body.overnightArrivalDefaultCharge !== undefined) {
+      if (!EARLY_ARRIVAL_CHARGES.includes(body.overnightArrivalDefaultCharge)) {
+        return NextResponse.json({ success: false, error: "Cobrança padrão de chegada de madrugada inválida." }, { status: 400 });
+      }
+      data.overnightArrivalDefaultCharge = body.overnightArrivalDefaultCharge;
+    }
+    if (body.earlyCheckinFixedFeeAmount !== undefined) {
+      const parsed = Number(body.earlyCheckinFixedFeeAmount);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return NextResponse.json({ success: false, error: "Valor da taxa fixa de chegada antecipada inválido." }, { status: 400 });
+      }
+      data.earlyCheckinFixedFeeAmount = parsed;
+    }
+    if (body.earlyCheckinPolicyText !== undefined) {
+      const v = typeof body.earlyCheckinPolicyText === "string" ? body.earlyCheckinPolicyText.trim() : "";
+      data.earlyCheckinPolicyText = v ? v.slice(0, 2000) : null;
+    }
+
     if (body.allowNegativeStock !== undefined) data.allowNegativeStock = Boolean(body.allowNegativeStock);
     if (body.breakfastHours !== undefined) data.breakfastHours = body.breakfastHours || null;
     if (body.breakfastHoursHoliday !== undefined) data.breakfastHoursHoliday = body.breakfastHoursHoliday || null;

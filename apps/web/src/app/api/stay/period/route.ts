@@ -88,8 +88,10 @@ export async function PATCH(req: NextRequest) {
         }
       }
 
+      // Inclui a cobrança de chegada de madrugada/antecipada (EARLY_ARRIVAL) no acumulado —
+      // senão ela sumiria de totalDaily quando o período é alterado.
       const chargesAgg = await tx.stayCharge.aggregate({
-        where: { stayCheckinId, chargeType: "DAILY" },
+        where: { stayCheckinId, chargeType: { in: ["DAILY", "EARLY_ARRIVAL"] } },
         _sum: { amount: true },
       });
 

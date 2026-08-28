@@ -11,6 +11,34 @@ import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
+// Corte de madrugada — igual ao MADRUGADA_CUTOFF_TIME do CheckinHospedagemModal. Chegada antes
+// disso = o hóspede dormiu a noite anterior no quarto (cobrança da "noite anterior").
+const OVERNIGHT_CUTOFF_MINUTES = 6 * 60; // 06:00
+
+function hhmmToMinutes(hhmm: string): number {
+  const [h, m] = String(hhmm || "0:0").split(":").map(Number);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+}
+
+// Classifica a chegada a partir da string de check-in (wall-clock que o operador informou,
+// ex: "2026-08-28T09:56:00") — sem conversão de fuso, comparando data com "hoje em Brasília".
+// Retorna "OVERNIGHT" (madrugada), "EARLY" (antes do horário padrão − tolerância) ou null.
+function classifyArrival(
+  checkInIso: string,
+  standardCheckInTime: string,
+  toleranceMinutes: number
+): "OVERNIGHT" | "EARLY" | null {
+  const [datePart, timePart] = String(checkInIso || "").split("T");
+  if (!datePart) return null;
+  const todayBr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  if (datePart !== todayBr) return null; // chegada não é de hoje — regra não se aplica
+  const arrivalMin = hhmmToMinutes((timePart || "00:00").slice(0, 5));
+  if (arrivalMin < OVERNIGHT_CUTOFF_MINUTES) return "OVERNIGHT";
+  const cutoff = hhmmToMinutes(standardCheckInTime) - (Number(toleranceMinutes) || 0);
+  if (arrivalMin < cutoff) return "EARLY";
+  return null;
+}
+
 function formatCPF(v: string) {
   const c = v.replace(/\D/g, "");
   if (c.length !== 11) return v;
@@ -45,7 +73,7 @@ export async function GET(req: NextRequest) {
           room: true,
           primaryGuest: { include: { company: true } },
           consumptions: { orderBy: { createdAt: "asc" }, include: { posLocation: true } },
-          charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } },
+          charges: { where: { chargeType: { in: ["DAILY", "EARLY_ARRIVAL"] } }, orderBy: { referenceDate: "asc" } },
           secondaryGuests: { orderBy: { createdAt: "asc" } },
         },
       });
@@ -72,7 +100,7 @@ export async function GET(req: NextRequest) {
           room: true,
           primaryGuest: { include: { company: true } },
           consumptions: { orderBy: { createdAt: "asc" }, include: { posLocation: true } },
-          charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } },
+          charges: { where: { chargeType: { in: ["DAILY", "EARLY_ARRIVAL"] } }, orderBy: { referenceDate: "asc" } },
           secondaryGuests: { orderBy: { createdAt: "asc" } },
         },
       });
@@ -117,11 +145,22 @@ export async function GET(req: NextRequest) {
           fromGuestName: t.fromStay.primaryGuest.fullName,
           operatorName: t.operatorName,
         })),
-        dailyCharges: stay.charges.map((c) => ({
-          referenceDate: c.referenceDate,
-          amount: Number(c.amount),
-          description: c.description,
-        })),
+        dailyCharges: stay.charges
+          .filter((c) => c.chargeType === "DAILY")
+          .map((c) => ({
+            referenceDate: c.referenceDate,
+            amount: Number(c.amount),
+            description: c.description,
+          })),
+        // Cobrança de chegada de madrugada/antecipada (0..N lançamentos EARLY_ARRIVAL) — itemizada
+        // à parte das diárias para o Extrato/Resumo mostrarem a linha e o total bater.
+        earlyArrivalCharges: stay.charges
+          .filter((c) => c.chargeType === "EARLY_ARRIVAL")
+          .map((c) => ({
+            referenceDate: c.referenceDate,
+            amount: Number(c.amount),
+            description: c.description,
+          })),
         guest: {
           id: stay.primaryGuest.id,
           fullName: stay.primaryGuest.fullName,
@@ -212,6 +251,7 @@ export async function POST(req: NextRequest) {
       fatherName,
       fullAddress,
       email,
+      earlyArrival,
     } = body;
 
     const roomTarget = String(roomId || roomNumber || "");
@@ -252,7 +292,11 @@ export async function POST(req: NextRequest) {
 
       const tenantSettings = await tx.tenant.findUnique({
         where: { id: room.tenantId },
-        select: { fnrhMandatoryBeforeCheckin: true },
+        select: {
+          fnrhMandatoryBeforeCheckin: true,
+          standardCheckInTime: true,
+          earlyCheckinToleranceMinutes: true,
+        },
       });
 
       // Trava a linha do quarto pelo resto da transação: impede que dois check-ins quase
@@ -321,6 +365,76 @@ export async function POST(req: NextRequest) {
 
       const checkInAt = new Date(checkInDate);
       const checkOutAt = new Date(checkOutDate);
+
+      // ── Chegada de madrugada / antecipada ──────────────────────────────────────────────
+      // Reclassifica a chegada NO SERVIDOR a partir do horário informado (o cliente nunca
+      // define o horário-limite — senão bastaria mandar "00:00" para escapar da penalidade) e
+      // recalcula o valor a partir da escolha + diária, ignorando qualquer valor final do body.
+      const dailyRateNum = Number(dailyRate) || 0;
+      const serverArrivalKind = classifyArrival(
+        String(checkInDate),
+        tenantSettings?.standardCheckInTime || "14:00",
+        tenantSettings?.earlyCheckinToleranceMinutes ?? 60
+      );
+      const eaChoice: string | null = earlyArrival?.choice || null;
+      const eaAuthorizedBy: string | null =
+        typeof earlyArrival?.authorizedBy === "string" && earlyArrival.authorizedBy.trim()
+          ? earlyArrival.authorizedBy.trim()
+          : null;
+
+      if (serverArrivalKind && !eaChoice) {
+        throw new Error(
+          serverArrivalKind === "OVERNIGHT"
+            ? "Chegada de madrugada exige a decisão de como tratar a noite anterior (diária extra, meia diária, taxa fixa ou cortesia) antes do check-in."
+            : "Chegada antes do horário padrão de check-in exige a decisão de cobrança de chegada antecipada (diária extra, meia diária, taxa fixa ou cortesia) antes do check-in."
+        );
+      }
+
+      let earlyArrivalChargeAmount = 0;
+      let earlyArrivalDescription = "";
+      if (serverArrivalKind && eaChoice) {
+        const ctx = serverArrivalKind === "OVERNIGHT" ? "chegada de madrugada" : "chegada antecipada";
+        if (eaChoice === "EXTRA_NIGHT") {
+          earlyArrivalChargeAmount = dailyRateNum;
+          earlyArrivalDescription = `Diária extra (${ctx})`;
+        } else if (eaChoice === "HALF_NIGHT") {
+          earlyArrivalChargeAmount = dailyRateNum / 2;
+          earlyArrivalDescription = `Meia diária (${ctx})`;
+        } else if (eaChoice === "FIXED_FEE") {
+          const fee = Number(earlyArrival?.fixedFeeAmount);
+          if (!Number.isFinite(fee) || fee < 0) {
+            throw new Error("Valor da taxa de chegada antecipada inválido.");
+          }
+          // Taxa abaixo da meia diária = desconto informal — exige autorização de admin (igual à cortesia).
+          if (fee < dailyRateNum / 2 && !eaAuthorizedBy) {
+            throw new Error("Taxa de chegada antecipada abaixo da meia diária exige autorização de administrador.");
+          }
+          earlyArrivalChargeAmount = fee;
+          earlyArrivalDescription = `Taxa de ${ctx}${fee < dailyRateNum / 2 ? ` (autorizado por ${eaAuthorizedBy})` : ""}`;
+        } else if (eaChoice === "COURTESY") {
+          if (!eaAuthorizedBy) {
+            throw new Error("Cortesia de chegada antecipada exige autorização de administrador.");
+          }
+          earlyArrivalChargeAmount = 0;
+          earlyArrivalDescription = `Cortesia — ${ctx} (autorizado por ${eaAuthorizedBy})`;
+        } else {
+          throw new Error("Opção de chegada antecipada inválida.");
+        }
+      }
+
+      // Valor total da hospedagem para o débito automático no saldo do hóspede. Nunca fica abaixo
+      // de (diárias do período + chegada antecipada) — protege contra um body que mande a escolha
+      // de chegada antecipada mas um totalAmount sem ela.
+      const nightsBackend = Math.max(
+        1,
+        Math.round(
+          (dateOnlyBrasilia(checkOutAt).getTime() - dateOnlyBrasilia(checkInAt).getTime()) / 86_400_000
+        )
+      );
+      const guestDebitTotal = Math.max(
+        Number(totalAmount || dailyRate || 0),
+        nightsBackend * dailyRateNum + earlyArrivalChargeAmount
+      );
 
       // Resolve a Reservation de origem ANTES de criar a StayCheckin, para já gravar o vínculo
       // real (reservationId) entre as duas — é essa FK que garante que o Mapa Operacional e a
@@ -406,7 +520,10 @@ export async function POST(req: NextRequest) {
           checkInDate: checkInAt,
           expectedCheckOut: checkOutAt,
           billingType: "DIRECT",
-          totalDaily: dailyRate || 0,
+          // totalDaily é o acumulado de diárias já lançadas (rollover incrementa a cada virada) —
+          // inclui de saída a cobrança de chegada de madrugada/antecipada, para que o saldo devedor
+          // exibido no check-out já bata com o que a validação atômica do PATCH vai cobrar.
+          totalDaily: (Number(dailyRate) || 0) + earlyArrivalChargeAmount,
           totalConsumption: 0,
           discount: discount || 0,
           adults: adults || 1,
@@ -429,13 +546,13 @@ export async function POST(req: NextRequest) {
           guestId: guest.id,
           stayCheckinId: stay.id,
           type: "DEBITO",
-          amount: Number(totalAmount || dailyRate || 0),
+          amount: guestDebitTotal,
           description: `Débito automático — valor total da hospedagem (Quarto ${room.number})`,
         },
       });
       await tx.guest.update({
         where: { id: guest.id },
-        data: { balance: { decrement: Number(totalAmount || dailyRate || 0) } },
+        data: { balance: { decrement: guestDebitTotal } },
       });
 
       const validSecondaryGuests = (Array.isArray(secondaryGuests) ? secondaryGuests : []).filter(
@@ -462,6 +579,22 @@ export async function POST(req: NextRequest) {
           amount: dailyRate || 0,
         },
       });
+
+      // Cobrança de chegada de madrugada / antecipada como StayCharge própria — assim ela entra no
+      // saldo devedor do check-out (que soma StayCharges), não só no débito de saldo do hóspede.
+      // referenceDate = véspera do check-in ("noite anterior"), fora do slot da 1ª diária e das
+      // viradas seguintes (respeita o unique [stayCheckinId, referenceDate]).
+      if (earlyArrivalChargeAmount > 0) {
+        await tx.stayCharge.create({
+          data: {
+            stayCheckinId: stay.id,
+            referenceDate: new Date(checkInAt.getTime() - 86_400_000),
+            description: earlyArrivalDescription || "Chegada antecipada",
+            chargeType: "EARLY_ARRIVAL",
+            amount: earlyArrivalChargeAmount,
+          },
+        });
+      }
 
       await tx.room.update({ where: { id: room.id }, data: { status: "OCCUPIED" } });
 
@@ -530,7 +663,7 @@ export async function POST(req: NextRequest) {
         // avulso ou no checkout, deixando qualquer leitura nesse meio-tempo (ex.: Transferência de
         // Débitos) com o saldo devedor desatualizado. Usa o valor TOTAL da hospedagem (todas as
         // diárias), não só uma diária — senão o saldo nasce subavaliado em estadias de N > 1 noites.
-        const saldoAposCheckin = Math.max(0, Number(totalAmount || dailyRate || 0) - totalPagoCheckin - Number(discount || 0));
+        const saldoAposCheckin = Math.max(0, guestDebitTotal - totalPagoCheckin - Number(discount || 0));
         await tx.stayCheckin.update({
           where: { id: stay.id },
           data: { totalAdvance: totalPagoCheckin, balanceDue: saldoAposCheckin },
@@ -544,6 +677,9 @@ export async function POST(req: NextRequest) {
         roomNumber: room.number,
         tenantId: room.tenantId,
         guestPhone: phone || null,
+        earlyArrivalNote: serverArrivalKind
+          ? ` ${earlyArrivalDescription || (serverArrivalKind === "OVERNIGHT" ? "chegada de madrugada" : "chegada antecipada")}${earlyArrivalChargeAmount > 0 ? ` (R$ ${earlyArrivalChargeAmount.toFixed(2)})` : ""}`
+          : "",
       };
     });
 
@@ -552,7 +688,7 @@ export async function POST(req: NextRequest) {
       userId: session?.userId,
       userName: session?.name,
       action: "CHECKIN",
-      description: `${session?.name || "Usuário"} fez check-in de ${guestName} no quarto ${roomTarget}.`,
+      description: `${session?.name || "Usuário"} fez check-in de ${guestName} no quarto ${roomTarget}.${result.earlyArrivalNote}`,
       entityType: "STAY_CHECKIN",
       entityId: result.stayCheckinId,
       terminal: getTerminalName(req),
