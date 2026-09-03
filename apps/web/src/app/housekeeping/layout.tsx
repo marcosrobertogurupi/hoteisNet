@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import PwaRegister from "@/components/PwaRegister";
+import SatelliteThemeShell from "@/components/SatelliteThemeShell";
 
 export const metadata: Metadata = {
   title: "Governança | HoteisNet",
@@ -25,9 +26,9 @@ export const viewport: Viewport = {
 
 export default function HousekeepingLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-[#090D16] text-[#F8FAFC]">
+    <SatelliteThemeShell>
       <PwaRegister src="/sw-housekeeping.js" scope="/housekeeping" />
       {children}
-    </div>
+    </SatelliteThemeShell>
   );
 }

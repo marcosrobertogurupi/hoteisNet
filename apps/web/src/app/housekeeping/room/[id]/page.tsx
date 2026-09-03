@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { usePolling } from "@/lib/usePolling";
+import { useTheme } from "@/context/ThemeContext";
+import { satelliteAppUI } from "@/lib/satelliteAppUI";
 import {
   ArrowLeft,
   Play,
@@ -34,6 +36,8 @@ export default function HousekeepingRoomPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const roomId = params.id;
+  const { theme } = useTheme();
+  const ui = satelliteAppUI(theme.isDark, "rose");
 
   const [room, setRoom] = useState<RoomView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -205,7 +209,7 @@ export default function HousekeepingRoomPage() {
   if (notFound || !room) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center space-y-4">
-        <p className="text-sm text-slate-400">Quarto não encontrado ou não está mais atribuído a você.</p>
+        <p className={`text-sm ${theme.textMuted}`}>Quarto não encontrado ou não está mais atribuído a você.</p>
         <button
           onClick={() => router.push("/housekeeping")}
           className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold"
@@ -220,26 +224,33 @@ export default function HousekeepingRoomPage() {
 
   return (
     <div className="min-h-screen pb-8">
-      <div className="sticky top-0 z-10 bg-[#090D16]/95 backdrop-blur border-b border-slate-800 px-4 py-4 flex items-center gap-3">
-        <button onClick={() => router.push("/housekeeping")} className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition">
+      <div className={`sticky top-0 z-10 backdrop-blur border-b px-4 py-4 flex items-center gap-3 ${ui.bar}`}>
+        <button
+          onClick={() => router.push("/housekeeping")}
+          className={`p-2 rounded-xl border transition hover:opacity-80 ${ui.iconBtn}`}
+        >
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div>
-          <p className="text-sm font-bold">Quarto {room.number}</p>
-          <p className="text-[11px] text-slate-400">{room.floor} • {room.category || "Quarto"}</p>
+          <p className={`text-sm font-bold ${theme.textMain}`}>Quarto {room.number}</p>
+          <p className={`text-[11px] ${theme.textMuted}`}>{room.floor} • {room.category || "Quarto"}</p>
         </div>
       </div>
 
       <div className="px-4 pt-4 flex flex-wrap items-center gap-2">
         {room.priority && (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border bg-rose-500/15 text-rose-300 border-rose-500/40">
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border bg-rose-500/15 border-rose-500/40 ${
+              theme.isDark ? "text-rose-300" : "text-rose-700"
+            }`}
+          >
             <CalendarClock className="w-3 h-3" /> Prioridade — reserva chega hoje
           </span>
         )}
         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
           isOccupied
-            ? "bg-violet-500/15 text-violet-400 border-violet-500/30"
-            : "bg-rose-500/15 text-rose-400 border-rose-500/30"
+            ? `bg-violet-500/15 border-violet-500/30 ${theme.isDark ? "text-violet-300" : "text-violet-700"}`
+            : `bg-rose-500/15 border-rose-500/30 ${theme.isDark ? "text-rose-300" : "text-rose-700"}`
         }`}>
           {isOccupied ? <BedDouble className="w-3 h-3" /> : null}
           {isOccupied ? "Arrumação com hóspede no quarto" : "Limpeza pós check-out"}
@@ -254,12 +265,12 @@ export default function HousekeepingRoomPage() {
                 <SprayCan className="w-9 h-9 text-amber-400" />
               </div>
               <div>
-                <p className="text-base font-bold">Quarto aguardando limpeza</p>
-                <p className="text-xs text-slate-400 mt-1">Toque em iniciar quando começar.</p>
+                <p className={`text-base font-bold ${theme.textMain}`}>Quarto aguardando limpeza</p>
+                <p className={`text-xs mt-1 ${theme.textMuted}`}>Toque em iniciar quando começar.</p>
               </div>
             </div>
 
-            {actionError && <p className="text-sm text-red-400 font-medium text-center">{actionError}</p>}
+            {actionError && <p className="text-sm text-rose-500 font-medium text-center">{actionError}</p>}
 
             <button
               onClick={handleStart}
@@ -273,15 +284,15 @@ export default function HousekeepingRoomPage() {
               <button
                 onClick={() => setDndOpen(true)}
                 disabled={starting}
-                className="w-full py-3 rounded-2xl bg-slate-900 border border-slate-700 text-slate-300 hover:border-amber-500/50 hover:text-amber-300 font-semibold text-sm transition flex items-center justify-center gap-2 disabled:opacity-60"
+                className={`w-full py-3 rounded-2xl border font-semibold text-sm transition flex items-center justify-center gap-2 disabled:opacity-60 hover:border-amber-500/50 ${ui.card} ${theme.textMain}`}
               >
                 <DoorClosed className="w-4 h-4" /> Hóspede em Não Perturbe
               </button>
             )}
 
             {isOccupied && dndOpen && (
-              <div className="space-y-3 p-4 rounded-2xl bg-amber-500/5 border border-amber-500/25">
-                <p className="text-xs font-semibold text-amber-200">
+              <div className="space-y-3 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25">
+                <p className={`text-xs font-semibold ${theme.isDark ? "text-amber-200" : "text-amber-800"}`}>
                   Confirmar que o quarto {room.number} está em "não perturbe"? Isso encerra a arrumação de hoje deste quarto.
                 </p>
                 <textarea
@@ -289,7 +300,7 @@ export default function HousekeepingRoomPage() {
                   onChange={(e) => setDndNote(e.target.value)}
                   placeholder='Observação (opcional) — ex: "hóspede pediu para arrumar só amanhã"'
                   rows={2}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-500 resize-none"
+                  className={`w-full border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-amber-500 resize-none ${ui.field}`}
                 />
                 <div className="flex gap-2">
                   <button
@@ -298,7 +309,7 @@ export default function HousekeepingRoomPage() {
                       setDndNote("");
                     }}
                     disabled={dndSubmitting}
-                    className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-semibold text-sm transition disabled:opacity-60"
+                    className={`flex-1 py-2.5 rounded-xl border font-semibold text-sm transition disabled:opacity-60 ${ui.iconBtn}`}
                   >
                     Cancelar
                   </button>
@@ -318,22 +329,20 @@ export default function HousekeepingRoomPage() {
         {room.status === "IN_PROGRESS" && (
           <div className="space-y-6">
             <div className="flex items-center justify-center gap-2 py-2">
-              <Sparkles className="w-4 h-4 text-sky-400 animate-pulse" />
-              <p className="text-sm font-bold text-sky-400">Limpeza em andamento</p>
+              <Sparkles className={`w-4 h-4 animate-pulse ${theme.isDark ? "text-sky-400" : "text-sky-600"}`} />
+              <p className={`text-sm font-bold ${theme.isDark ? "text-sky-400" : "text-sky-600"}`}>Limpeza em andamento</p>
             </div>
 
             <div>
-              <label className="text-xs font-semibold block mb-2 text-slate-300">
-                Observação (opcional)
-              </label>
+              <label className={`text-xs font-semibold block mb-2 ${theme.textMuted}`}>Observação (opcional)</label>
               <textarea
                 value={notes}
                 onChange={(e) => handleNotesChange(e.target.value)}
                 placeholder='Ex: "Hóspede fumou no quarto" ou "Faltando uma toalha"'
                 rows={4}
-                className="w-full bg-slate-900 border border-slate-700 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-rose-500 resize-none"
+                className={`w-full border rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-rose-500 resize-none ${ui.field}`}
               />
-              <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1.5">
+              <p className={`text-[11px] mt-1.5 flex items-center gap-1.5 ${ui.faint}`}>
                 {savingNotes ? (
                   <>
                     <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
@@ -348,7 +357,7 @@ export default function HousekeepingRoomPage() {
               </p>
             </div>
 
-            {actionError && <p className="text-sm text-red-400 font-medium">{actionError}</p>}
+            {actionError && <p className="text-sm text-rose-500 font-medium">{actionError}</p>}
 
             <button
               onClick={handleFinish}
