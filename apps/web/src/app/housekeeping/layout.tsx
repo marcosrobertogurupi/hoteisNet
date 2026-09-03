@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import PwaRegister from "@/components/PwaRegister";
 
 export const metadata: Metadata = {
   title: "Governança | HoteisNet",
@@ -8,6 +9,10 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: "black-translucent",
     title: "Governança",
+  },
+  icons: {
+    icon: "/brand/icon.png",
+    apple: "/brand/icon.png",
   },
 };
 
@@ -19,5 +24,10 @@ export const viewport: Viewport = {
 };
 
 export default function HousekeepingLayout({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-screen bg-[#090D16] text-[#F8FAFC]">{children}</div>;
+  return (
+    <div className="min-h-screen bg-[#090D16] text-[#F8FAFC]">
+      <PwaRegister src="/sw-housekeeping.js" scope="/housekeeping" />
+      {children}
+    </div>
+  );
 }
