@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySessionToken, isAdminRole, SESSION_COOKIE } from "@/lib/auth";
+// Importa do núcleo leve (só `jose`, sem bcrypt/Prisma) — o middleware roda no Edge Runtime,
+// que tem limite de 1 MB de bundle. Ver comentário em lib/sessionToken.ts.
+import { verifySessionToken, isAdminRole, SESSION_COOKIE } from "@/lib/sessionToken";
 import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib/housekeeperAuth";
 import { verifyStockCountSessionToken, STOCK_COUNT_SESSION_COOKIE } from "@/lib/stockCountAuth";
 
