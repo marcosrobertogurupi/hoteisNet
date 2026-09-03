@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from "react";
 import Link from "next/link";
-import { Package, ArrowRightLeft, Plus, ScanBarcode, Trash2, X, Loader2, Store, Check } from "lucide-react";
+import { Package, ArrowRightLeft, Plus, ScanBarcode, Trash2, X, Loader2, Store, Check, ClipboardCheck } from "lucide-react";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { usePolling } from "@/lib/usePolling";
 import { useTheme } from "@/context/ThemeContext";
@@ -212,12 +212,20 @@ export default function TenantStockPage() {
             <p className={c.subtitle}>Estoque geral (almoxarifado) e saldo fracionado por ponto de venda.</p>
           </div>
         </div>
-        <Link
-          href="/app/cadastros/pdv"
-          className={`px-5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition ${c.iconBtn} ${c.strong}`}
-        >
-          <Store className="w-4 h-4" /> Cadastro de PDVs
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/app/stock/contagens"
+            className="px-5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+          >
+            <ClipboardCheck className="w-4 h-4" /> Conferências de contagem
+          </Link>
+          <Link
+            href="/app/cadastros/pdv"
+            className={`px-5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition ${c.iconBtn} ${c.strong}`}
+          >
+            <Store className="w-4 h-4" /> Cadastro de PDVs
+          </Link>
+        </div>
       </div>
 
       {/* Cards de saldo por local */}
