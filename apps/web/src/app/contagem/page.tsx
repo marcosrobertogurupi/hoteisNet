@@ -107,6 +107,21 @@ export default function ContagemHomePage() {
     if (me) loadCounts();
   }, [me, loadCounts]);
 
+  // Atualiza a lista quando o funcionário volta para o app (troca de aba / desbloqueia o
+  // celular) — sem polling: cobre o caso do assinante ter feito o confronto no computador.
+  useEffect(() => {
+    if (!me) return;
+    const refresh = () => {
+      if (!document.hidden) loadCounts();
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [me, loadCounts]);
+
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     setLoginError(null);

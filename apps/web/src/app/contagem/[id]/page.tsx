@@ -108,6 +108,20 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
     load();
   }, [load]);
 
+  // Recarrega ao voltar para o app (troca de aba / desbloqueio) — pega o status novo se o
+  // assinante finalizou o confronto no computador enquanto esta tela estava aberta.
+  useEffect(() => {
+    const refresh = () => {
+      if (!document.hidden) load();
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [load]);
+
   const isOpen = info?.status === "OPEN";
 
   // ——— leitura da câmera ———
