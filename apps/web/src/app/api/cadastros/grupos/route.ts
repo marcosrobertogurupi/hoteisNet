@@ -115,6 +115,10 @@ export async function PUT(req: NextRequest) {
     if (updated.count === 0) {
       return NextResponse.json({ success: false, error: "Grupo não encontrado." }, { status: 404 });
     }
+
+    // Propaga o novo nome para a coluna legada `Product.category` dos produtos deste grupo,
+    // para que ela não fique defasada enquanto ainda existir código que a lê.
+    await prisma.product.updateMany({ where: { groupId: id, tenantId: session!.tenantId! }, data: { category: nome } });
     const group = await prisma.productGroup.findFirst({ where: { id, tenantId: session!.tenantId! }, select: SELECT });
 
     return NextResponse.json({ success: true, group: group ? serialize(group) : null });

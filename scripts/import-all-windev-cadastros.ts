@@ -143,6 +143,26 @@ async function main() {
     await prisma.pOSProductStock.deleteMany({});
     await prisma.product.deleteMany({ where: { tenantId: DEFAULT_TENANT_ID } });
 
+    // Cache de grupos (ProductGroup) já resolvidos por nome — a classificação do produto é
+    // sempre um grupo cadastrado, não texto livre (ver scripts/backfill-product-groups.ts).
+    const groupCache = new Map<string, string>();
+    async function groupIdFor(name: string): Promise<string> {
+      const cached = groupCache.get(name);
+      if (cached) return cached;
+      let g = await prisma.productGroup.findFirst({
+        where: { tenantId: DEFAULT_TENANT_ID, type: "PRODUTO", name },
+        select: { id: true },
+      });
+      if (!g) {
+        g = await prisma.productGroup.create({
+          data: { tenantId: DEFAULT_TENANT_ID, name, type: "PRODUTO", active: true },
+          select: { id: true },
+        });
+      }
+      groupCache.set(name, g.id);
+      return g.id;
+    }
+
     let inserted = 0;
     for (const r of rows) {
       const desc = r[1] ? r[1].trim() : "";
@@ -166,6 +186,7 @@ async function main() {
           name: desc,
           barcode: codBarras || null,
           category: cat,
+          groupId: await groupIdFor(cat),
           costPrice: custo > 0 ? custo : venda * 0.6,
           salePrice: venda > 0 ? venda : 10.0,
           generalStock: Math.max(10, Math.abs(qtd)),

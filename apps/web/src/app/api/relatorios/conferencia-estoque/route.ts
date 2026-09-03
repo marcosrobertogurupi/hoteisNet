@@ -43,11 +43,12 @@ export async function GET(req: NextRequest) {
     // folha desenha (ver regras de egress no CLAUDE.md).
     const products = await prisma.product.findMany({
       where: { tenantId, posStocks: { some: { posLocationId: { in: posIds } } } },
-      orderBy: [{ category: "asc" }, { name: "asc" }],
+      orderBy: [{ group: { name: "asc" } }, { name: "asc" }],
       select: {
         id: true,
         name: true,
         category: true,
+        group: { select: { name: true } },
         barcode: true,
         minStock: true,
         posStocks: {
@@ -65,7 +66,7 @@ export async function GET(req: NextRequest) {
           return {
             id: p.id,
             nome: p.name,
-            categoria: p.category || "—",
+            categoria: p.group?.name ?? p.category ?? "—",
             codigoBarras: p.barcode || "",
             estoqueSistema: row.currentStock,
             minimo: p.minStock,

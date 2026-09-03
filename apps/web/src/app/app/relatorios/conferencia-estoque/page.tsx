@@ -185,7 +185,7 @@ export default function ConferenciaEstoquePage() {
                 <thead>
                   <tr className="border-b border-slate-400">
                     <th className="p-1.5">Produto</th>
-                    <th className="p-1.5">Categoria</th>
+                    <th className="p-1.5">Grupo</th>
                     <th className="p-1.5">Cód. Barras</th>
                     <th className="p-1.5 text-center">Est. Sistema</th>
                     <th className="p-1.5 text-center">Contagem física</th>

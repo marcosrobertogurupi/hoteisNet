@@ -19,7 +19,10 @@ export async function GET(req: NextRequest) {
       select: {
         id: true,
         name: true,
+        // Classificação vem do grupo cadastrado; `category` (texto livre) só como fallback
+        // para produtos antigos ainda sem grupo — ver /app/cadastros/produtos.
         category: true,
+        group: { select: { name: true } },
         generalStock: true,
         minStock: true,
         costPrice: true,
@@ -31,7 +34,7 @@ export async function GET(req: NextRequest) {
     const products = rows.map((p) => ({
       id: p.id,
       name: p.name,
-      category: p.category,
+      category: p.group?.name ?? p.category ?? "",
       generalStock: p.generalStock,
       minStock: p.minStock,
       costPrice: Number(p.costPrice),

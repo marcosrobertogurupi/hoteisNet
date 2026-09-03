@@ -242,7 +242,7 @@ export default function TenantStockPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar produto ou categoria..."
+            placeholder="Buscar produto ou grupo..."
             className={`md:w-72 px-3 py-1.5 ${c.input}`}
           />
         </div>
@@ -251,7 +251,7 @@ export default function TenantStockPage() {
           <table className="w-full text-left text-xs">
             <thead className={c.thead}>
               <tr>
-                <th className="px-4 py-3">Produto / Categoria</th>
+                <th className="px-4 py-3">Produto / Grupo</th>
                 <th className="px-4 py-3">Estoque Geral</th>
                 {activePos.map((loc) => (
                   <th key={loc.id} className="px-4 py-3 whitespace-nowrap">{loc.name}</th>

@@ -21,7 +21,15 @@ export async function GET(req: NextRequest) {
       prisma.product.findMany({
         where: { tenantId: session.tenantId },
         orderBy: { name: "asc" },
-        select: { id: true, name: true, category: true, salePrice: true, barcode: true, fiscalProfileId: true },
+        select: {
+          id: true,
+          name: true,
+          category: true,
+          group: { select: { name: true } },
+          salePrice: true,
+          barcode: true,
+          fiscalProfileId: true,
+        },
       }),
     ]);
 
@@ -41,7 +49,7 @@ export async function GET(req: NextRequest) {
           tipo: "PRODUTO" as const,
           id: p.id,
           nome: p.name,
-          categoria: p.category,
+          categoria: p.group?.name ?? p.category,
           preco: Number(p.salePrice),
           codigoBarras: p.barcode,
           temPerfilFiscal: !!p.fiscalProfileId,
