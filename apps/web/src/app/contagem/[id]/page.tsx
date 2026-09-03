@@ -17,6 +17,8 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import BarcodeScanner from "@/components/contagem/BarcodeScanner";
+import { useTheme } from "@/context/ThemeContext";
+import { satelliteAppUI } from "@/lib/satelliteAppUI";
 
 interface CountInfo {
   id: string;
@@ -52,6 +54,8 @@ type Pending =
 export default function ContagemDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { theme } = useTheme();
+  const ui = satelliteAppUI(theme.isDark);
 
   const [info, setInfo] = useState<CountInfo | null>(null);
   const [items, setItems] = useState<Item[]>([]);
@@ -277,17 +281,20 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
 
   if (!loaded) {
     return (
-      <div className="min-h-screen bg-[#0a0f1a] text-slate-100 flex items-center justify-center">
-        <Loader2 className="w-6 h-6 text-emerald-400 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-6 h-6 text-emerald-500 animate-spin" />
       </div>
     );
   }
 
   if (loadError || !info) {
     return (
-      <div className="min-h-screen bg-[#0a0f1a] text-slate-100 flex flex-col items-center justify-center gap-4 p-6 text-center">
-        <p className="text-sm text-rose-400">{loadError}</p>
-        <button onClick={() => router.push("/contagem")} className="px-4 py-2 rounded-xl bg-slate-800 text-sm font-semibold">
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6 text-center">
+        <p className="text-sm text-rose-500">{loadError}</p>
+        <button
+          onClick={() => router.push("/contagem")}
+          className={`px-4 py-2 rounded-xl border text-sm font-semibold ${ui.card} ${theme.textMain}`}
+        >
           Voltar
         </button>
       </div>
@@ -298,17 +305,19 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
   const naoEncontrados = items.filter((i) => i.naoEncontrado).length;
 
   return (
-    <div className="min-h-screen bg-[#0a0f1a] text-slate-100 pb-28">
+    <div className="min-h-screen pb-28">
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-[#0a0f1a]/95 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center gap-3">
-        <button onClick={() => router.push("/contagem")} className="p-2 -ml-2 text-slate-400 hover:text-white">
+      <div className={`sticky top-0 z-10 backdrop-blur border-b px-4 py-3 flex items-center gap-3 ${ui.bar}`}>
+        <button onClick={() => router.push("/contagem")} className={`p-2 -ml-2 ${theme.textMuted}`}>
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold truncate">{info.alvo}</p>
-          <p className="text-[11px] text-slate-500">
+          <p className={`text-sm font-bold truncate ${theme.textMain}`}>{info.alvo}</p>
+          <p className={`text-[11px] ${ui.faint}`}>
             {items.length} item(ns) · {totalUnidades} unid.
-            {naoEncontrados > 0 && <span className="text-amber-400"> · {naoEncontrados} sem cadastro</span>}
+            {naoEncontrados > 0 && (
+              <span className={theme.isDark ? "text-amber-400" : "text-amber-600"}> · {naoEncontrados} sem cadastro</span>
+            )}
           </p>
         </div>
         {isOpen && (
@@ -316,8 +325,8 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
             onClick={() => setScanning((s) => !s)}
             className={`p-2.5 rounded-xl border transition ${
               scanning
-                ? "bg-emerald-600/20 border-emerald-500/40 text-emerald-300"
-                : "bg-slate-900 border-slate-800 text-slate-400"
+                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-500"
+                : `${ui.iconBtn}`
             }`}
             title={scanning ? "Pausar câmera" : "Ligar câmera"}
           >
@@ -327,8 +336,8 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
       </div>
 
       {!isOpen && (
-        <div className="mx-4 mt-4 p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+        <div className={`mx-4 mt-4 p-3 rounded-xl border text-xs flex items-center gap-2 ${ui.card} ${theme.textMuted}`}>
+          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
           {info.status === "DONE"
             ? "Contagem finalizada — aguardando o confronto do assinante. Somente leitura."
             : info.status === "RECONCILED"
@@ -356,7 +365,7 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
               setSearchTerm("");
               setSearchHits([]);
             }}
-            className="w-full py-3 rounded-2xl bg-slate-900 border border-slate-800 text-sm font-semibold text-slate-200 flex items-center justify-center gap-2 hover:border-emerald-500/40 transition"
+            className={`w-full py-3 rounded-2xl border text-sm font-semibold flex items-center justify-center gap-2 hover:border-emerald-500/40 transition ${ui.card} ${theme.textMain}`}
           >
             <Search className="w-4 h-4" /> Buscar produto pelo nome
           </button>
@@ -365,7 +374,7 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
         {/* Lista de itens contados */}
         <div className="space-y-2">
           {items.length === 0 && (
-            <p className="text-center text-sm text-slate-500 py-10">
+            <p className={`text-center text-sm py-10 ${ui.faint}`}>
               Nenhum item contado ainda. {isOpen ? "Aponte a câmera para o código de barras." : ""}
             </p>
           )}
@@ -378,23 +387,21 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
                 setQty(it.quantidade);
               }}
               className={`w-full flex items-center gap-3 p-3.5 rounded-2xl border text-left transition ${
-                it.naoEncontrado
-                  ? "bg-amber-500/5 border-amber-500/30"
-                  : "bg-slate-900/80 border-slate-800"
+                it.naoEncontrado ? "bg-amber-500/10 border-amber-500/30" : ui.card
               } ${isOpen ? "hover:border-emerald-500/40" : "opacity-90"}`}
             >
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold truncate">{it.nome}</p>
-                <p className="text-[11px] text-slate-500 truncate">
+                <p className={`text-sm font-semibold truncate ${theme.textMain}`}>{it.nome}</p>
+                <p className={`text-[11px] truncate ${ui.faint}`}>
                   {it.codigoBarras || "sem código"}
                   {it.naoEncontrado && (
-                    <span className="text-amber-400 inline-flex items-center gap-1 ml-1">
+                    <span className={`inline-flex items-center gap-1 ml-1 ${theme.isDark ? "text-amber-400" : "text-amber-600"}`}>
                       <TriangleAlert className="w-3 h-3" /> não encontrado no cadastro
                     </span>
                   )}
                 </p>
               </div>
-              <span className="text-lg font-bold tabular-nums shrink-0">{it.quantidade}</span>
+              <span className={`text-lg font-bold tabular-nums shrink-0 ${theme.textMain}`}>{it.quantidade}</span>
             </button>
           ))}
         </div>
@@ -413,7 +420,7 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
 
       {/* Rodapé — finalizar */}
       {isOpen && (
-        <div className="fixed bottom-0 inset-x-0 z-10 bg-[#0a0f1a]/95 backdrop-blur border-t border-slate-800 p-4">
+        <div className={`fixed bottom-0 inset-x-0 z-10 backdrop-blur border-t p-4 ${ui.bar}`}>
           <button
             onClick={() => {
               if (items.length === 0) {
@@ -444,23 +451,23 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
 
       {/* Sheet de quantidade / edição */}
       {pending && (
-        <div className="fixed inset-0 z-40 bg-black/70 flex items-end sm:items-center justify-center">
-          <div className="w-full sm:max-w-sm bg-[#0e1524] border-t sm:border border-slate-800 rounded-t-3xl sm:rounded-3xl p-5 space-y-5">
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-end sm:items-center justify-center">
+          <div className={`w-full sm:max-w-sm border-t sm:border rounded-t-3xl sm:rounded-3xl p-5 space-y-5 ${ui.sheet}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[11px] uppercase tracking-wider text-slate-500">
+                <p className={`text-[11px] uppercase tracking-wider ${ui.faint}`}>
                   {pending.kind === "edit" ? "Ajustar quantidade" : "Quantidade contada"}
                 </p>
-                <p className="text-base font-bold break-all leading-tight">
+                <p className={`text-base font-bold break-all leading-tight ${theme.textMain}`}>
                   {pending.kind === "edit" ? pending.item.nome : pending.label}
                 </p>
                 {pending.kind === "scan" && items.some((it) => it.codigoBarras === pending.code) && (
-                  <p className="text-[11px] text-amber-400 mt-1">
+                  <p className={`text-[11px] mt-1 ${theme.isDark ? "text-amber-400" : "text-amber-600"}`}>
                     Este código já está na contagem — a quantidade vai <b>somar</b> à existente.
                   </p>
                 )}
               </div>
-              <button onClick={() => setPending(null)} className="p-1.5 text-slate-400 hover:text-white shrink-0">
+              <button onClick={() => setPending(null)} className={`p-1.5 shrink-0 ${theme.textMuted}`}>
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -468,7 +475,7 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
             <div className="flex items-center justify-center gap-4">
               <button
                 onClick={() => setQty((q) => Math.max(pending.kind === "edit" ? 0 : 1, Math.trunc(q) - 1))}
-                className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center"
+                className={`w-12 h-12 rounded-2xl border flex items-center justify-center ${ui.iconBtn}`}
               >
                 <Minus className="w-5 h-5" />
               </button>
@@ -477,11 +484,11 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
                 inputMode="numeric"
                 value={qty}
                 onChange={(e) => setQty(Number(e.target.value))}
-                className="w-24 text-center text-3xl font-bold bg-transparent border-b-2 border-slate-700 focus:outline-none focus:border-emerald-500 py-1"
+                className={`w-24 text-center text-3xl font-bold bg-transparent border-b-2 focus:outline-none focus:border-emerald-500 py-1 ${theme.textMain} ${theme.isDark ? "border-slate-700" : "border-slate-300"}`}
               />
               <button
                 onClick={() => setQty((q) => Math.trunc(q) + 1)}
-                className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center"
+                className={`w-12 h-12 rounded-2xl border flex items-center justify-center ${ui.iconBtn}`}
               >
                 <Plus className="w-5 h-5" />
               </button>
@@ -492,7 +499,7 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
                 <button
                   onClick={() => removeItem(pending.item)}
                   disabled={saving}
-                  className="px-4 py-3 rounded-2xl bg-rose-600/20 border border-rose-600/40 text-rose-300 font-semibold flex items-center gap-2 disabled:opacity-60"
+                  className={`px-4 py-3 rounded-2xl bg-rose-500/15 border border-rose-500/40 font-semibold flex items-center gap-2 disabled:opacity-60 ${theme.isDark ? "text-rose-300" : "text-rose-600"}`}
                 >
                   <Trash2 className="w-4 h-4" /> Remover
                 </button>
@@ -512,28 +519,28 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
 
       {/* Sheet de busca manual */}
       {searchOpen && (
-        <div className="fixed inset-0 z-40 bg-black/70 flex items-end sm:items-center justify-center">
-          <div className="w-full sm:max-w-md bg-[#0e1524] border-t sm:border border-slate-800 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[85vh] flex flex-col">
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-end sm:items-center justify-center">
+          <div className={`w-full sm:max-w-md border-t sm:border rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[85vh] flex flex-col ${ui.sheet}`}>
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold">Buscar produto</h3>
-              <button onClick={() => setSearchOpen(false)} className="p-1.5 text-slate-400 hover:text-white">
+              <h3 className={`text-base font-bold ${theme.textMain}`}>Buscar produto</h3>
+              <button onClick={() => setSearchOpen(false)} className={`p-1.5 ${theme.textMuted}`}>
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="relative">
-              <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+              <Search className={`w-4 h-4 absolute left-3.5 top-3.5 ${ui.faint}`} />
               <input
                 autoFocus
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Nome, referência ou código"
-                className="w-full bg-slate-900 border border-slate-700 rounded-2xl pl-11 pr-4 py-3 text-base focus:outline-none focus:border-emerald-500"
+                className={`w-full border rounded-2xl pl-11 pr-4 py-3 text-base focus:outline-none focus:border-emerald-500 ${ui.field}`}
               />
             </div>
             <div className="flex-1 overflow-y-auto space-y-2">
-              {searching && <p className="text-xs text-slate-500 px-1">Buscando…</p>}
+              {searching && <p className={`text-xs px-1 ${ui.faint}`}>Buscando…</p>}
               {!searching && searchTerm.trim().length >= 2 && searchHits.length === 0 && (
-                <p className="text-xs text-slate-500 px-1">Nenhum produto encontrado.</p>
+                <p className={`text-xs px-1 ${ui.faint}`}>Nenhum produto encontrado.</p>
               )}
               {searchHits.map((h) => (
                 <button
@@ -542,10 +549,10 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
                     setPending({ kind: "product", productId: h.id, label: h.nome });
                     setQty(1);
                   }}
-                  className="w-full text-left p-3 rounded-2xl bg-slate-900 border border-slate-800 hover:border-emerald-500/40 transition"
+                  className={`w-full text-left p-3 rounded-2xl border hover:border-emerald-500/40 transition ${ui.cardSubtle}`}
                 >
-                  <p className="text-sm font-semibold">{h.nome}</p>
-                  <p className="text-[11px] text-slate-500">
+                  <p className={`text-sm font-semibold ${theme.textMain}`}>{h.nome}</p>
+                  <p className={`text-[11px] ${ui.faint}`}>
                     {[h.referencia, h.codigoBarras, h.unidade].filter(Boolean).join(" · ") || "—"}
                   </p>
                 </button>

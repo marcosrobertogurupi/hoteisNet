@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Download, Share, X } from "lucide-react";
+import { useTheme } from "@/context/ThemeContext";
+import { satelliteAppUI } from "@/lib/satelliteAppUI";
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -12,6 +14,8 @@ type BeforeInstallPromptEvent = Event & {
 // `beforeinstallprompt`; no iOS (que não expõe esse evento) mostra as instruções do Safari.
 // Some quando o app já está instalado (rodando em tela cheia).
 export default function PwaInstallButton() {
+  const { theme } = useTheme();
+  const ui = satelliteAppUI(theme.isDark);
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
@@ -60,21 +64,23 @@ export default function PwaInstallButton() {
     <>
       <button
         onClick={handleClick}
-        className="w-full py-3 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-sm font-semibold flex items-center justify-center gap-2 transition hover:bg-emerald-500/20"
+        className={`w-full py-3 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 text-sm font-semibold flex items-center justify-center gap-2 transition hover:bg-emerald-500/20 ${
+          theme.isDark ? "text-emerald-300" : "text-emerald-700"
+        }`}
       >
         <Download className="w-4 h-4" /> Instalar app na tela inicial
       </button>
 
       {showIosHelp && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="w-full sm:max-w-sm bg-[#0e1524] border-t sm:border border-slate-800 rounded-t-3xl sm:rounded-3xl p-5 space-y-3">
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className={`w-full sm:max-w-sm border-t sm:border rounded-t-3xl sm:rounded-3xl p-5 space-y-3 ${ui.sheet}`}>
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold">Instalar no iPhone</h3>
-              <button onClick={() => setShowIosHelp(false)} className="p-1.5 text-slate-400">
+              <h3 className={`text-base font-bold ${theme.textMain}`}>Instalar no iPhone</h3>
+              <button onClick={() => setShowIosHelp(false)} className={`p-1.5 ${theme.textMuted}`}>
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <ol className="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <ol className={`text-sm space-y-2 list-decimal list-inside ${theme.textMuted}`}>
               <li>
                 Toque no botão <Share className="w-4 h-4 inline -mt-0.5" /> <b>Compartilhar</b> na barra do Safari.
               </li>
@@ -83,7 +89,7 @@ export default function PwaInstallButton() {
               </li>
               <li>Confirme em <b>Adicionar</b>.</li>
             </ol>
-            <p className="text-[11px] text-slate-500">
+            <p className={`text-[11px] ${ui.faint}`}>
               Precisa estar no Safari (não funciona dentro de outro app).
             </p>
           </div>
