@@ -176,6 +176,7 @@ model Tenant {
   comandaSessions            ComandaSession[]
   comandaDebitTransfers      ComandaDebitTransfer[]
   fiscalDocuments            FiscalDocument[]
+  stockCounts                StockCount[]
 
   @@map("tenants")
 }
@@ -1093,6 +1094,7 @@ model POSLocation {
   transfersTo  StockTransfer[]   @relation("TransferToPOS")
   consumptions StayConsumption[]
   comandaSessions ComandaSession[]
+  stockCounts  StockCount[]
 
   @@map("pos_locations")
 }
@@ -1132,6 +1134,7 @@ model Product {
   barcodes      ProductBarcode[]
   fiscalProfile FiscalProfile?   @relation(fields: [fiscalProfileId], references: [id])
   comandaItems  ComandaItem[]
+  stockCountItems StockCountItem[]
 
   @@index([tenantId])
   @@map("products")
@@ -1173,6 +1176,64 @@ model StockTransfer {
   toPosLocation   POSLocation @relation("TransferToPOS", fields: [toPosLocationId], references: [id])
 
   @@map("stock_transfers")
+}
+
+// Uma sessão de contagem física de estoque feita no celular pelo funcionário (app satélite de
+// contagem, login por telefone + senha). A contagem NUNCA altera saldo: ler código de barras e
+// finalizar são operações de leitura. A única escrita de saldo é o confronto/ajuste feito por um
+// admin no painel do assinante (status RECONCILED), sempre com registro em AuditLog.
+model StockCount {
+  id            String  @id @default(uuid())
+  tenantId      String
+  // null = contagem do estoque geral / almoxarifado (Product.generalStock).
+  // preenchido = contagem do estoque fracionado daquele PDV (POSProductStock.currentStock).
+  posLocationId String?
+  // OPEN: em contagem no celular · DONE: funcionário finalizou · RECONCILED: assinante confrontou
+  // e aplicou os ajustes · CANCELLED: descartada. Só pode existir uma contagem não-finalizada
+  // (OPEN/DONE) por alvo (PDV ou geral) por vez — regra aplicada no código.
+  status        String   @default("OPEN")
+  startedByEmployeeId String?
+  startedByName String
+  note          String?
+  createdAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  reconciledAt  DateTime?
+  reconciledByName String?
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  posLocation   POSLocation?  @relation(fields: [posLocationId], references: [id])
+  startedBy     Employee?     @relation(fields: [startedByEmployeeId], references: [id])
+  items         StockCountItem[]
+
+  @@index([tenantId, status])
+  @@map("stock_counts")
+}
+
+model StockCountItem {
+  id                  String  @id @default(uuid())
+  countId             String
+  // null quando o código de barras lido não foi encontrado no cadastro de produtos (notFound=true).
+  productId           String?
+  barcodeRead         String?
+  // Nome do produto no cadastro no momento da leitura (ou o próprio código lido, se não encontrado).
+  productNameSnapshot String   @default("")
+  countedQty          Int      @default(0)
+  notFound            Boolean  @default(false)
+  notes               String?
+  // Preenchidos no confronto pelo assinante:
+  systemQtySnapshot   Int?      // saldo do sistema no instante em que o ajuste foi aplicado
+  adjustedTo          Int?      // novo saldo gravado
+  appliedAt           DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  count               StockCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  product             Product?    @relation(fields: [productId], references: [id])
+
+  // Uma linha por produto por contagem (leituras repetidas do mesmo produto somam em countedQty).
+  // Itens "não encontrado" (productId null) não colidem — cada código desconhecido é agrupado por
+  // barcodeRead no código.
+  @@unique([countId, productId])
+  @@index([countId])
+  @@map("stock_count_items")
 }
 
 model CashRegister {
@@ -1554,9 +1615,16 @@ model Employee {
   phone     String?
   email     String?
   active    Boolean  @default(true)
+  // Acesso ao app mobile de contagem de estoque (login por telefone + senha, no molde da
+  // Governança). Só colaboradores com passwordHash definido conseguem entrar. failedLoginAttempts/
+  // lockedUntil: proteção contra força bruta (ver nextFailedLoginState em lib/auth.ts).
+  passwordHash        String?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stockCounts StockCount[]
 
   @@map("employees")
 }

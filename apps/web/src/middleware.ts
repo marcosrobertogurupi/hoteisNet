@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySessionToken, isAdminRole, SESSION_COOKIE } from "@/lib/auth";
 import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib/housekeeperAuth";
+import { verifyStockCountSessionToken, STOCK_COUNT_SESSION_COOKIE } from "@/lib/stockCountAuth";
 
 // Prefixos de rota liberados só para admin (Configurações, Usuários, Módulo Fiscal).
 const ADMIN_ONLY_PREFIXES = ["/app/settings", "/app/cadastros/usuarios", "/app/fiscal"];
@@ -11,6 +12,8 @@ const PUBLIC_API_PREFIXES = [
   "/api/auth/login",
   "/api/housekeeping/login",
   "/api/housekeeping/logout",
+  "/api/stock-count/login",
+  "/api/stock-count/logout",
   "/api/uazapi/webhook/",
   "/api/public/",
   // Agente fiscal do PDV do restaurante: autentica com o token do caixa (Bearer), verificado
@@ -21,6 +24,10 @@ const PUBLIC_API_PREFIXES = [
 // Rotas de governança (app mobile da housekeeper) usam um cookie de sessão próprio,
 // separado do login administrativo — ver lib/housekeeperAuth.ts.
 const HOUSEKEEPER_API_PREFIX = "/api/housekeeping/";
+
+// Rotas do app mobile de contagem de estoque — cookie de sessão próprio (Employee com login por
+// telefone + senha), separado do login administrativo — ver lib/stockCountAuth.ts.
+const STOCK_COUNT_API_PREFIX = "/api/stock-count/";
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -38,6 +45,12 @@ export async function middleware(req: NextRequest) {
       const housekeeperToken = req.cookies.get(HOUSEKEEPER_SESSION_COOKIE)?.value;
       const housekeeperSession = housekeeperToken ? await verifyHousekeeperSessionToken(housekeeperToken) : null;
       if (housekeeperSession) return NextResponse.next();
+    }
+
+    if (pathname.startsWith(STOCK_COUNT_API_PREFIX)) {
+      const stockCountToken = req.cookies.get(STOCK_COUNT_SESSION_COOKIE)?.value;
+      const stockCountSession = stockCountToken ? await verifyStockCountSessionToken(stockCountToken) : null;
+      if (stockCountSession) return NextResponse.next();
     }
 
     return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
