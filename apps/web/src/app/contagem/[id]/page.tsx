@@ -72,6 +72,15 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
 
   const [finishing, setFinishing] = useState(false);
 
+  // Anti-releitura do MESMO produto logo após confirmar: quando o funcionário confirma uma
+  // leitura e move o celular para o próximo item, a câmera costuma pegar o código anterior de
+  // novo antes de mirar no novo produto — isso somava no item errado. `lastScan` guarda o último
+  // código confirmado; `scanPaused` congela a câmera por ~1,5 s depois de cada confirmação.
+  const lastScanRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
+  const [scanPaused, setScanPaused] = useState(false);
+  const scanPauseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const SAME_CODE_LOCKOUT_MS = 6000;
+
   const flash = useCallback((text: string, tone: "ok" | "warn" = "ok") => {
     setToast({ text, tone });
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -103,8 +112,17 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
 
   // ——— leitura da câmera ———
   const onDetected = useCallback((code: string) => {
+    // Ignora o mesmo código lido de novo logo após ter sido confirmado (câmera ainda apontada
+    // para o item anterior). Depois da janela, ler o mesmo código volta a somar normalmente.
+    if (code === lastScanRef.current.code && Date.now() - lastScanRef.current.at < SAME_CODE_LOCKOUT_MS) {
+      return;
+    }
     setPending((prev) => (prev ? prev : { kind: "scan", code, label: code }));
     setQty(1);
+  }, []);
+
+  useEffect(() => () => {
+    if (scanPauseTimer.current) clearTimeout(scanPauseTimer.current);
   }, []);
 
   // ——— busca manual ———
@@ -168,6 +186,12 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
         const verb = data.outcome === "summed" ? "somado" : "lançado";
         if (data.notFound) flash(`"${data.nome}" não está no cadastro — ${verb} assim mesmo (${data.qty}).`, "warn");
         else flash(`${data.nome} — ${verb} (total ${data.qty}).`, "ok");
+        if (pending.kind === "scan") lastScanRef.current = { code: pending.code, at: Date.now() };
+        // Congela a câmera por um instante para o funcionário mirar no próximo produto sem
+        // relançar o atual.
+        setScanPaused(true);
+        if (scanPauseTimer.current) clearTimeout(scanPauseTimer.current);
+        scanPauseTimer.current = setTimeout(() => setScanPaused(false), 1500);
       } else {
         flash("Quantidade atualizada.", "ok");
       }
@@ -282,7 +306,14 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
 
       <div className="px-4 py-4 space-y-4">
         {isOpen && scanning && (
-          <BarcodeScanner active={scanning && !pending && !searchOpen} onDetected={onDetected} />
+          <div className="relative">
+            <BarcodeScanner active={scanning && !pending && !searchOpen && !scanPaused} onDetected={onDetected} />
+            {scanPaused && (
+              <div className="absolute inset-0 rounded-2xl bg-black/60 flex items-center justify-center text-emerald-300 text-sm font-semibold pointer-events-none">
+                Mire no próximo produto…
+              </div>
+            )}
+          </div>
         )}
 
         {isOpen && (
@@ -376,11 +407,16 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
                 <p className="text-[11px] uppercase tracking-wider text-slate-500">
                   {pending.kind === "edit" ? "Ajustar quantidade" : "Quantidade contada"}
                 </p>
-                <p className="text-sm font-bold truncate">
+                <p className="text-base font-bold break-all leading-tight">
                   {pending.kind === "edit" ? pending.item.nome : pending.label}
                 </p>
+                {pending.kind === "scan" && items.some((it) => it.codigoBarras === pending.code) && (
+                  <p className="text-[11px] text-amber-400 mt-1">
+                    Este código já está na contagem — a quantidade vai <b>somar</b> à existente.
+                  </p>
+                )}
               </div>
-              <button onClick={() => setPending(null)} className="p-1.5 text-slate-400 hover:text-white">
+              <button onClick={() => setPending(null)} className="p-1.5 text-slate-400 hover:text-white shrink-0">
                 <X className="w-5 h-5" />
               </button>
             </div>

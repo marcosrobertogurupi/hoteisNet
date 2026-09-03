@@ -58,6 +58,9 @@ export default function BarcodeScanner({ active, onDetected }: Props) {
 
   const start = useCallback(async () => {
     setStatus("starting");
+    // Recomeço "limpo": a primeira leitura após religar a câmera sempre vale (a proteção contra
+    // relançar o mesmo item fica na página, com uma janela mais longa).
+    lastHitRef.current = { code: "", at: 0 };
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" } },
