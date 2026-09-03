@@ -167,6 +167,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         }
       }
 
+      // Um novo link de pré-check-in pode ser gerado para a mesma reserva (o anterior é revogado),
+      // e o mesmo hóspede pode preencher de novo. Sem isto, cada preenchimento criava uma FNRH
+      // extra para o mesmo par (reserva, hóspede) — o agente operacional então repetia a mesma
+      // linha de "ficha pendente" 4-5x no alerta e no sino. Remove só rascunhos ainda não
+      // transmitidos; uma ficha já enviada ao SNRHos é registro legal e nunca é apagada aqui.
+      await tx.fNRHRecord.deleteMany({
+        where: { reservationId: link.reservation.id, guestId: guest.id, transmittedSNRHos: false },
+      });
+
       const fnrhRecord = await tx.fNRHRecord.create({
         data: {
           guestId: guest.id,

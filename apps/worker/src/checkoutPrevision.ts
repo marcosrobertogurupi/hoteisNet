@@ -1,13 +1,10 @@
 import { PrismaClient } from "@prisma/client";
+import { sendUazapiText } from "./uazapiSend";
 
 const prisma = new PrismaClient();
 
 // Todos os hotéis atendidos hoje operam no fuso de Brasília.
 const TENANT_TIMEZONE = "America/Sao_Paulo";
-// Credenciais legadas — usadas apenas para tenants que ainda não configuraram sua própria
-// instância uazapi em Configurações > API Whatsapp (tabela UazapiSetting).
-const FALLBACK_UAZAPI_SERVER = "https://netservice.uazapi.com";
-const FALLBACK_UAZAPI_TOKEN = "fbe5bfbb-226a-47a2-9d1d-6b657933318c";
 
 function currentHHMM(timeZone: string): string {
   return new Intl.DateTimeFormat("en-GB", {
@@ -27,28 +24,6 @@ function renderTemplate(template: string, vars: { hospede?: string; hotel?: stri
     .replace(/\{HOSPEDE\}/gi, vars.hospede || "")
     .replace(/\{HOTEL\}/gi, vars.hotel || "")
     .replace(/\{QUARTO\}/gi, vars.quarto || "");
-}
-
-async function sendUazapiText(phone: string, message: string, tenantId: string): Promise<boolean> {
-  let cleanPhone = phone.replace(/\D/g, "");
-  if (!cleanPhone.startsWith("55") && cleanPhone.length <= 11) {
-    cleanPhone = `55${cleanPhone}`;
-  }
-
-  const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId } });
-  const server = (setting?.serverUrl && setting?.instanceToken ? setting.serverUrl : FALLBACK_UAZAPI_SERVER).replace(/\/$/, "");
-  const token = setting?.serverUrl && setting?.instanceToken ? setting.instanceToken : FALLBACK_UAZAPI_TOKEN;
-
-  try {
-    const response = await fetch(`${server}/send/text`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", token },
-      body: JSON.stringify({ number: cleanPhone, text: message }),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -88,7 +63,7 @@ export async function runCheckoutPrevision(): Promise<void> {
         quarto: stay.room.number,
       });
 
-      const sent = await sendUazapiText(phone, message, settings.tenantId);
+      const sent = await sendUazapiText(prisma, phone, message, settings.tenantId);
       if (sent) {
         await prisma.stayCheckin.update({
           where: { id: stay.id },

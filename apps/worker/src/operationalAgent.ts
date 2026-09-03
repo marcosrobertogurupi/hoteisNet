@@ -1,4 +1,5 @@
 import { PrismaClient, KnowledgeTopicKey } from "@prisma/client";
+import { sendUazapiText } from "./uazapiSend";
 
 const prisma = new PrismaClient();
 
@@ -58,34 +59,8 @@ async function generateStructured<T>(prompt: string, responseSchema: Record<stri
   return JSON.parse(text) as T;
 }
 
-// Credenciais legadas — usadas apenas para tenants que ainda não configuraram sua própria
-// instância uazapi em Configurações > API Whatsapp (tabela UazapiSetting). Mesmo padrão duplicado
-// já usado em checkoutPrevision.ts/preCheckinFnrh.ts (o worker é um processo separado que não
-// importa código de apps/web).
-const FALLBACK_UAZAPI_SERVER = "https://netservice.uazapi.com";
-const FALLBACK_UAZAPI_TOKEN = "fbe5bfbb-226a-47a2-9d1d-6b657933318c";
-
-async function sendUazapiText(phone: string, message: string, tenantId: string): Promise<boolean> {
-  let cleanPhone = phone.replace(/\D/g, "");
-  if (!cleanPhone.startsWith("55") && cleanPhone.length <= 11) {
-    cleanPhone = `55${cleanPhone}`;
-  }
-
-  const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId } });
-  const server = (setting?.serverUrl && setting?.instanceToken ? setting.serverUrl : FALLBACK_UAZAPI_SERVER).replace(/\/$/, "");
-  const token = setting?.serverUrl && setting?.instanceToken ? setting.instanceToken : FALLBACK_UAZAPI_TOKEN;
-
-  try {
-    const response = await fetch(`${server}/send/text`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", token },
-      body: JSON.stringify({ number: cleanPhone, text: message }),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
+// O envio por WhatsApp (instância uazapi do tenant + fallback via env + verificação do corpo da
+// resposta) vive em ./uazapiSend, compartilhado com checkoutPrevision.ts / preCheckinFnrh.ts.
 
 // Quanto tempo um quarto pode ficar parado em cada status antes de virar alerta.
 const MAINTENANCE_STUCK_HOURS = 24;
@@ -281,7 +256,12 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   // (b) o prazo legal de transmissão está a menos de FNRH_DEADLINE_WARNING_HOURS de vencer ou já
   // venceu (SNRHOS_DEADLINE_NEAR, ver computeFnrhDeadlineExclusive).
   const pendingFnrh = await prisma.fNRHRecord.findMany({
-    where: { transmittedSNRHos: false, reservation: { room: { tenantId } } },
+    where: {
+      transmittedSNRHos: false,
+      // Reserva cancelada / no-show não gera obrigação de FNRH — a ficha fica órfã e não deve
+      // aparecer como "prazo vencendo" nem "transmissão travada".
+      reservation: { room: { tenantId }, status: { notIn: ["CANCELLED", "NO_SHOW"] } },
+    },
     include: { guest: { select: { fullName: true } }, reservation: { select: { checkInDate: true } } },
   });
   for (const record of pendingFnrh) {
@@ -374,7 +354,16 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   // avisar que não dá para estender.
   issues.push(...(await detectOccupiedRoomsWithIncomingReservation(tenantId)));
 
-  return issues;
+  // Dedupe por (tipo + texto): quando há mais de uma FNRHRecord para o mesmo hóspede/reserva (dado
+  // duplicado no banco), a mesma frase era repetida 4-5 vezes na mensagem de WhatsApp e virava
+  // várias escalações idênticas no sino. Uma linha por problema basta — fica com a primeira ocorrência.
+  const seen = new Set<string>();
+  return issues.filter((i) => {
+    const key = `${i.issueType}::${i.description}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // Compõe um resumo legível em linguagem natural só quando há algo novo a reportar — a detecção em
@@ -412,7 +401,7 @@ async function nudgeHousekeeperForRoom(tenantId: string, roomId: string): Promis
   if (!task?.housekeeper) return null;
 
   const message = `Oi ${task.housekeeper.name}! O quarto ${task.room.number} está pendente de limpeza há um bom tempo. Pode dar uma prioridade nele?`;
-  const sent = await sendUazapiText(task.housekeeper.whatsapp, message, tenantId);
+  const sent = await sendUazapiText(prisma, task.housekeeper.whatsapp, message, tenantId);
   if (!sent) return null;
 
   await prisma.auditLog.create({
@@ -868,7 +857,7 @@ async function runOperationalAgentInner(): Promise<void> {
       ];
 
       const message = await composeAlertMessage(hotelName, toNotify, autoActionNotes);
-      const sent = await sendUazapiText(setting.alertPhone!, message, setting.tenantId);
+      const sent = await sendUazapiText(prisma, setting.alertPhone!, message, setting.tenantId);
 
       if (toNotify.length > 0) {
         const notifyWhere = {

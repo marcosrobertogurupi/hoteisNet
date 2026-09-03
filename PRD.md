@@ -220,6 +220,21 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   chance extra de reenvio automático a uma FNRH travada no SNRHos, resetando `snrhosAttempts` — só
   uma vez por registro, para sempre (checado via `AuditLog`), nunca um retry sem teto. Em
   `ALERT_ONLY` (padrão) o comportamento continua sendo só alertar, como antes.
+  **Complemento — confiabilidade do envio + menos ruído (03/09/2026):** investigação de um relato de
+  "alertas não chegaram no WhatsApp" mostrou que os alertas *estavam* sendo entregues (mensagens com
+  status "lido" na instância uazapi), mas três pontos geravam ruído/risco: (1) as três cópias de
+  `sendUazapiText` do worker (`operationalAgent`, `checkoutPrevision`, `preCheckinFnrh`) checavam só
+  `response.ok` — a uazapi devolve HTTP 200 mesmo em falhas leves (número inválido, corpo de erro),
+  então um alerta que nunca saiu era marcado como enviado (`OperationalAlertLog.notifiedAt`) e nunca
+  mais re-tentado. Unificadas em `apps/worker/src/uazapiSend.ts`, que agora exige um identificador de
+  mensagem real (`messageid`/`id`) e ausência de `error` no corpo, e loga a resposta quando falha. O
+  token de fallback embutido no código (`fbe5bfbb-…`, violação da regra 6 do CLAUDE.md) saiu para
+  `UAZAPI_FALLBACK_SERVER_URL`/`UAZAPI_FALLBACK_INSTANCE_TOKEN` (configuradas no Railway). (2) Vários
+  `FNRHRecord` do mesmo hóspede (reservas de teste distintas, prazos iguais) repetiam a mesma frase
+  4-5× na mensagem e no sino — `detectIssues` passou a deduplicar por `tipo + texto` e a ignorar
+  fichas de reservas `CANCELLED`/`NO_SHOW`. (3) O pré-check-in (`api/public/pre-checkin/[token]`)
+  passou a substituir rascunhos de FNRH ainda não transmitidos do mesmo par (reserva, hóspede) ao
+  receber um novo link, em vez de acumular.
 * **Núcleo determinístico de execução + auditoria ✅:** toda ação de escrita que um agente executa
   (criar/cancelar reserva, reenviar FNRH, avisar governanta, resetar tentativa de FNRH) grava no
   `AuditLog` já existente do sistema, com `action` prefixado `AGENT_` e `userName: "Agente de IA"` —
