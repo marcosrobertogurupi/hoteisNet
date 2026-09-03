@@ -17,6 +17,7 @@ import {
   X,
   ClipboardList,
 } from "lucide-react";
+import PwaInstallButton from "@/components/contagem/PwaInstallButton";
 
 interface Me {
   id: string;
@@ -271,6 +272,8 @@ export default function ContagemHomePage() {
               {loggingIn ? "Entrando..." : "Entrar"}
             </button>
           </form>
+
+          <PwaInstallButton />
         </div>
       </div>
     );
@@ -298,6 +301,8 @@ export default function ContagemHomePage() {
       </div>
 
       <div className="px-4 py-5 space-y-6">
+        <PwaInstallButton />
+
         <button
           onClick={openPicker}
           className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-base flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition"

@@ -256,6 +256,25 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
     }
   };
 
+  const [deleting, setDeleting] = useState(false);
+  const deleteCount = async () => {
+    if (!confirm("Excluir esta contagem? Tudo o que foi contado nela será apagado. Não dá para desfazer.")) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/stock-count/counts/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        flash(data.error || "Não foi possível excluir.", "warn");
+        setDeleting(false);
+        return;
+      }
+      router.push("/contagem");
+    } catch {
+      flash("Falha de comunicação.", "warn");
+      setDeleting(false);
+    }
+  };
+
   if (!loaded) {
     return (
       <div className="min-h-screen bg-[#0a0f1a] text-slate-100 flex items-center justify-center">
@@ -379,6 +398,17 @@ export default function ContagemDetailPage({ params }: { params: Promise<{ id: s
             </button>
           ))}
         </div>
+
+        {(info.status === "OPEN" || info.status === "DONE") && (
+          <button
+            onClick={deleteCount}
+            disabled={deleting}
+            className="w-full mt-2 py-3 rounded-2xl border border-rose-500/40 text-rose-300 text-sm font-semibold flex items-center justify-center gap-2 hover:bg-rose-500/10 transition disabled:opacity-50"
+          >
+            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            Excluir esta contagem
+          </button>
+        )}
       </div>
 
       {/* Rodapé — finalizar */}
