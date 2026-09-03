@@ -7,6 +7,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useToast } from "@/context/ToastContext";
 import LoadingOverlay from "@/components/LoadingOverlay";
+import { cadastroUI } from "../_ui";
 
 interface Colaborador {
   id: string;
@@ -22,6 +23,8 @@ const EMPTY_FORM = { id: "", nome: "", cargo: "", cpf: "", telefone: "", email: 
 
 export default function ColaboradoresPage() {
   const { theme } = useTheme();
+  const isDark = theme.isDark;
+  const ui = cadastroUI(isDark);
   const confirmDialog = useConfirm();
   const toast = useToast();
 
@@ -51,15 +54,15 @@ export default function ColaboradoresPage() {
     setIsModalOpen(true);
   };
 
-  const handleOpenEdit = (c: Colaborador) => {
+  const handleOpenEdit = (col: Colaborador) => {
     setForm({
-      id: c.id,
-      nome: c.name,
-      cargo: c.role || "",
-      cpf: c.cpf || "",
-      telefone: c.phone || "",
-      email: c.email || "",
-      status: c.active ? "ATIVO" : "INATIVO",
+      id: col.id,
+      nome: col.name,
+      cargo: col.role || "",
+      cpf: col.cpf || "",
+      telefone: col.phone || "",
+      email: col.email || "",
+      status: col.active ? "ATIVO" : "INATIVO",
     });
     setIsModalOpen(true);
   };
@@ -105,123 +108,182 @@ export default function ColaboradoresPage() {
     setIsModalOpen(false);
   };
 
+  const field = `w-full px-3.5 py-2 rounded-xl text-sm focus:outline-none ${
+    isDark ? "bg-slate-950 border border-slate-800 text-white focus:border-purple-500" : "bg-white border border-slate-300 text-slate-900 focus:border-purple-500"
+  }`;
+
   return (
-    <div className={`min-h-screen p-4 md:p-8 ${theme.bgCard} text-slate-100 transition-colors`}>
+    <div className={ui.page(theme.bgApp, theme.textMain)}>
       <LoadingOverlay show={isLoading} message="Buscando colaboradores..." submessage="Estamos carregando o quadro de colaboradores." />
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
-          <Link href="/app/cadastros" className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white transition">
+          <Link href="/app/cadastros" className={ui.backLink}>
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
-          <span className="text-xs font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20 px-3 py-1 rounded-full font-bold">
+          <span
+            className={`text-xs font-mono px-3 py-1 rounded-full font-bold border ${
+              isDark ? "bg-purple-500/10 text-purple-400 border-purple-500/20" : "bg-purple-50 text-purple-700 border-purple-200"
+            }`}
+          >
             {colaboradores.length} colaborador(es)
           </span>
         </div>
 
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-slate-900/80 p-6 rounded-3xl border border-slate-800 shadow-xl">
+        <div className={ui.headerCard}>
           <div className="flex items-center gap-4">
-            <div className="p-3.5 bg-purple-500/10 border border-purple-500/20 text-purple-400 rounded-2xl">
+            <div
+              className={`p-3.5 border rounded-2xl ${
+                isDark ? "bg-purple-500/10 border-purple-500/20 text-purple-400" : "bg-purple-50 border-purple-200 text-purple-600"
+              }`}
+            >
               <UserCheck className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">Cadastro de Colaboradores</h1>
-              <p className="text-xs text-slate-400">Funcionários da recepção, cozinha, governança e administração (SaaS Multi-tenant).</p>
+              <h1 className={ui.title}>Cadastro de Colaboradores</h1>
+              <p className={ui.subtitle}>Funcionários da recepção, cozinha, governança e administração (SaaS Multi-tenant).</p>
             </div>
           </div>
-          <button onClick={handleOpenAdd} className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-purple-500/20 transition">
+          <button
+            onClick={handleOpenAdd}
+            className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-purple-600/20 transition"
+          >
             <Plus className="w-4 h-4" /> Novo Colaborador
           </button>
         </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 uppercase tracking-wider">
-              <tr>
-                <th className="px-5 py-3.5">Nome / CPF</th>
-                <th className="px-5 py-3.5">Cargo / Função</th>
-                <th className="px-5 py-3.5">Telefone / E-mail</th>
-                <th className="px-5 py-3.5">Status</th>
-                <th className="px-5 py-3.5 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {colaboradores.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-800/40 transition">
-                  <td className="px-5 py-4">
-                    <span className="font-bold text-white text-sm block">{c.name}</span>
-                    <span className="font-mono text-[10px] text-purple-400">CPF: {c.cpf || "-"}</span>
-                  </td>
-                  <td className="px-5 py-4 font-medium text-slate-200">{c.role || "-"}</td>
-                  <td className="px-5 py-4 font-mono text-slate-300">
-                    <div>{c.phone || "-"}</div>
-                    <div className="text-[10px] text-slate-400">{c.email || "-"}</div>
-                  </td>
-                  <td className="px-5 py-4">
-                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${c.active ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-700 text-slate-300"}`}>
-                      {c.active ? "ATIVO" : "INATIVO"}
-                    </span>
-                  </td>
-                  <td className="px-5 py-4 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <button onClick={() => handleOpenEdit(c)} className="p-2 rounded-xl bg-slate-800 text-purple-400 hover:bg-purple-600 hover:text-white transition"><Edit3 className="w-4 h-4" /></button>
-                      <button onClick={() => handleDelete(c.id)} className="p-2 rounded-xl bg-slate-800 text-rose-400 hover:bg-rose-500 hover:text-white transition"><Trash2 className="w-4 h-4" /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-
-              {colaboradores.length === 0 && !isLoading && (
+        <div className={ui.tableCard}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className={ui.thead}>
                 <tr>
-                  <td colSpan={5} className="px-5 py-12 text-center text-slate-400">Nenhum colaborador cadastrado.</td>
+                  <th className="px-5 py-3.5">Nome / CPF</th>
+                  <th className="px-5 py-3.5">Cargo / Função</th>
+                  <th className="px-5 py-3.5">Telefone / E-mail</th>
+                  <th className="px-5 py-3.5">Status</th>
+                  <th className="px-5 py-3.5 text-right">Ações</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className={`divide-y ${ui.tdivide}`}>
+                {colaboradores.map((col) => (
+                  <tr key={col.id} className={`transition ${ui.rowHover}`}>
+                    <td className="px-5 py-4">
+                      <span className={`font-bold text-sm block ${ui.strong}`}>{col.name}</span>
+                      <span className="font-mono text-[10px] text-purple-600 dark:text-purple-400">CPF: {col.cpf || "-"}</span>
+                    </td>
+                    <td className={`px-5 py-4 font-medium ${isDark ? "text-slate-200" : "text-slate-700"}`}>{col.role || "-"}</td>
+                    <td className={`px-5 py-4 font-mono ${ui.muted}`}>
+                      <div>{col.phone || "-"}</div>
+                      <div className={`text-[10px] ${ui.empty}`}>{col.email || "-"}</div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          col.active
+                            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                            : isDark
+                              ? "bg-slate-700 text-slate-300"
+                              : "bg-slate-200 text-slate-600"
+                        }`}
+                      >
+                        {col.active ? "ATIVO" : "INATIVO"}
+                      </span>
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleOpenEdit(col)}
+                          className={`p-2 rounded-xl transition ${
+                            isDark ? "bg-slate-800 text-purple-400 hover:bg-purple-600 hover:text-white" : "bg-slate-100 text-purple-700 hover:bg-purple-600 hover:text-white"
+                          }`}
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(col.id)}
+                          className={`p-2 rounded-xl transition ${
+                            isDark ? "bg-slate-800 text-rose-400 hover:bg-rose-600 hover:text-white" : "bg-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white"
+                          }`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+
+                {colaboradores.length === 0 && !isLoading && (
+                  <tr>
+                    <td colSpan={5} className={`px-5 py-12 text-center ${ui.empty}`}>
+                      Nenhum colaborador cadastrado.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="border border-slate-800 bg-slate-900 text-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden">
-            <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+        <div className={ui.modalBackdrop}>
+          <div className={`${ui.modalCard} max-w-lg`}>
+            <div className={`p-6 border-b flex items-center justify-between ${ui.modalDivider}`}>
               <h2 className="text-lg font-bold">{form.id ? "Editar Colaborador" : "Novo Colaborador"}</h2>
-              <button onClick={() => setIsModalOpen(false)} className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"><X className="w-5 h-5" /></button>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className={`p-2 rounded-xl transition ${isDark ? "text-slate-400 hover:text-white hover:bg-slate-800" : "text-slate-500 hover:text-slate-900 hover:bg-slate-200"}`}
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-300">Nome <span className="text-rose-500">*</span></label>
-                <input type="text" required value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-purple-500" />
+                <label className={ui.label}>
+                  Nome <span className="text-rose-500">*</span>
+                </label>
+                <input type="text" required value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} className={field} />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">Cargo / Função</label>
-                  <input type="text" value={form.cargo} onChange={(e) => setForm({ ...form, cargo: e.target.value })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-purple-500" />
+                  <label className={ui.label}>Cargo / Função</label>
+                  <input type="text" value={form.cargo} onChange={(e) => setForm({ ...form, cargo: e.target.value })} className={field} />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">CPF</label>
-                  <input type="text" value={form.cpf} onChange={(e) => setForm({ ...form, cpf: e.target.value })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-purple-500" />
+                  <label className={ui.label}>CPF</label>
+                  <input type="text" value={form.cpf} onChange={(e) => setForm({ ...form, cpf: e.target.value })} className={field} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">Telefone</label>
-                  <input type="text" value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-purple-500" />
+                  <label className={ui.label}>Telefone</label>
+                  <input type="text" value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })} className={field} />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">E-mail</label>
-                  <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-purple-500" />
+                  <label className={ui.label}>E-mail</label>
+                  <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={field} />
                 </div>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-300">Status</label>
-                <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as "ATIVO" | "INATIVO" })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-purple-500">
+                <label className={ui.label}>Status</label>
+                <select
+                  value={form.status}
+                  onChange={(e) => setForm({ ...form, status: e.target.value as "ATIVO" | "INATIVO" })}
+                  className={field}
+                >
                   <option value="ATIVO">ATIVO</option>
                   <option value="INATIVO">INATIVO</option>
                 </select>
               </div>
-              <div className="pt-2 flex items-center justify-end gap-3">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-5 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-xs font-semibold transition">Cancelar</button>
-                <button type="submit" className="px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-purple-600/20 transition"><Check className="w-4 h-4" /> Salvar</button>
+              <div className={`pt-2 flex items-center justify-end gap-3 border-t ${ui.modalDivider}`}>
+                <button type="button" onClick={() => setIsModalOpen(false)} className={ui.ghostBtn}>
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-purple-600/20 transition"
+                >
+                  <Check className="w-4 h-4" /> Salvar
+                </button>
               </div>
             </form>
           </div>

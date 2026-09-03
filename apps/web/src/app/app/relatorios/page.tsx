@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart, ListChecks, LogOut } from "lucide-react";
+import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart, ListChecks, LogOut, PackageSearch, ClipboardCheck } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 const REPORTS = [
@@ -39,6 +39,20 @@ const REPORTS = [
     description: "Histórico do que os agentes de IA já fizeram sozinhos — reservas criadas/canceladas, links reenviados, avisos à governança.",
     icon: ListChecks,
     color: "#8B5CF6",
+  },
+  {
+    href: "/app/relatorios/vendas-item-por-pdv",
+    title: "Vendas de item por PDV",
+    description: "Vendas de um prato ou produto num período, agrupadas por PDV, com data, hora e o operador que lançou cada item na comanda.",
+    icon: PackageSearch,
+    color: "#F97316",
+  },
+  {
+    href: "/app/relatorios/conferencia-estoque",
+    title: "Conferência de estoque por PDV",
+    description: "Folha para o funcionário conferir o estoque físico de cada PDV — produto, saldo do sistema e espaço para anotar a contagem. Geral ou por PDV.",
+    icon: ClipboardCheck,
+    color: "#14B8A6",
   },
 ];
 

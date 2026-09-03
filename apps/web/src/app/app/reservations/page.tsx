@@ -29,6 +29,10 @@ export default function TenantReservationsPage() {
   // requisições por tick nesta tela.
   const [gridRooms, setGridRooms] = useState<any[]>([]);
   const [housekeepingTasks, setHousekeepingTasks] = useState<any[]>([]);
+  // true enquanto o operador arrasta uma reserva no grid ou uma movimentação (PATCH) ainda não
+  // foi confirmada pelo banco — pausa o polling de 3 s para o tick não sobrescrever a reserva
+  // recém-movida com um retrato anterior (a reserva ficava alternando entre os dois quartos).
+  const [reservationMoveBusy, setReservationMoveBusy] = useState(false);
 
   const fetchReservations = useCallback(async () => {
     setLoading(true);
@@ -47,6 +51,9 @@ export default function TenantReservationsPage() {
     } finally {
       setLoading(false);
       setIsLoadingReservations(false);
+      // Concluído o refetch (inclusive o disparado logo após um drag & drop), o retrato já está
+      // consistente com o banco — pode voltar a fazer polling.
+      setReservationMoveBusy(false);
     }
   }, []);
 
@@ -56,7 +63,9 @@ export default function TenantReservationsPage() {
   // janelas abertas por cima pausam a atualização).
   // Pausa também enquanto a aba está em segundo plano (ver usePolling) — o Mapa de Reservas só
   // precisa estar online para o operador que está de fato olhando para ele.
-  usePolling(fetchReservations, 3000, { paused: showLancarModal || showMultiplasModal });
+  usePolling(fetchReservations, 3000, {
+    paused: showLancarModal || showMultiplasModal || reservationMoveBusy,
+  });
 
   const handleSendUazapiLink = async (resId: string) => {
     setSendingLinkId(resId);
@@ -196,6 +205,7 @@ export default function TenantReservationsPage() {
           gridRooms={gridRooms}
           housekeepingTasks={housekeepingTasks}
           onRefresh={fetchReservations}
+          onInteractionChange={setReservationMoveBusy}
         />
       ) : (
         <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden">

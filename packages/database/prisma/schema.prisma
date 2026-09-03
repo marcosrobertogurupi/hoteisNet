@@ -128,7 +128,7 @@ model Tenant {
   banks                      Bank[]
   employees                  Employee[]
   productGroups              ProductGroup[]
-  salesPoints                SalesPoint[]
+  productTypes               ProductType[]
   dishes                     Dish[]
   hotelTables                HotelTable[]
   emailSettings              EmailSetting?
@@ -168,6 +168,14 @@ model Tenant {
   whatsappMessageSettings    WhatsappMessageSetting?
   whatsappMessages           WhatsappMessage[]
   conversationMemories       ConversationMemory[]
+  fiscalConfig               FiscalConfig?
+  pdvTerminals               PdvTerminal[]
+  fiscalSequences            FiscalSequence[]
+  fiscalProfiles             FiscalProfile[]
+  comandas                   Comanda[]
+  comandaSessions            ComandaSession[]
+  comandaDebitTransfers      ComandaDebitTransfer[]
+  fiscalDocuments            FiscalDocument[]
 
   @@map("tenants")
 }
@@ -975,6 +983,7 @@ model StayCheckin {
   whatsappMessages          WhatsappMessage[]
   accountsReceivable        AccountsReceivable[]
   guestBalanceEntries       GuestBalanceEntry[]
+  comandaSessions           ComandaSession[]
 
   @@map("stay_checkins")
 }
@@ -1014,6 +1023,9 @@ model StayConsumption {
   id            String       @id @default(uuid())
   stayCheckinId String
   productId     String?
+  // Preenchido quando o consumo veio de uma comanda fechada do PDV do restaurante — permite
+  // estornar o lançamento no quarto se a comanda for reaberta.
+  comandaSessionId String?
   productName   String
   quantity      Decimal      @default(1) @db.Decimal(12, 3)
   unitPrice     Decimal      @db.Decimal(10, 2)
@@ -1063,15 +1075,24 @@ model CorporateInvoice {
   @@map("corporate_invoices")
 }
 
+// Ponto de Venda do hotel (recepção, restaurante, bar da piscina, frigobar da governança...).
+// Cadastro único: é daqui que sai a lista do popup "P.D.V." do Lançamento de Consumo do Quarto,
+// as colunas do Estoque Multi-PDV e o PDV das comandas do restaurante. (O antigo modelo
+// SalesPoint foi unificado neste — ver histórico.)
 model POSLocation {
   id           String            @id @default(uuid())
   tenantId     String
   name         String
+  code         String?
+  location     String?
+  operator     String?
   isCentral    Boolean           @default(false)
+  active       Boolean           @default(true)
   tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stocks       POSProductStock[]
   transfersTo  StockTransfer[]   @relation("TransferToPOS")
   consumptions StayConsumption[]
+  comandaSessions ComandaSession[]
 
   @@map("pos_locations")
 }
@@ -1080,19 +1101,39 @@ model Product {
   id           String            @id @default(uuid())
   tenantId     String
   name         String
+  // Referência / código interno do produto (Prod_Referencia no WinDev).
+  reference    String?
   barcode      String?
-  category     String
+  // category: coluna legada de texto livre. Substituída pela classificação cadastrada
+  // (groupId / productTypeId). Mantida temporariamente e preenchida com o nome do grupo para
+  // não quebrar telas que ainda a leem — será removida quando todas migrarem.
+  category     String?
+  // Classificação cadastrada (nunca texto livre) — ver telas de Grupos e Tipos de Produto.
+  groupId       String?
+  productTypeId String?
+  // Unidade de medida (UN, CX, KG, L...) e marca — Prod_Unidade / Prod_Marca no WinDev.
+  unit         String?           @default("UN")
+  brand        String?
   costPrice    Decimal           @db.Decimal(10, 2)
   salePrice    Decimal           @db.Decimal(10, 2)
   generalStock Int               @default(0)
   minStock     Int               @default(5)
+  maxStock     Int?
   imageUrl     String?
-  posStocks    POSProductStock[]
-  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  transfers    StockTransfer[]
-  consumptions StayConsumption[]
-  barcodes     ProductBarcode[]
+  // Perfil tributário para venda de industrializados (refrigerante, cerveja, água) no PDV do
+  // restaurante — ver Dish.fiscalProfileId.
+  fiscalProfileId String?
+  posStocks     POSProductStock[]
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  group         ProductGroup?    @relation(fields: [groupId], references: [id])
+  productType   ProductType?     @relation(fields: [productTypeId], references: [id])
+  transfers     StockTransfer[]
+  consumptions  StayConsumption[]
+  barcodes      ProductBarcode[]
+  fiscalProfile FiscalProfile?   @relation(fields: [fiscalProfileId], references: [id])
+  comandaItems  ComandaItem[]
 
+  @@index([tenantId])
   @@map("products")
 }
 
@@ -1525,29 +1566,34 @@ model ProductGroup {
   tenantId  String
   code      String?
   name      String
+  // "PRODUTO" | "PRATO" | "SERVICO" — filtra a lista mostrada em cada tela de cadastro.
   type      String   @default("PRODUTO")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  dishes    Dish[]
-
-  @@map("product_groups")
-}
-
-model SalesPoint {
-  id        String   @id @default(uuid())
-  tenantId  String
-  code      String?
-  name      String
-  location  String?
-  operator  String?
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dishes    Dish[]
+  products  Product[]
 
-  @@map("sales_points")
+  @@map("product_groups")
 }
+
+// Tipo de produto (Prod_TipoProd / TipoProduto no WinDev) — segunda classificação, independente
+// do Grupo. Ex.: "Revenda", "Uso e consumo", "Cortesia". Sempre escolhido de lista cadastrada.
+model ProductType {
+  id        String    @id @default(uuid())
+  tenantId  String
+  code      String?
+  name      String
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  @@map("product_types")
+}
+
 
 model Dish {
   id          String        @id @default(uuid())
@@ -1561,8 +1607,13 @@ model Dish {
   active      Boolean       @default(true)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
-  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  group       ProductGroup? @relation(fields: [groupId], references: [id])
+  // Perfil tributário para emissão de NFC-e/NF-e no PDV do restaurante (ver plano do PDV Fiscal).
+  // Opcional: um prato sem perfil não pode ser vendido no PDV até o contador definir a tributação.
+  fiscalProfileId String?
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  group         ProductGroup?  @relation(fields: [groupId], references: [id])
+  fiscalProfile FiscalProfile? @relation(fields: [fiscalProfileId], references: [id])
+  comandaItems  ComandaItem[]
 
   @@map("dishes")
 }
@@ -1577,6 +1628,7 @@ model HotelTable {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  comandaSessions ComandaSession[]
 
   @@map("hotel_tables")
 }
@@ -1590,6 +1642,387 @@ model reservation_payments {
   paymentMethod  String?   @default("DINHEIRO")
   operatorName   String?
   createdAt      DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+// ============================================================================
+// PDV Fiscal do Restaurante — emissão de NFC-e (mod. 65) e NF-e (mod. 55).
+// Ver plano de implementação (artifact "PDV Fiscal do Restaurante") e a memória
+// restaurant-fiscal-pdv-architecture. Fase 0: fundação de dados + config fiscal.
+// ============================================================================
+
+// Configuração fiscal do tenant. Uma linha por tenant. O regime tributário NÃO fica aqui —
+// vem de Tenant.taxRegime (Hot_Regime do WinDev). O certificado A1 fica na máquina do caixa
+// (agente .NET), nunca no banco; aqui guardamos só metadados para alerta de validade.
+model FiscalConfig {
+  id                   String            @id @default(uuid())
+  tenantId             String            @unique
+  // HOMOLOGACAO enquanto credencia/testa na SEFAZ-TO; PRODUCAO quando liberado.
+  environment          FiscalEnvironment @default(HOMOLOGACAO)
+  // Código de Segurança do Contribuinte (NFC-e) e seu identificador — obrigatórios para o QR
+  // Code. Guardado em texto puro, igual ao UazapiSetting.webhookSecret (o projeto não tem
+  // camada de cifra em repouso). O segredo forte de verdade (certificado A1) fica só na
+  // máquina do caixa, nunca no banco. @map: a coluna nasceu como "nfceCscEncrypted"; o nome do
+  // campo foi ajustado sem exigir novo db push.
+  nfceCscId            String?
+  nfceCsc              String? @map("nfceCscEncrypted")
+  // Série sugerida ao cadastrar um novo caixa (cada PdvTerminal tem a sua).
+  defaultNfceSeries    Int               @default(1)
+  defaultNfeSeries     Int               @default(1)
+  // Texto fixo de "Informações Complementares" da nota (ex.: aviso de tributos, Lei 12.741).
+  additionalInfo       String?           @db.Text
+  // Metadados do certificado A1 para alertar antes de vencer — preenchidos pelo agente no
+  // heartbeat, nunca o certificado em si.
+  certificateExpiresAt DateTime?
+  certificateHolder    String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  tenant               Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("fiscal_configs")
+}
+
+// Um caixa físico do restaurante = um PC Windows com o agente fiscal .NET e uma impressora
+// térmica. Pode haver 1 ou vários. O token autentica o agente nas rotas /api/pdv/agente/*
+// (nunca uma sessão de usuário); guardamos só o hash, e tokenVersion permite revogar.
+model PdvTerminal {
+  id              String           @id @default(uuid())
+  tenantId        String
+  name            String
+  nfceSeries      Int              @default(1)
+  nfeSeries       Int              @default(1)
+  apiTokenHash    String?
+  tokenVersion    Int              @default(0)
+  active          Boolean          @default(true)
+  // Configuração da impressora repassada ao agente (modelo ACBrPosPrinter + porta/caminho).
+  printerModel    String?
+  printerPort     String?
+  // Preenchidos pelo agente a cada heartbeat — diagnóstico no painel admin.
+  lastHeartbeat   DateTime?
+  agentVersion    String?
+  sefazStatus     String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  comandaSessions ComandaSession[]
+  fiscalDocuments FiscalDocument[]
+
+  @@map("pdv_terminals")
+}
+
+// Contador de numeração fiscal por modelo+série. Incremento atômico dentro da transação de
+// emissão — a numeração é sempre atribuída online, no servidor, nunca offline.
+model FiscalSequence {
+  id         String      @id @default(uuid())
+  tenantId   String
+  model      FiscalModel
+  series     Int
+  nextNumber Int         @default(1)
+  updatedAt  DateTime    @updatedAt
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, model, series])
+  @@map("fiscal_sequences")
+}
+
+// Perfil tributário reutilizável, aplicado a pratos (Dish) e produtos (Product). Para o hotel
+// atual (Lucro Presumido / regime normal) usa-se CST; os campos CSOSN existem para futuros
+// tenants no Simples Nacional. Preenchido com orientação do contador.
+model FiscalProfile {
+  id          String    @id @default(uuid())
+  tenantId    String
+  name        String
+  ncm         String
+  cfop        String
+  cest        String?
+  // Origem da mercadoria (0–8, tabela da NF-e).
+  origem      String    @default("0")
+  // ICMS — regime normal.
+  cstIcms     String?
+  aliqIcms    Decimal   @default(0) @db.Decimal(5, 2)
+  redBaseIcms Decimal   @default(0) @db.Decimal(5, 2)
+  // ICMS — Simples Nacional (uso futuro).
+  csosn       String?
+  // PIS / COFINS.
+  cstPis      String    @default("07")
+  aliqPis     Decimal   @default(0) @db.Decimal(7, 4)
+  cstCofins   String    @default("07")
+  aliqCofins  Decimal   @default(0) @db.Decimal(7, 4)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dishes      Dish[]
+  products    Product[]
+
+  @@map("fiscal_profiles")
+}
+
+// Cadastro do cartão de comanda numerado — como o cadastro de mesas (HotelTable). Pré-cadastrado
+// uma vez e reutilizado a cada atendimento (o operador entrega o cartão físico na entrada e
+// digita/escaneia o número). O consumo em si vive em ComandaSession.
+model Comanda {
+  id          String           @id @default(uuid())
+  tenantId    String
+  number      String
+  description String?
+  active      Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions    ComandaSession[]
+
+  @@unique([tenantId, number])
+  @@map("comandas")
+}
+
+// Um atendimento: da abertura da comanda ao fechamento e à emissão fiscal. É a unidade de
+// cobrança do PDV (a mesa é só referência visual, opcional). Cada cartão Comanda tem vários
+// ComandaSession ao longo do tempo.
+model ComandaSession {
+  id              String                @id @default(uuid())
+  tenantId        String
+  comandaId       String
+  terminalId      String
+  // Id gerado no cliente (PWA) antes de sincronizar — idempotência da fila offline (Fase 4).
+  clientRef       String                @unique
+  origin          ComandaOrigin         @default(ONLINE)
+  status          ComandaSessionStatus  @default(ABERTA)
+  // Passante (sem vínculo) ou hóspede (consumo vai para a conta do quarto via StayConsumption).
+  customerType    ComandaCustomerType   @default(PASSANTE)
+  stayCheckinId   String?
+  tableId         String?
+  // PDV onde a comanda é consumida (Restaurante, Bar da Piscina...). É um POSLocation — cada
+  // PDV tem seu próprio estoque (POSProductStock), e a venda de um Product baixa desse PDV.
+  posLocationId   String?
+  // CPF/CNPJ no cupom — opcional (NFC-e abaixo de R$ 3.000 não exige).
+  cpfNota         String?
+  customerName    String?
+  customerPhone   String?
+  // Preenchidos quando um desconto acima do limite do operador foi liberado por um admin
+  // (Tenant.maxDiscountPercent), mesmo padrão da cortesia de check-in.
+  discountAuthById   String?
+  discountAuthByName String?
+  operatorId      String
+  operatorName    String
+  subtotal        Decimal               @default(0) @db.Decimal(10, 2)
+  discount        Decimal               @default(0) @db.Decimal(10, 2)
+  total           Decimal               @default(0) @db.Decimal(10, 2)
+  // Soma dos pagamentos já recebidos (adiantamentos numa comanda aberta + acerto no fechamento).
+  // saldo devedor = total - paidAmount. O hóspede paga o restante na conta do quarto no fechamento.
+  paidAmount      Decimal               @default(0) @db.Decimal(10, 2)
+  openedAt        DateTime              @default(now())
+  closedAt        DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  tenant          Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  comanda         Comanda               @relation(fields: [comandaId], references: [id])
+  terminal        PdvTerminal           @relation(fields: [terminalId], references: [id])
+  stayCheckin     StayCheckin?          @relation(fields: [stayCheckinId], references: [id])
+  table           HotelTable?           @relation(fields: [tableId], references: [id])
+  posLocation     POSLocation?          @relation(fields: [posLocationId], references: [id])
+  items           ComandaItem[]
+  payments        ComandaPayment[]
+  fiscalDocuments FiscalDocument[]
+  transfersOut    ComandaDebitTransfer[] @relation("ComandaTransferFrom")
+  transfersIn     ComandaDebitTransfer[] @relation("ComandaTransferTo")
+
+  @@index([tenantId, status])
+  @@map("comanda_sessions")
+}
+
+model ComandaItem {
+  id               String         @id @default(uuid())
+  comandaSessionId String
+  // Referência ao catálogo — exatamente um de dishId/productId preenchido.
+  dishId           String?
+  productId        String?
+  // Snapshot no momento do lançamento (nome, preço e tributação podem mudar depois).
+  name             String
+  unitPrice        Decimal        @db.Decimal(10, 2)
+  quantity         Decimal        @default(1) @db.Decimal(12, 3)
+  discount         Decimal        @default(0) @db.Decimal(10, 2)
+  total            Decimal        @db.Decimal(10, 2)
+  // Congela a tributação (do FiscalProfile) usada na nota deste item.
+  fiscalSnapshot   Json?
+  // Observação para a cozinha/bar ("sem cebola", "bem passado").
+  note             String?
+  // true depois que o fechamento baixou este item do estoque do PDV (só itens que são Product).
+  // Usado para estornar o estoque exatamente uma vez se a comanda for reaberta.
+  stockDecremented Boolean      @default(false)
+  // Cancelamento do item: nunca é apagado — fica marcado, sai dos totais e do payload fiscal,
+  // e mantém o rastro de quem cancelou e por quê (equivalente a "*** ITEM CANCELADO ***" do
+  // sistema legado WinDev).
+  canceled           Boolean      @default(false)
+  canceledReason     String?
+  canceledByUserId   String?
+  canceledByUserName String?
+  canceledAt         DateTime?
+  operatorId       String?
+  operatorName     String?
+  createdAt        DateTime       @default(now())
+  comandaSession   ComandaSession @relation(fields: [comandaSessionId], references: [id], onDelete: Cascade)
+  dish             Dish?          @relation(fields: [dishId], references: [id])
+  product          Product?       @relation(fields: [productId], references: [id])
+
+  @@map("comanda_items")
+}
+
+model ComandaPayment {
+  id               String               @id @default(uuid())
+  comandaSessionId String
+  // ADVANCE = pagamento parcial numa comanda ainda aberta (o cliente segue consumindo);
+  // SETTLEMENT = pagamento no fechamento da comanda.
+  kind             ComandaPaymentKind   @default(SETTLEMENT)
+  method           ComandaPaymentMethod
+  amount           Decimal              @db.Decimal(10, 2)
+  change           Decimal              @default(0) @db.Decimal(10, 2)
+  // Registro manual da maquininha (sem TEF ainda) — bandeira e NSU digitados pelo operador.
+  cardBrand        String?
+  cardNsu          String?
+  // Rastreabilidade do lançamento no caixa e de quem recebeu.
+  cashTransactionId String?
+  operatorId       String?
+  operatorName     String?
+  createdAt        DateTime             @default(now())
+  comandaSession   ComandaSession       @relation(fields: [comandaSessionId], references: [id], onDelete: Cascade)
+
+  @@map("comanda_payments")
+}
+
+// Auditoria permanente da transferência de débito entre comandas: mover itens específicos
+// (mode ITEMS) ou juntar a comanda inteira (mode FULL). Exige autorização de administrador na
+// UI (AdminAuthorizationModal), registrada em authorizedByUserId. Espelha StayDebitTransfer
+// (transferência de débito entre quartos).
+model ComandaDebitTransfer {
+  id                   String              @id @default(uuid())
+  tenantId             String
+  fromSessionId        String
+  toSessionId          String
+  mode                 ComandaTransferMode
+  amount               Decimal             @db.Decimal(10, 2)
+  itemsCount           Int                 @default(0)
+  operatorId           String?
+  operatorName         String?
+  authorizedByUserId   String?
+  authorizedByUserName String?
+  createdAt            DateTime            @default(now())
+  tenant               Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fromSession          ComandaSession      @relation("ComandaTransferFrom", fields: [fromSessionId], references: [id])
+  toSession            ComandaSession      @relation("ComandaTransferTo", fields: [toSessionId], references: [id])
+
+  @@map("comanda_debit_transfers")
+}
+
+// Documento fiscal emitido (NFC-e ou NF-e). O XML e o DANFE ficam no Supabase Storage
+// (bucket fiscal/{tenantId}/...), nunca no Postgres — regra de egress do projeto.
+model FiscalDocument {
+  id               String               @id @default(uuid())
+  tenantId         String
+  comandaSessionId String?
+  terminalId       String?
+  model            FiscalModel
+  series           Int
+  number           Int
+  environment      FiscalEnvironment
+  status           FiscalDocumentStatus @default(PENDENTE)
+  // Chave de acesso de 44 dígitos (quando autorizada).
+  accessKey        String?              @unique
+  protocol         String?
+  authorizedAt     DateTime?
+  // dhEmi real gravado na nota — na emissão diferida (pós-venda) é posterior ao consumo.
+  issuedAt         DateTime?
+  rejectionReason  String?
+  xmlPath          String?
+  danfePath        String?
+  qrCodeData       String?              @db.Text
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  comandaSession   ComandaSession?      @relation(fields: [comandaSessionId], references: [id])
+  terminal         PdvTerminal?         @relation(fields: [terminalId], references: [id])
+  events           FiscalEvent[]
+
+  @@index([tenantId, status])
+  @@map("fiscal_documents")
+}
+
+model FiscalEvent {
+  id               String               @id @default(uuid())
+  fiscalDocumentId String
+  type             FiscalEventType
+  sequence         Int                  @default(1)
+  protocol         String?
+  justification    String?
+  xmlPath          String?
+  status           FiscalDocumentStatus @default(PENDENTE)
+  operatorId       String?
+  operatorName     String?
+  createdAt        DateTime             @default(now())
+  fiscalDocument   FiscalDocument       @relation(fields: [fiscalDocumentId], references: [id], onDelete: Cascade)
+
+  @@map("fiscal_events")
+}
+
+enum FiscalEnvironment {
+  HOMOLOGACAO
+  PRODUCAO
+}
+
+enum FiscalModel {
+  NFCE
+  NFE
+}
+
+enum ComandaOrigin {
+  ONLINE
+  OFFLINE_SYNC
+}
+
+enum ComandaCustomerType {
+  PASSANTE
+  HOSPEDE
+}
+
+enum ComandaSessionStatus {
+  ABERTA
+  FECHADA
+  AGUARDANDO_FISCAL
+  FISCAL_AUTORIZADA
+  FISCAL_REJEITADA
+  CANCELADA
+}
+
+enum ComandaPaymentMethod {
+  DINHEIRO
+  DEBITO
+  CREDITO
+  PIX
+  CONTA_QUARTO
+}
+
+enum ComandaPaymentKind {
+  ADVANCE
+  SETTLEMENT
+}
+
+enum ComandaTransferMode {
+  FULL
+  ITEMS
+}
+
+enum FiscalDocumentStatus {
+  PENDENTE
+  PROCESSANDO
+  AUTORIZADA
+  REJEITADA
+  DENEGADA
+  CANCELADA
+}
+
+enum FiscalEventType {
+  CANCELAMENTO
+  CARTA_CORRECAO
+  INUTILIZACAO
 }
 
 enum TenantStatus {

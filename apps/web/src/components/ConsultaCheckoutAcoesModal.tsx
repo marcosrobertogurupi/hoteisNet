@@ -26,6 +26,9 @@ interface StayDetailResponse {
   checkInDate: string;
   expectedCheckOut: string;
   actualCheckOut: string | null;
+  checkedInByUserName: string | null;
+  checkedOutByUserName: string | null;
+  closingOperatorName: string | null;
   totalDaily: number;
   totalConsumption: number;
   discount: number;
@@ -257,6 +260,8 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
       phone: stay.guest.whatsappPhone || stay.guest.phone || "",
       checkInDate: formatBrDateTime(stay.checkInDate),
       prevCheckOutDate: formatBrDateTime(stay.expectedCheckOut),
+      checkInOperator: stay.checkedInByUserName || "",
+      checkOutOperator: stay.checkedOutByUserName || "",
       companyData: stay.guest.company
         ? {
             cnpj: stay.guest.company.cnpj,
@@ -296,6 +301,8 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
       cpf: stay.guest.cpf || "",
       checkInDate: formatBrDateTime(stay.checkInDate),
       prevCheckOutDate: formatBrDateTime(stay.expectedCheckOut),
+      checkInOperator: stay.checkedInByUserName || "",
+      checkOutOperator: stay.checkedOutByUserName || "",
       companyData: stay.guest.company
         ? {
             cnpj: stay.guest.company.cnpj,
@@ -495,6 +502,9 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
                   <div><span className="text-slate-500">Dt.Chegada:</span> {formatBrDateTime(stay.checkInDate)}</div>
                   <div><span className="text-slate-500">Dt.Prev.Saída:</span> {formatBrDateTime(stay.expectedCheckOut)}</div>
                   <div><span className="text-slate-500">Dt.Check-out:</span> <span className="font-semibold">{formatBrDateTime(stay.actualCheckOut)}</span></div>
+                  <div><span className="text-slate-500">Check-in feito por:</span> <span className="font-semibold">{stay.checkedInByUserName || "-"}</span></div>
+                  <div><span className="text-slate-500">Check-out feito por:</span> <span className="font-semibold">{stay.checkedOutByUserName || "-"}</span></div>
+                  <div><span className="text-slate-500">Operador do caixa:</span> {stay.closingOperatorName || "-"}</div>
                 </div>
               </div>
 

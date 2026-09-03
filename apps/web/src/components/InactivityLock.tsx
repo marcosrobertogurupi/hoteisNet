@@ -27,20 +27,30 @@ export default function InactivityLock() {
 
   const tenantId = user?.tenantId ?? null;
 
-  // Carrega o parâmetro do assinante uma vez que há sessão.
+  // Carrega o parâmetro do assinante quando há sessão e recarrega sempre que a tela de
+  // Configurações salva (evento "hoteisnet:tenant-settings-updated"). Sem isso, mudar o valor
+  // e salvar não tinha efeito até um refresh completo da página — o timer já montado continuava
+  // com o valor antigo e chegava a travar a tela mesmo depois de o admin desativar o recurso.
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    fetch("/api/tenant/settings")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled || !data?.success) return;
-        const m = Number(data.settings?.screenLockMinutes);
-        setLockMinutes(Number.isFinite(m) ? m : 0);
-      })
-      .catch(() => {});
+
+    const load = () => {
+      fetch("/api/tenant/settings", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (cancelled || !data?.success) return;
+          const m = Number(data.settings?.screenLockMinutes);
+          setLockMinutes(Number.isFinite(m) ? m : 0);
+        })
+        .catch(() => {});
+    };
+
+    load();
+    window.addEventListener("hoteisnet:tenant-settings-updated", load as EventListener);
     return () => {
       cancelled = true;
+      window.removeEventListener("hoteisnet:tenant-settings-updated", load as EventListener);
     };
   }, [user]);
 

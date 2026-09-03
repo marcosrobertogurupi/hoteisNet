@@ -1,102 +1,138 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Package, ArrowRightLeft, Building2, ShoppingBag, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Filter, ScanBarcode, Trash2, X, Loader2 } from "lucide-react";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import Link from "next/link";
+import { Package, ArrowRightLeft, Plus, ScanBarcode, Trash2, X, Loader2, Store, Check } from "lucide-react";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { usePolling } from "@/lib/usePolling";
+import { useTheme } from "@/context/ThemeContext";
+import { useToast } from "@/context/ToastContext";
+import { cadastroUI } from "../cadastros/_ui";
 
 interface ProductBarcode {
   id: string;
   code: string;
 }
 
+interface PosLocation {
+  id: string;
+  name: string;
+  isCentral: boolean;
+  active: boolean;
+}
+
+interface StockProduct {
+  id: string;
+  name: string;
+  category: string;
+  generalStock: number;
+  minStock: number;
+  costPrice: number;
+  salePrice: number;
+  posStocks: Record<string, number>;
+}
+
 export default function TenantStockPage() {
-  const [showTransferModal, setShowTransferModal] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  const [transferQty, setTransferQty] = useState(10);
-  const [targetPos, setTargetPos] = useState("PDV_FRIGOBAR");
-  const [notification, setNotification] = useState<string | null>(null);
+  const { theme } = useTheme();
+  const isDark = theme.isDark;
+  const c = cadastroUI(isDark);
+  const toast = useToast();
+
+  const [products, setProducts] = useState<StockProduct[]>([]);
+  const [posLocations, setPosLocations] = useState<PosLocation[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(true);
+  const [search, setSearch] = useState("");
 
-  const [products, setProducts] = useState<any[]>([]);
+  // Transferência Estoque Geral -> PDV
+  const [transferProduct, setTransferProduct] = useState<StockProduct | null>(null);
+  const [transferQty, setTransferQty] = useState(10);
+  const [targetPos, setTargetPos] = useState("");
+  const [transferSaving, setTransferSaving] = useState(false);
 
-  // Gestão de códigos de barras vinculados a um produto (vários códigos podem apontar para o
-  // mesmo produto; qualquer um deles resolve para ele no Lançamento de Consumo do Quarto).
-  const [showBarcodeModal, setShowBarcodeModal] = useState(false);
-  const [barcodeProduct, setBarcodeProduct] = useState<any>(null);
+  // Códigos de barras
+  const [barcodeProduct, setBarcodeProduct] = useState<StockProduct | null>(null);
   const [barcodes, setBarcodes] = useState<ProductBarcode[]>([]);
   const [barcodesLoading, setBarcodesLoading] = useState(false);
   const [newBarcodeInput, setNewBarcodeInput] = useState("");
   const [barcodeSaving, setBarcodeSaving] = useState(false);
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
 
-  const syncStockFromDatabase = useCallback(async () => {
+  const activePos = useMemo(() => posLocations.filter((p) => p.active), [posLocations]);
+
+  const anyModalOpen = !!transferProduct || !!barcodeProduct;
+
+  // Lista de PDVs (colunas) — cadastro único em /app/cadastros/pdv. Carrega uma vez, fora do polling.
+  const loadPosLocations = useCallback(async () => {
     try {
-      const res = await fetch(`/api/stock`);
+      const res = await fetch("/api/cadastros/pdv");
       const data = await res.json();
-      if (!data || !data.success || !Array.isArray(data.products)) return;
+      if (data?.success && Array.isArray(data.posLocations)) setPosLocations(data.posLocations);
+    } catch {
+      /* silencioso */
+    }
+  }, []);
 
-      setProducts((prevList) => {
-        const prevMap = new Map(prevList.map((p) => [p.id, p]));
-
-        const updatedList = data.products.map((p: any) => {
-          const existing = prevMap.get(p.id);
-          const pName = p.name;
-          const pCat = p.category || "Geral";
-          const gStock = p.generalStock || 20;
-          const mStock = p.minStock || 5;
-          const cPrice = typeof p.costPrice === "number" ? p.costPrice : parseFloat(p.costPrice || "0");
-          const sPrice = typeof p.salePrice === "number" ? p.salePrice : parseFloat(p.salePrice || "0");
-
-          if (existing) {
-            if (existing.name === pName && existing.generalStock === gStock && existing.salePrice === sPrice) {
-              return existing;
-            }
-            return {
-              ...existing,
-              name: pName,
-              category: pCat,
-              generalStock: gStock,
-              minStock: mStock,
-              costPrice: cPrice,
-              salePrice: sPrice,
-            };
-          }
-
-          return {
-            id: p.id,
-            name: pName,
-            category: pCat,
-            generalStock: gStock,
-            minStock: mStock,
-            costPrice: cPrice,
-            salePrice: sPrice,
-            posStocks: {
-              PDV_RECEPCAO: Math.floor(gStock * 0.1),
-              PDV_FRIGOBAR: Math.floor(gStock * 0.3),
-              PDV_RESTAURANTE: Math.floor(gStock * 0.2),
-              PDV_PISCINA: Math.floor(gStock * 0.05),
-            },
-          };
-        });
-
-        return updatedList;
-      });
+  const syncStock = useCallback(async () => {
+    try {
+      const res = await fetch("/api/stock");
+      const data = await res.json();
+      if (data?.success && Array.isArray(data.products)) setProducts(data.products);
     } catch (err) {
-      console.warn("[ControleEstoque] Erro na sincronização transparente:", err);
+      console.warn("[ControleEstoque] Erro na sincronização:", err);
     } finally {
       setIsLoadingProducts(false);
     }
   }, []);
 
-  // O estoque não muda "sozinho" da perspectiva de quem está nesta tela (as baixas por consumo
-  // são pontuais e as edições locais já são refletidas na hora). 30 s é frescor de sobra; antes
-  // eram 3 s. Pausa com a aba em segundo plano (usePolling).
-  usePolling(syncStockFromDatabase, 30000);
+  useEffect(() => {
+    loadPosLocations();
+  }, [loadPosLocations]);
 
-  const openBarcodeModal = async (product: any) => {
+  // 30 s de frescor é de sobra: as baixas por consumo são pontuais. Pausa com modal aberto
+  // e com a aba em segundo plano (usePolling).
+  usePolling(syncStock, 30000, { paused: anyModalOpen });
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter((p) => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q));
+  }, [products, search]);
+
+  // ---- Transferência ----
+  const openTransfer = (p: StockProduct) => {
+    setTransferProduct(p);
+    setTransferQty(Math.min(10, p.generalStock) || 1);
+    setTargetPos(activePos[0]?.id ?? "");
+  };
+
+  const handleExecuteTransfer = async () => {
+    if (!transferProduct || !targetPos || transferQty <= 0) return;
+    setTransferSaving(true);
+    try {
+      const res = await fetch("/api/stock/transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: transferProduct.id, posLocationId: targetPos, quantity: transferQty }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast.error(data.error || "Não foi possível transferir o estoque.");
+        return;
+      }
+      const posName = activePos.find((p) => p.id === targetPos)?.name ?? "PDV";
+      toast.success(`${transferQty} un. de "${transferProduct.name}" transferidas para ${posName}.`);
+      setTransferProduct(null);
+      await syncStock();
+    } catch {
+      toast.error("Erro de rede ao transferir o estoque.");
+    } finally {
+      setTransferSaving(false);
+    }
+  };
+
+  // ---- Códigos de barras ----
+  const openBarcodeModal = async (product: StockProduct) => {
     setBarcodeProduct(product);
-    setShowBarcodeModal(true);
     setNewBarcodeInput("");
     setBarcodeError(null);
     setBarcodesLoading(true);
@@ -145,316 +181,234 @@ export default function TenantStockPage() {
         body: JSON.stringify({ id: barcodeId }),
       });
     } catch {
-      // mantém removido na tela; próxima abertura do modal resincroniza com o servidor
+      /* mantém removido na tela; reabrir o modal resincroniza */
     }
   };
 
-  const handleExecuteTransfer = () => {
-    if (!selectedProduct || transferQty <= 0) return;
-
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.id === selectedProduct.id) {
-          const currentPosStock = (p.posStocks as any)[targetPos] || 0;
-          return {
-            ...p,
-            generalStock: p.generalStock - transferQty,
-            posStocks: {
-              ...p.posStocks,
-              [targetPos]: currentPosStock + Number(transferQty),
-            },
-          };
-        }
-        return p;
-      })
-    );
-
-    const targetPosName =
-      targetPos === "PDV_RECEPCAO"
-        ? "Recepção / Balcão"
-        : targetPos === "PDV_FRIGOBAR"
-        ? "Almoxarifado Frigobar"
-        : targetPos === "PDV_RESTAURANTE"
-        ? "Restaurante Central"
-        : "Bar da Piscina";
-
-    setNotification(`Transferência de ${transferQty} un. de "${selectedProduct.name}" do Estoque Geral para ${targetPosName} realizada!`);
-    setShowTransferModal(false);
-
-    setTimeout(() => {
-      setNotification(null);
-    }, 4000);
-  };
+  const totalGeneral = useMemo(() => products.reduce((s, p) => s + p.generalStock, 0), [products]);
+  const posTotals = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const loc of posLocations) map[loc.id] = 0;
+    for (const p of products) {
+      for (const [locId, qty] of Object.entries(p.posStocks)) {
+        map[locId] = (map[locId] ?? 0) + qty;
+      }
+    }
+    return map;
+  }, [products, posLocations]);
 
   return (
     <div className="space-y-6">
-      <LoadingOverlay show={isLoadingProducts} message="Buscando estoque..." submessage="Estamos carregando os dados mais recentes do estoque." />
+      <LoadingOverlay show={isLoadingProducts} message="Buscando estoque..." submessage="Carregando os saldos mais recentes por PDV." />
 
-      {/* Banner */}
-      <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Package className="w-5 h-5 text-[#0284C7]" />
-            Controle de Estoque Multi-PDV (Estoque Geral vs. Pontos de Venda)
-          </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Gestão fracionada de produtos: Almoxarifado Central, Recepção, Central de Frigobar, Restaurante e Bar.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <span className="px-3 py-1.5 rounded-lg bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-medium text-xs flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4" /> Baixa Automática no Consumo
-          </span>
-        </div>
-      </div>
-
-      {/* Realtime Notification Alert */}
-      {notification && (
-        <div className="p-4 rounded-xl bg-[#10B981]/15 border border-[#10B981]/40 text-[#10B981] text-xs font-semibold flex items-center gap-2 animate-bounce">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{notification}</span>
-        </div>
-      )}
-
-      {/* POS Locations Legend Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-4 rounded-xl bg-[#0F172A] border border-slate-800 space-y-1">
-          <span className="text-xs text-slate-400 font-medium block">Almoxarifado Central</span>
-          <span className="text-xl font-bold font-mono text-[#0284C7] block">595 Unidades</span>
-          <span className="text-[10px] text-slate-500 block">Estoque Geral de Depósito</span>
-        </div>
-
-        <div className="p-4 rounded-xl bg-[#0F172A] border border-slate-800 space-y-1">
-          <span className="text-xs text-slate-400 font-medium block">PDV Frigobar (Governança)</span>
-          <span className="text-xl font-bold font-mono text-[#F59E0B] block">152 Unidades</span>
-          <span className="text-[10px] text-slate-500 block">Estoque para Reposição</span>
-        </div>
-
-        <div className="p-4 rounded-xl bg-[#0F172A] border border-slate-800 space-y-1">
-          <span className="text-xs text-slate-400 font-medium block">PDV Restaurante / Bar</span>
-          <span className="text-xl font-bold font-mono text-[#10B981] block">112 Unidades</span>
-          <span className="text-[10px] text-slate-500 block">Estoque do Salão</span>
-        </div>
-
-        <div className="p-4 rounded-xl bg-[#0F172A] border border-slate-800 space-y-1">
-          <span className="text-xs text-slate-400 font-medium block">PDV Recepção / Conveniência</span>
-          <span className="text-xl font-bold font-mono text-[#38BDF8] block">57 Unidades</span>
-          <span className="text-[10px] text-slate-500 block">Venda Balcão Rápida</span>
-        </div>
-      </div>
-
-      {/* Multi-Stock Table */}
-      <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden">
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">Quadro de Estoque Geral e Fracionado por PDV</h3>
-          <div className="relative w-64">
-            <input
-              type="text"
-              placeholder="Buscar produto no estoque..."
-              className="w-full bg-[#1E293B] border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#0284C7]"
-            />
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+      {/* Cabeçalho */}
+      <div className={c.headerCard}>
+        <div className="flex items-center gap-4">
+          <div className="p-3.5 bg-sky-500/10 border border-sky-500/20 text-sky-500 rounded-2xl">
+            <Package className="w-7 h-7" />
+          </div>
+          <div>
+            <h1 className={c.title}>Controle de Estoque Multi-PDV</h1>
+            <p className={c.subtitle}>Estoque geral (almoxarifado) e saldo fracionado por ponto de venda.</p>
           </div>
         </div>
-
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-[#1E293B]/60 text-slate-400 text-xs font-mono border-b border-slate-800">
-              <th className="p-3.5">PRODUTO / CATEGORIA</th>
-              <th className="p-3.5">ESTOQUE GERAL (CENTRAL)</th>
-              <th className="p-3.5">ESTOQUE FRIGOBAR</th>
-              <th className="p-3.5">ESTOQUE RESTAURANTE</th>
-              <th className="p-3.5">ESTOQUE RECEPÇÃO</th>
-              <th className="p-3.5">AÇÕES</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60 text-xs">
-            {products.map((p) => (
-              <tr key={p.id} className="hover:bg-slate-800/40 transition-colors">
-                <td className="p-3.5">
-                  <div className="font-semibold text-white">{p.name}</div>
-                  <span className="text-[10px] font-mono text-slate-500">{p.category} • Venda: R$ {p.salePrice.toFixed(2)}</span>
-                </td>
-                <td className="p-3.5 font-mono">
-                  <span className="font-bold text-[#0284C7] text-sm">{p.generalStock} un.</span>
-                  <span className="text-[10px] text-slate-500 block">Min: {p.minStock} un.</span>
-                </td>
-                <td className="p-3.5 font-mono text-amber-400 font-semibold">{p.posStocks.PDV_FRIGOBAR} un.</td>
-                <td className="p-3.5 font-mono text-emerald-400 font-semibold">{p.posStocks.PDV_RESTAURANTE} un.</td>
-                <td className="p-3.5 font-mono text-sky-400 font-semibold">{p.posStocks.PDV_RECEPCAO} un.</td>
-                <td className="p-3.5">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setSelectedProduct(p);
-                        setShowTransferModal(true);
-                      }}
-                      className="px-3 py-1.5 bg-[#0284C7]/20 hover:bg-[#0284C7]/40 text-[#38BDF8] border border-[#0284C7]/40 rounded text-xs transition-colors flex items-center gap-1 font-medium"
-                    >
-                      <ArrowRightLeft className="w-3.5 h-3.5" /> Transferir para PDV
-                    </button>
-                    <button
-                      onClick={() => openBarcodeModal(p)}
-                      className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-400 border border-emerald-500/40 rounded text-xs transition-colors flex items-center gap-1 font-medium"
-                    >
-                      <ScanBarcode className="w-3.5 h-3.5" /> Códigos de Barras
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <Link
+          href="/app/cadastros/pdv"
+          className={`px-5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition ${c.iconBtn} ${c.strong}`}
+        >
+          <Store className="w-4 h-4" /> Cadastro de PDVs
+        </Link>
       </div>
 
-      {/* Modal Stock Transfer (Estoque Geral -> PDV Target) */}
-      {showTransferModal && selectedProduct && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0F172A] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-semibold text-white flex items-center gap-2">
-                <ArrowRightLeft className="w-4 h-4 text-[#0284C7]" />
-                Transferência para Ponto de Venda (PDV)
+      {/* Cards de saldo por local */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className={`p-4 rounded-2xl border space-y-1 ${isDark ? "bg-slate-900/50 border-slate-800" : "bg-white border-slate-200 shadow-sm"}`}>
+          <span className={`text-xs font-medium block ${c.muted}`}>Estoque Geral (Almoxarifado)</span>
+          <span className="text-xl font-bold font-mono text-sky-500 block">{totalGeneral} un.</span>
+        </div>
+        {activePos.map((loc) => (
+          <div key={loc.id} className={`p-4 rounded-2xl border space-y-1 ${isDark ? "bg-slate-900/50 border-slate-800" : "bg-white border-slate-200 shadow-sm"}`}>
+            <span className={`text-xs font-medium block ${c.muted}`}>{loc.name}{loc.isCentral ? " (Central)" : ""}</span>
+            <span className="text-xl font-bold font-mono text-amber-500 block">{posTotals[loc.id] ?? 0} un.</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Quadro */}
+      <div className={c.tableCard}>
+        <div className={`p-4 border-b flex flex-col md:flex-row md:items-center md:justify-between gap-3 ${c.modalDivider}`}>
+          <h3 className={`text-sm font-semibold ${c.strong}`}>Estoque geral e fracionado por PDV</h3>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar produto ou categoria..."
+            className={`md:w-72 px-3 py-1.5 ${c.input}`}
+          />
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className={c.thead}>
+              <tr>
+                <th className="px-4 py-3">Produto / Categoria</th>
+                <th className="px-4 py-3">Estoque Geral</th>
+                {activePos.map((loc) => (
+                  <th key={loc.id} className="px-4 py-3 whitespace-nowrap">{loc.name}</th>
+                ))}
+                <th className="px-4 py-3 text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody className={`divide-y ${c.tdivide}`}>
+              {filtered.map((p) => (
+                <tr key={p.id} className={`transition ${c.rowHover}`}>
+                  <td className="px-4 py-3">
+                    <div className={`font-semibold ${c.strong}`}>{p.name}</div>
+                    <span className={`text-[10px] font-mono ${c.empty}`}>{p.category} • Venda: R$ {p.salePrice.toFixed(2)}</span>
+                  </td>
+                  <td className="px-4 py-3 font-mono">
+                    <span className={`font-bold text-sm ${p.generalStock <= p.minStock ? "text-rose-500" : "text-sky-500"}`}>{p.generalStock} un.</span>
+                    <span className={`text-[10px] block ${c.empty}`}>Mín: {p.minStock} un.</span>
+                  </td>
+                  {activePos.map((loc) => (
+                    <td key={loc.id} className="px-4 py-3 font-mono font-semibold text-amber-500">{p.posStocks[loc.id] ?? 0} un.</td>
+                  ))}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => openTransfer(p)}
+                        disabled={activePos.length === 0}
+                        className="px-3 py-1.5 bg-sky-500/15 hover:bg-sky-500/30 text-sky-500 border border-sky-500/30 rounded-lg text-xs transition flex items-center gap-1 font-medium disabled:opacity-40"
+                      >
+                        <ArrowRightLeft className="w-3.5 h-3.5" /> Transferir
+                      </button>
+                      <button
+                        onClick={() => openBarcodeModal(p)}
+                        className="px-3 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-500 border border-emerald-500/30 rounded-lg text-xs transition flex items-center gap-1 font-medium"
+                      >
+                        <ScanBarcode className="w-3.5 h-3.5" /> Códigos
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && !isLoadingProducts && (
+                <tr>
+                  <td colSpan={3 + activePos.length} className={`px-4 py-12 text-center ${c.empty}`}>Nenhum produto encontrado.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal Transferência */}
+      {transferProduct && (
+        <div className={c.modalBackdrop}>
+          <div className={`${c.modalCard} max-w-md`}>
+            <div className={`p-5 border-b flex items-center justify-between ${c.modalDivider}`}>
+              <h3 className="text-base font-semibold flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-sky-500" /> Transferir para PDV
               </h3>
-              <button onClick={() => setShowTransferModal(false)} className="text-slate-400 hover:text-white text-sm">✕</button>
+              <button onClick={() => setTransferProduct(null)} className={c.muted}><X className="w-4 h-4" /></button>
             </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="p-3 rounded-xl bg-[#1E293B]/70 border border-slate-800 space-y-1">
-                <span className="text-slate-400 block">Produto Selecionado:</span>
-                <span className="text-sm font-bold text-white block">{selectedProduct.name}</span>
-                <span className="text-[11px] font-mono text-[#0284C7] block">Estoque Geral Disponível: {selectedProduct.generalStock} unidades</span>
+            <div className="p-5 space-y-4 text-xs">
+              <div className={`p-3 rounded-xl border ${isDark ? "bg-slate-950 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+                <span className={`block ${c.muted}`}>Produto</span>
+                <span className={`text-sm font-bold block ${c.strong}`}>{transferProduct.name}</span>
+                <span className="text-[11px] font-mono text-sky-500 block">Estoque geral disponível: {transferProduct.generalStock} un.</span>
               </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium">PDV de Destino</label>
-                <select
-                  value={targetPos}
-                  onChange={(e) => setTargetPos(e.target.value)}
-                  className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-[#0284C7]"
-                >
-                  <option value="PDV_FRIGOBAR">Almoxarifado Frigobar (Governança)</option>
-                  <option value="PDV_RESTAURANTE">Restaurante & Bar Central</option>
-                  <option value="PDV_RECEPCAO">Recepção / Conveniência Balcão</option>
-                  <option value="PDV_PISCINA">Bar da Piscina</option>
+              <div className="space-y-1.5">
+                <label className={c.label}>PDV de destino</label>
+                <select value={targetPos} onChange={(e) => setTargetPos(e.target.value)} className={c.field}>
+                  {activePos.map((loc) => (
+                    <option key={loc.id} value={loc.id}>{loc.name}</option>
+                  ))}
                 </select>
               </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium">Quantidade a Transferir</label>
+              <div className="space-y-1.5">
+                <label className={c.label}>Quantidade</label>
                 <input
                   type="number"
                   min={1}
-                  max={selectedProduct.generalStock}
+                  max={transferProduct.generalStock}
                   value={transferQty}
                   onChange={(e) => setTransferQty(Number(e.target.value))}
-                  className="w-full bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 font-mono text-sm text-white focus:outline-none focus:border-[#0284C7]"
+                  className={`font-mono ${c.field}`}
                 />
               </div>
             </div>
-
-            <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
-              <button
-                onClick={() => setShowTransferModal(false)}
-                className="px-4 py-2 bg-slate-800 text-slate-300 text-sm rounded-lg hover:bg-slate-700"
-              >
-                Cancelar
-              </button>
+            <div className={`p-5 border-t flex justify-end gap-3 ${c.modalDivider}`}>
+              <button onClick={() => setTransferProduct(null)} className={c.ghostBtn}>Cancelar</button>
               <button
                 onClick={handleExecuteTransfer}
-                className="px-4 py-2 bg-[#0284C7] text-white text-sm rounded-lg font-medium hover:bg-[#0369A1]"
+                disabled={transferSaving || !targetPos || transferQty <= 0 || transferQty > transferProduct.generalStock}
+                className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-2 disabled:opacity-50"
               >
-                Confirmar Transferência
+                {transferSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Confirmar
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal Códigos de Barras (vários códigos podem apontar para o mesmo produto) */}
-      {showBarcodeModal && barcodeProduct && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0F172A] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-semibold text-white flex items-center gap-2">
-                <ScanBarcode className="w-4 h-4 text-emerald-400" />
-                Códigos de Barras do Produto
+      {/* Modal Códigos de Barras */}
+      {barcodeProduct && (
+        <div className={c.modalBackdrop}>
+          <div className={`${c.modalCard} max-w-md`}>
+            <div className={`p-5 border-b flex items-center justify-between ${c.modalDivider}`}>
+              <h3 className="text-base font-semibold flex items-center gap-2">
+                <ScanBarcode className="w-4 h-4 text-emerald-500" /> Códigos de Barras
               </h3>
-              <button onClick={() => setShowBarcodeModal(false)} className="text-slate-400 hover:text-white">
-                <X className="w-4 h-4" />
-              </button>
+              <button onClick={() => setBarcodeProduct(null)} className={c.muted}><X className="w-4 h-4" /></button>
             </div>
-
-            <div className="p-3 rounded-xl bg-[#1E293B]/70 border border-slate-800">
-              <span className="text-slate-400 text-xs block">Produto:</span>
-              <span className="text-sm font-bold text-white block">{barcodeProduct.name}</span>
-            </div>
-
-            <p className="text-[11px] text-slate-400">
-              Vincule quantos códigos de barras quiser a este produto. Ao ler qualquer um deles no Lançamento de Consumo do Quarto, este produto será encontrado.
-            </p>
-
-            <div className="space-y-2">
+            <div className="p-5 space-y-4">
+              <div className={`p-3 rounded-xl border ${isDark ? "bg-slate-950 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+                <span className={`text-xs block ${c.muted}`}>Produto</span>
+                <span className={`text-sm font-bold block ${c.strong}`}>{barcodeProduct.name}</span>
+              </div>
+              <p className={`text-[11px] ${c.muted}`}>
+                Vincule quantos códigos quiser a este produto. Ao ler qualquer um deles no Lançamento de Consumo do Quarto, este produto é encontrado.
+              </p>
               <div className="flex items-center gap-2">
                 <input
                   type="text"
                   value={newBarcodeInput}
                   onChange={(e) => setNewBarcodeInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleAddBarcode();
-                    }
-                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddBarcode(); } }}
                   placeholder="Digite ou leia o código de barras"
-                  className="flex-1 bg-[#1E293B] border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-emerald-500"
+                  className={`flex-1 font-mono ${c.field}`}
                 />
                 <button
                   onClick={handleAddBarcode}
                   disabled={barcodeSaving || !newBarcodeInput.trim()}
                   className="p-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shrink-0 disabled:opacity-50"
-                  title="Adicionar código de barras"
                 >
                   {barcodeSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                 </button>
               </div>
-              {barcodeError && <p className="text-[11px] text-red-400">{barcodeError}</p>}
-            </div>
-
-            <div className="border border-slate-800 rounded-lg overflow-hidden max-h-52 overflow-y-auto">
-              {barcodesLoading ? (
-                <div className="p-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
-                </div>
-              ) : barcodes.length === 0 ? (
-                <div className="p-4 text-center text-xs text-slate-400">Nenhum código de barras vinculado ainda.</div>
-              ) : (
-                barcodes.map((b) => (
-                  <div
-                    key={b.id}
-                    className="flex items-center justify-between px-3 py-2 border-b border-slate-800 last:border-b-0 hover:bg-slate-800/40"
-                  >
-                    <span className="font-mono text-xs text-slate-200">{b.code}</span>
-                    <button
-                      onClick={() => handleRemoveBarcode(b.id)}
-                      className="text-red-500 hover:text-red-400 p-1 rounded hover:bg-red-950/40"
-                      title="Remover vínculo"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+              {barcodeError && <p className="text-[11px] text-rose-500">{barcodeError}</p>}
+              <div className={`border rounded-xl overflow-hidden max-h-52 overflow-y-auto ${c.modalDivider}`}>
+                {barcodesLoading ? (
+                  <div className={`p-4 text-center text-xs flex items-center justify-center gap-2 ${c.muted}`}>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Carregando...
                   </div>
-                ))
-              )}
+                ) : barcodes.length === 0 ? (
+                  <div className={`p-4 text-center text-xs ${c.empty}`}>Nenhum código vinculado ainda.</div>
+                ) : (
+                  barcodes.map((b) => (
+                    <div key={b.id} className={`flex items-center justify-between px-3 py-2 border-b last:border-b-0 ${c.modalDivider}`}>
+                      <span className={`font-mono text-xs ${c.strong}`}>{b.code}</span>
+                      <button onClick={() => handleRemoveBarcode(b.id)} className="text-rose-500 hover:text-rose-400 p-1 rounded">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
-
-            <div className="flex justify-end pt-2 border-t border-slate-800">
-              <button
-                onClick={() => setShowBarcodeModal(false)}
-                className="px-4 py-2 bg-slate-800 text-slate-300 text-sm rounded-lg hover:bg-slate-700"
-              >
-                Fechar
-              </button>
+            <div className={`p-5 border-t flex justify-end ${c.modalDivider}`}>
+              <button onClick={() => setBarcodeProduct(null)} className={c.ghostBtn}>Fechar</button>
             </div>
           </div>
         </div>

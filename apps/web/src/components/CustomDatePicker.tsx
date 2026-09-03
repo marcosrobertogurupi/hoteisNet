@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock } from "lucide-react";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Clock } from "lucide-react";
 
 export interface CustomDatePickerProps {
   value: string; // YYYY-MM-DD or YYYY-MM-DDTHH:mm
@@ -77,9 +77,13 @@ export default function CustomDatePicker({
   const { dateStr, timeStr } = parseDateValue(value);
 
   // Current view month & year in calendar
-  const initialViewDate = dateStr ? new Date(`${dateStr}T00:00:00`) : new Date();
-  const [viewYear, setViewYear] = useState(initialViewDate.getFullYear() || new Date().getFullYear());
-  const [viewMonth, setViewMonth] = useState(initialViewDate.getMonth() || new Date().getMonth());
+  const initialViewDate = dateStr && !isNaN(new Date(`${dateStr}T00:00:00`).getTime())
+    ? new Date(`${dateStr}T00:00:00`)
+    : new Date();
+  // Sem o isNaN acima e usando `|| fallback`, o mês de Janeiro (getMonth() === 0) caía no fallback
+  // e o calendário abria no mês errado.
+  const [viewYear, setViewYear] = useState(initialViewDate.getFullYear());
+  const [viewMonth, setViewMonth] = useState(initialViewDate.getMonth());
   const [selectedTime, setSelectedTime] = useState(timeStr || defaultTime);
 
   // Sync view when value changes
@@ -129,9 +133,15 @@ export default function CustomDatePicker({
     }
   };
 
-  const handleSelectDay = (day: number) => {
-    const formattedDate = `${viewYear}-${pad2(viewMonth + 1)}-${pad2(day)}`;
+  // Salto de ano — sem isto, mudar a data para um ano seguinte exigia 12+ cliques no ">".
+  const handlePrevYear = () => setViewYear(prev => prev - 1);
+  const handleNextYear = () => setViewYear(prev => prev + 1);
 
+  // Recebe a data JÁ montada (cell.dateYMD) — os dias das bordas do calendário pertencem ao mês
+  // anterior/seguinte, então reconstruir a data a partir de `viewMonth` + número do dia gerava a
+  // data errada (ex.: clicar no "1" de setembro exibido na grade de agosto virava 01/08, que cai
+  // antes da data mínima e por isso "não era aceito").
+  const handleSelectDay = (formattedDate: string) => {
     // Check if occupied
     if (occupiedDates.includes(formattedDate)) {
       return; // Block occupied selection
@@ -143,6 +153,13 @@ export default function CustomDatePicker({
 
     if (maxDate && formattedDate > maxDate) {
       return; // Block future max date
+    }
+
+    // Se o dia clicado é de outro mês, leva a visão do calendário junto.
+    const [fy, fm] = formattedDate.split("-").map(Number);
+    if (fy !== viewYear || fm - 1 !== viewMonth) {
+      setViewYear(fy);
+      setViewMonth(fm - 1);
     }
 
     const newValue = type === "datetime-local" ? `${formattedDate}T${selectedTime}` : formattedDate;
@@ -237,25 +254,47 @@ export default function CustomDatePicker({
       {isOpen && (
         <div className={`absolute z-[9999] top-full mt-1 left-0 sm:left-auto sm:right-0 w-[290px] p-3 rounded-xl border ${popoverBg} space-y-2.5 font-sans shadow-2xl`}>
           
-          {/* HEADER MONTH NAVIGATOR */}
-          <div className="flex items-center justify-between border-b pb-2 border-slate-700/50">
-            <button
-              type="button"
-              onClick={handlePrevMonth}
-              className={`p-1 rounded-lg hover:bg-slate-700/50 transition-colors ${isDark ? "text-slate-300" : "text-slate-600"}`}
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <div className="text-xs font-bold font-mono">
+          {/* HEADER MONTH/YEAR NAVIGATOR */}
+          <div className="flex items-center justify-between border-b pb-2 border-slate-700/50 gap-1">
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={handlePrevYear}
+                title="Ano anterior"
+                className={`p-1 rounded-lg hover:bg-slate-700/50 transition-colors ${isDark ? "text-slate-300" : "text-slate-600"}`}
+              >
+                <ChevronsLeft className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handlePrevMonth}
+                title="Mês anterior"
+                className={`p-1 rounded-lg hover:bg-slate-700/50 transition-colors ${isDark ? "text-slate-300" : "text-slate-600"}`}
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="text-xs font-bold font-mono whitespace-nowrap">
               {MONTH_NAMES[viewMonth]} {viewYear}
             </div>
-            <button
-              type="button"
-              onClick={handleNextMonth}
-              className={`p-1 rounded-lg hover:bg-slate-700/50 transition-colors ${isDark ? "text-slate-300" : "text-slate-600"}`}
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={handleNextMonth}
+                title="Próximo mês"
+                className={`p-1 rounded-lg hover:bg-slate-700/50 transition-colors ${isDark ? "text-slate-300" : "text-slate-600"}`}
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={handleNextYear}
+                title="Próximo ano"
+                className={`p-1 rounded-lg hover:bg-slate-700/50 transition-colors ${isDark ? "text-slate-300" : "text-slate-600"}`}
+              >
+                <ChevronsRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* WEEKDAY HEADERS */}
@@ -302,7 +341,7 @@ export default function CustomDatePicker({
                   key={idx}
                   type="button"
                   disabled={isDisabled}
-                  onClick={() => handleSelectDay(cell.day)}
+                  onClick={() => handleSelectDay(cell.dateYMD)}
                   title={isOccupied ? "Data Ocupada (Reserva Ativa no Quarto)" : cell.dateYMD}
                   className={`py-1.5 w-full text-center transition-all ${cellStyle}`}
                 >

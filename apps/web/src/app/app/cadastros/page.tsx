@@ -239,7 +239,7 @@ export default function CadastrosHubPage() {
         {
           id: "comandas",
           title: "Mesas & Comandas",
-          description: "Numeração de mesas do restaurante e comandas avulsas",
+          description: "Mesas do restaurante e cartões de comanda usados no PDV",
           icon: Receipt,
           href: "/app/cadastros/comandas",
           count: "Restaurante",

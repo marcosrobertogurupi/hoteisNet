@@ -1,129 +1,88 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, Send, CheckCircle2, ShieldCheck, Printer, AlertTriangle, RefreshCw } from "lucide-react";
+import Link from "next/link";
+import { FileText, ArrowLeft, Settings2, Receipt, Monitor, Tags } from "lucide-react";
+import { useTheme } from "@/context/ThemeContext";
+import ConfigTab from "./_tabs/ConfigTab";
+import PerfisTab from "./_tabs/PerfisTab";
+import CaixasTab from "./_tabs/CaixasTab";
+import CatalogoTab from "./_tabs/CatalogoTab";
 
-export default function TenantFiscalPage() {
-  const [issuedInvoices, setIssuedInvoices] = useState([
-    {
-      id: "NFS-9041",
-      type: "NFSE",
-      recipientName: "Tech Corp Consultoria LTDA",
-      cnpjCpf: "12.345.678/0001-90",
-      description: "Serviços de Hospedagem e Diárias (Cód ISS 09.01)",
-      value: 1400.00,
-      issValue: 70.00, // 5% ISS
-      status: "AUTHORIZED",
-      protocol: "NFS-GOV-8941029",
-      issuedAt: "11/08/2026 11:20",
-    },
-    {
-      id: "NFC-4091",
-      type: "NFCE",
-      recipientName: "Consumidor Final (Quarto 102)",
-      cnpjCpf: "123.456.789-00",
-      description: "Venda de Mercadorias de Frigobar (NCM 2202.10.00)",
-      value: 76.00,
-      issValue: 0.00,
-      status: "AUTHORIZED",
-      protocol: "SEFAZ-PR-9012384",
-      issuedAt: "11/08/2026 11:22",
-    },
-  ]);
+// O cadastro de comandas fica só na Central de Cadastros ("Mesas & Comandas").
+const TABS = [
+  { id: "config", label: "Configuração", icon: Settings2, Comp: ConfigTab },
+  { id: "perfis", label: "Perfis Fiscais", icon: Receipt, Comp: PerfisTab },
+  { id: "caixas", label: "Caixas", icon: Monitor, Comp: CaixasTab },
+  { id: "catalogo", label: "Catálogo", icon: Tags, Comp: CatalogoTab },
+] as const;
 
-  const [notification, setNotification] = useState<string | null>(null);
-
-  const handleEmitNewInvoice = () => {
-    const newInvoice = {
-      id: `NFS-${Math.floor(9000 + Math.random() * 900)}`,
-      type: "NFSE",
-      recipientName: "Carlos Eduardo Silva",
-      cnpjCpf: "123.456.789-00",
-      description: "Serviços de Hospedagem Hoteleira",
-      value: 1050.00,
-      issValue: 52.50,
-      status: "AUTHORIZED",
-      protocol: `NFS-GOV-${Math.floor(100000 + Math.random() * 900000)}`,
-      issuedAt: new Date().toLocaleString(),
-    };
-
-    setIssuedInvoices([newInvoice, ...issuedInvoices]);
-    setNotification("NFSe transmitida com sucesso para a SEFAZ / Prefeitura! Protocolo de autorização gerado.");
-
-    setTimeout(() => setNotification(null), 4000);
-  };
+export default function FiscalPage() {
+  const { theme } = useTheme();
+  const isDark = theme.isDark;
+  const [active, setActive] = useState<(typeof TABS)[number]["id"]>("config");
+  const Active = TABS.find((t) => t.id === active)!.Comp;
 
   return (
-    <div className="space-y-6">
-      {/* Banner */}
-      <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <FileText className="w-5 h-5 text-[#38BDF8]" />
-            Módulo Fiscal (Emissão NFSe Hospedagem & NFCe Vendas PDV)
-          </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Transmissão automática de notas fiscais eletrônicas de serviços de hospedagem e vendas de balcão/frigobar.
-          </p>
-        </div>
-
-        <button
-          onClick={handleEmitNewInvoice}
-          className="px-4 py-2.5 bg-[#0284C7] hover:bg-[#0369A1] text-white font-bold text-sm rounded-lg transition-colors flex items-center gap-2 shadow-lg shadow-[#0284C7]/20"
+    <div className={`min-h-screen p-4 md:p-8 ${theme.bgApp} ${theme.textMain} transition-colors`}>
+      <div className="max-w-7xl mx-auto space-y-6">
+        <Link
+          href="/app/cadastros"
+          className={`inline-flex items-center gap-2 text-xs font-semibold transition ${
+            isDark ? "text-slate-400 hover:text-white" : "text-slate-600 hover:text-slate-900"
+          }`}
         >
-          <Send className="w-4 h-4" /> Emitir NFSe de Teste
-        </button>
-      </div>
+          <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
+        </Link>
 
-      {/* Notification */}
-      {notification && (
-        <div className="p-4 rounded-xl bg-[#10B981]/15 border border-[#10B981]/40 text-[#10B981] text-xs font-semibold flex items-center gap-2 animate-bounce">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{notification}</span>
+        <div
+          className={`flex items-center gap-4 p-6 rounded-3xl border shadow-xl ${
+            isDark ? "bg-slate-900/80 border-slate-800" : "bg-white border-slate-200"
+          }`}
+        >
+          <div
+            className={`p-3.5 border rounded-2xl ${
+              isDark ? "bg-amber-500/10 border-amber-500/20 text-amber-400" : "bg-amber-50 border-amber-200 text-amber-600"
+            }`}
+          >
+            <FileText className="w-8 h-8" />
+          </div>
+          <div>
+            <h1 className={`text-2xl font-bold tracking-tight ${isDark ? "text-white" : "text-slate-900"}`}>
+              Fiscal & PDV do Restaurante
+            </h1>
+            <p className={`text-xs ${isDark ? "text-slate-400" : "text-slate-600"}`}>
+              Configuração fiscal, perfis tributários, caixas e catálogo para emissão de NFC-e / NF-e.
+            </p>
+          </div>
         </div>
-      )}
 
-      {/* Issued Invoices Table */}
-      <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden space-y-4">
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">Documentos Fiscais Transmitidos</h3>
-          <span className="text-xs font-mono text-[#10B981]">SEFAZ / Prefeitura Conectadas</span>
+        <div className={`flex flex-wrap gap-2 border-b ${isDark ? "border-slate-800" : "border-slate-200"}`}>
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const on = t.id === active;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setActive(t.id)}
+                className={`inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-t-xl border-b-2 transition ${
+                  on
+                    ? "border-sky-500 text-sky-500"
+                    : isDark
+                      ? "border-transparent text-slate-400 hover:text-slate-200"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {t.label}
+              </button>
+            );
+          })}
         </div>
 
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-[#1E293B]/60 text-slate-400 text-xs font-mono border-b border-slate-800">
-              <th className="p-3.5">NÚMERO / TIPO</th>
-              <th className="p-3.5">TOMADOR / DESTINATÁRIO</th>
-              <th className="p-3.5">SERVIÇO / PRODUTO</th>
-              <th className="p-3.5">VALOR TOTAL</th>
-              <th className="p-3.5">PROTOCOLO SEFAZ</th>
-              <th className="p-3.5">STATUS</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60 text-xs">
-            {issuedInvoices.map((inv) => (
-              <tr key={inv.id} className="hover:bg-slate-800/40 transition-colors">
-                <td className="p-3.5">
-                  <div className="font-bold text-white">{inv.id}</div>
-                  <span className="text-[10px] font-mono text-[#38BDF8]">{inv.type}</span>
-                </td>
-                <td className="p-3.5">
-                  <div className="font-semibold text-slate-200">{inv.recipientName}</div>
-                  <span className="font-mono text-[10px] text-slate-500">{inv.cnpjCpf}</span>
-                </td>
-                <td className="p-3.5 text-slate-300">{inv.description}</td>
-                <td className="p-3.5 font-mono font-bold text-white">R$ {inv.value.toFixed(2)}</td>
-                <td className="p-3.5 font-mono text-slate-400">{inv.protocol}</td>
-                <td className="p-3.5">
-                  <span className="px-2.5 py-1 rounded-full text-[10px] font-medium bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30">
-                    Autorizada
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="pt-2">
+          <Active />
+        </div>
       </div>
     </div>
   );

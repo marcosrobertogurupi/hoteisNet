@@ -33,7 +33,10 @@ export async function POST(req: NextRequest) {
         throw new Error(`Estoque geral insuficiente (disponível: ${product.generalStock}).`);
       }
 
-      await tx.product.update({ where: { id: productId }, data: { generalStock: { decrement: qty } } });
+      await tx.product.updateMany({
+        where: { id: productId, tenantId: session.tenantId! },
+        data: { generalStock: { decrement: qty } },
+      });
 
       const posStock = await tx.pOSProductStock.upsert({
         where: { productId_posLocationId: { productId, posLocationId } },

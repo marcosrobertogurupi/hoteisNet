@@ -295,6 +295,10 @@ export interface ReservationGridMapProps {
   gridRooms?: any[];
   housekeepingTasks?: any[];
   onRefresh?: () => void;
+  // Avisa a página quando o operador está no meio de um arrasto ou de uma movimentação de reserva
+  // ainda não confirmada pelo banco — enquanto isso a página pausa o polling de 3 s, para o tick
+  // não sobrescrever a reserva recém-movida com um retrato antigo (efeito "vai e volta").
+  onInteractionChange?: (busy: boolean) => void;
 }
 
 export default function ReservationGridMap({
@@ -302,6 +306,7 @@ export default function ReservationGridMap({
   gridRooms,
   housekeepingTasks,
   onRefresh,
+  onInteractionChange,
 }: ReservationGridMapProps = {}) {
   const { theme, defaultCheckInTime, defaultCheckOutTime, reservationToleranceHours } = useTheme();
   const toast = useToast();
@@ -368,15 +373,22 @@ export default function ReservationGridMap({
   const todayDay = today.getDate();
   const todayStr = `${todayYear}-${String(todayMonth + 1).padStart(2, "0")}-${String(todayDay).padStart(2, "0")}`;
 
-  // Date Focus: Current view focused on today
-  const [viewYear, setViewYear] = useState<number>(todayYear);
-  const [viewMonth, setViewMonth] = useState<number>(todayMonth);
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
-  
+
+  // Mapa em JANELA DESLIZANTE (independente de mês): a grade começa sempre em
+  // (hoje − DAYS_BEHIND) e se estende para frente, atravessando a virada de mês. Assim o
+  // operador enxerga de uma vez a semana atual e as próximas — sem "trocar de mês" para ver
+  // reservas de setembro estando em agosto. `windowShiftDays` é ajustado pelos botões ‹ / ›
+  // para passear pela linha do tempo; "Hoje" zera. `wideWindow` amplia os dias à frente.
+  const DAYS_BEHIND = 3;
+  const PAN_STEP = 14; // dias que cada clique de ‹ / › desloca a janela
+  const [windowShiftDays, setWindowShiftDays] = useState<number>(0);
+  const [wideWindow, setWideWindow] = useState<boolean>(false);
+  const daysAhead = wideWindow ? 120 : 52; // dados do tick cobrem hoje + 6 meses
+
   // Date Jump & Grid Scroll References
   const [targetDateInput, setTargetDateInput] = useState<string>(todayStr);
   const [highlightedDate, setHighlightedDate] = useState<string | null>(null);
-  const [hideOlderThan3Days, setHideOlderThan3Days] = useState<boolean>(true);
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const dayColumnRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
@@ -433,6 +445,11 @@ export default function ReservationGridMap({
 
   // Sync with API reservations and ensure active checked-in stays (e.g. Quarto 102) are preserved
   useEffect(() => {
+    // Enquanto há um arrasto em curso ou uma movimentação aguardando confirmação do banco, o
+    // estado local (otimista) é a fonte da verdade — ignorar o payload do polling até o PATCH
+    // retornar e disparar um novo onRefresh já com a reserva no lugar certo.
+    if (draggedResIdRef.current || movePendingRef.current) return;
+
     let apiMapped: ReservationItem[] = [];
     if (Array.isArray(apiReservations) && apiReservations.length > 0) {
       apiMapped = apiReservations.map(normalizeApiReservation);
@@ -658,6 +675,16 @@ export default function ReservationGridMap({
   // Drag & Drop State
   const [draggedResId, setDraggedResId] = useState<string | null>(null);
   const [dragOverCell, setDragOverCell] = useState<{ roomId: string; dateStr: string } | null>(null);
+  // Espelhos síncronos (refs) do estado de arrasto / movimentação pendente. O effect que sincroniza
+  // as reservas com o payload do polling consulta estes refs para NÃO sobrescrever o estado local
+  // enquanto o operador arrasta uma reserva ou o PATCH de movimentação ainda não retornou — caso
+  // contrário a resposta de um tick que saiu antes do PATCH "puxa" a reserva de volta ao quarto/data
+  // anteriores, e ela fica alternando entre os dois quartos a cada 3 s até tudo convergir.
+  const draggedResIdRef = useRef<string | null>(null);
+  const movePendingRef = useRef<boolean>(false);
+  const notifyInteraction = useCallback((busy: boolean) => {
+    onInteractionChange?.(busy);
+  }, [onInteractionChange]);
 
   // Scroll directly to a target date column inside the grid
   const scrollToDate = (dateStr: string) => {
@@ -675,7 +702,8 @@ export default function ReservationGridMap({
     }
   };
 
-  // Jump to specific date (ex: 19/08/2026)
+  // Jump to specific date (ex: 19/08/2026) — desloca a janela deslizante para que a data
+  // escolhida apareça logo após a margem de dias passados, e então rola até a coluna dela.
   const handleJumpToDate = (dateVal: string) => {
     if (!dateVal) return;
     setTargetDateInput(dateVal);
@@ -684,10 +712,15 @@ export default function ReservationGridMap({
 
     const y = parseInt(parts[0], 10);
     const m = parseInt(parts[1], 10) - 1;
+    const d = parseInt(parts[2], 10);
 
-    if (!isNaN(y) && !isNaN(m)) {
-      setViewYear(y);
-      setViewMonth(m);
+    if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+      const targetObj = new Date(y, m, d);
+      targetObj.setHours(0, 0, 0, 0);
+      const baseObj = new Date(todayYear, todayMonth, todayDay);
+      baseObj.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((targetObj.getTime() - baseObj.getTime()) / 86400000);
+      setWindowShiftDays(diffDays);
 
       setTimeout(() => {
         scrollToDate(dateVal);
@@ -703,31 +736,33 @@ export default function ReservationGridMap({
     }
   };
 
-  // Date threshold: 3 days before current date
-  const threeDaysAgoObj = new Date(todayYear, todayMonth, todayDay - 3);
-  threeDaysAgoObj.setHours(0, 0, 0, 0);
+  // Geração da JANELA DESLIZANTE de dias (independente de mês): DAYS_BEHIND dias antes de hoje
+  // + daysAhead dias à frente, deslocada por windowShiftDays. Atravessa a virada de mês
+  // naturalmente, então setembro já aparece à direita de agosto sem trocar de mês.
+  const weekDayNames = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+  const monthAbbr = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  const windowStartObj = new Date(todayYear, todayMonth, todayDay - DAYS_BEHIND + windowShiftDays);
+  windowStartObj.setHours(0, 0, 0, 0);
 
-  // Generate Days of the Current Month
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-  const monthDaysAll = Array.from({ length: daysInMonth }, (_, i) => {
-    const dayNum = i + 1;
-    const dateObj = new Date(viewYear, viewMonth, dayNum);
+  const monthDays = Array.from({ length: DAYS_BEHIND + daysAhead }, (_, i) => {
+    const dateObj = new Date(windowStartObj);
+    dateObj.setDate(windowStartObj.getDate() + i);
     dateObj.setHours(0, 0, 0, 0);
-    const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+    const y = dateObj.getFullYear();
+    const m = dateObj.getMonth();
+    const dayNum = dateObj.getDate();
+    const dateStr = `${y}-${String(m + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
     const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 6 = Saturday
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
     const isToday = dateStr === todayStr;
-    
-    const weekDayNames = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
-    const label = `${weekDayNames[dayOfWeek]} ${String(dayNum).padStart(2, "0")}`;
+
+    // Mês abreviado na 1ª coluna e a cada virada de mês, para orientar ao cruzar meses.
+    const showMonth = i === 0 || dayNum === 1;
+    const label = showMonth
+      ? `${weekDayNames[dayOfWeek]} ${String(dayNum).padStart(2, "0")}/${monthAbbr[m]}`
+      : `${weekDayNames[dayOfWeek]} ${String(dayNum).padStart(2, "0")}`;
 
     return { dayNum, dateStr, dayOfWeek, isWeekend, isToday, label, dateObj };
-  });
-
-  // Filter out days older than 3 days ago when hideOlderThan3Days is enabled
-  const monthDays = monthDaysAll.filter((d) => {
-    if (!hideOlderThan3Days) return true;
-    return d.dateObj >= threeDaysAgoObj;
   });
 
   // Keydown listener for DELETE / BACKSPACE key
@@ -1017,10 +1052,12 @@ export default function ReservationGridMap({
       toast.warning(`⚠️ HOSPEDAGEM EM VIGÊNCIA (${res.guestName}): Hospedagens ativas não podem ser movidas no mapa de reserva.`);
       return;
     }
+    draggedResIdRef.current = res.id;
     setDraggedResId(res.id);
     setSelectedReservationId(res.id);
     e.dataTransfer.setData("text/plain", res.id);
     e.dataTransfer.effectAllowed = "move";
+    notifyInteraction(true);
   };
 
   const handleDragOver = (e: React.DragEvent, roomId: string, dateStr: string) => {
@@ -1030,8 +1067,21 @@ export default function ReservationGridMap({
   };
 
   const handleDragEnd = () => {
+    draggedResIdRef.current = null;
     setDraggedResId(null);
     setDragOverCell(null);
+    // Se um PATCH de movimentação ficou pendente, a página só volta a fazer polling quando ele
+    // retornar (ver handleDrop); aqui só liberamos quando não há nada em voo.
+    if (!movePendingRef.current) notifyInteraction(false);
+  };
+
+  // Libera o estado de arrasto e reativa o polling da página (usado nas saídas antecipadas do
+  // handleDrop, quando a movimentação nem chega a ser enviada ao banco).
+  const abortDrag = () => {
+    draggedResIdRef.current = null;
+    setDraggedResId(null);
+    setDragOverCell(null);
+    if (!movePendingRef.current) notifyInteraction(false);
   };
 
   const handleDrop = (e: React.DragEvent, targetRoomId: string, targetDateStr: string) => {
@@ -1039,15 +1089,20 @@ export default function ReservationGridMap({
     e.stopPropagation();
     setDragOverCell(null);
 
-    const dropId = draggedResId || e.dataTransfer.getData("text/plain");
-    if (!dropId) return;
+    // Ignora um drop reentrante enquanto o PATCH da movimentação anterior ainda está em voo —
+    // sem isso, cada evento de drop dispara um novo PATCH/atualização otimista e a reserva
+    // fica "pingando" entre os quartos.
+    if (movePendingRef.current) return;
+
+    const dropId = draggedResId || draggedResIdRef.current || e.dataTransfer.getData("text/plain");
+    if (!dropId) { abortDrag(); return; }
 
     const res = reservations.find(r => r.id === dropId);
-    if (!res) return;
+    if (!res) { abortDrag(); return; }
 
     // Bloquear movimentação para datas anteriores à data atual (hoje)
     if (targetDateStr < todayStr) {
-      setDraggedResId(null);
+      abortDrag();
       toast.error(`⚠️ MOVIMENTAÇÃO BLOQUEADA: Não é permitido mover reservas para datas passadas (anteriores a hoje ${formatDateBr(todayStr)}).`);
       return;
     }
@@ -1082,14 +1137,29 @@ export default function ReservationGridMap({
     );
 
     if (conflict.hasConflict) {
-      setDraggedResId(null);
+      abortDrag();
       toast.error(conflict.reason || "MOVIMENTAÇÃO BLOQUEADA (CONFLITO DE RESERVA)");
       return;
     }
 
+    // Nada mudou (soltou no mesmo quarto e mesma data de entrada) — não faz sentido gravar.
+    const roomDef = rooms.find(rm => rm.id === targetRoomId || rm.number === targetRoomId);
+    const sameRoom = res.roomId === targetRoomId || res.roomId === roomDef?.id || res.roomId === roomDef?.number;
+    if (sameRoom && res.checkInDate === targetDateStr) {
+      abortDrag();
+      return;
+    }
+
+    // Retrato dos valores anteriores, para reverter a atualização otimista caso o PATCH falhe.
+    const prevSnapshot = {
+      roomId: res.roomId,
+      checkInDate: res.checkInDate,
+      checkOutDate: res.checkOutDate,
+    };
+
     // Apply move in local state immediately
     setReservations(prev => prev.map(r => {
-      if (r.id === draggedResId) {
+      if (r.id === dropId) {
         return {
           ...r,
           roomId: targetRoomId,
@@ -1100,8 +1170,12 @@ export default function ReservationGridMap({
       return r;
     }));
 
+    // A movimentação está pendente de confirmação do banco: mantém o polling da página pausado e
+    // impede o effect de sincronização de reverter o estado otimista até o PATCH retornar.
+    movePendingRef.current = true;
+    draggedResIdRef.current = null;
     setDraggedResId(null);
-    toast.success(`✓ Reserva de ${res.guestName} movida para Quarto ${targetRoomId} (${formatDateBr(targetDateStr)} a ${formatDateBr(newCheckOutDateStr)})!`);
+    notifyInteraction(true);
 
     // PERSISTIR ALTERAÇÃO NO BANCO DE DADOS POSTGRESQL / SUPABASE VIA PATCH
     fetch("/api/reservations", {
@@ -1124,51 +1198,45 @@ export default function ReservationGridMap({
       }),
     })
       .then(async (r) => {
-        const data = await r.json();
-        if (data.success) {
-          console.log("[DragAndDrop] Movimentação salva com sucesso no banco de dados.");
-          if (onRefresh) onRefresh();
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.success) {
+          toast.success(`✓ Reserva de ${res.guestName} movida para Quarto ${roomDef?.number || targetRoomId} (${formatDateBr(targetDateStr)} a ${formatDateBr(newCheckOutDateStr)})!`);
         } else {
-          console.error("[DragAndDrop] Erro ao salvar movimentação no banco:", data.error);
+          // Falhou no banco (conflito de overbooking, sessão expirada, etc.): desfaz a
+          // movimentação otimista e volta a reserva para onde estava.
+          setReservations(prev => prev.map(rr => (rr.id === dropId ? { ...rr, ...prevSnapshot } : rr)));
+          toast.error(data?.error || "Não foi possível mover a reserva. Ela foi mantida no lugar original.");
         }
       })
-      .catch((err) => console.error("[DragAndDrop] Erro na requisição PATCH:", err));
+      .catch((err) => {
+        console.error("[DragAndDrop] Erro na requisição PATCH:", err);
+        setReservations(prev => prev.map(rr => (rr.id === dropId ? { ...rr, ...prevSnapshot } : rr)));
+        toast.error("Erro de conexão ao mover a reserva. Ela foi mantida no lugar original.");
+      })
+      .finally(() => {
+        // Movimentação concluída (com sucesso ou não): ressincroniza com o banco. Quem volta a
+        // liberar o polling é a própria página, ao concluir esse onRefresh (evita um "flash" da
+        // reserva no lugar antigo caso um tick escape na janela entre o PATCH e o refetch).
+        movePendingRef.current = false;
+        if (onRefresh) onRefresh();
+        else notifyInteraction(false);
+      });
   };
 
 
 
-  // Period navigation helpers
-  const handlePrevMonth = () => {
-    if (viewMonth === 0) {
-      setViewMonth(11);
-      setViewYear(prev => prev - 1);
-    } else {
-      setViewMonth(prev => prev - 1);
-    }
-  };
-
-  const handleNextMonth = () => {
-    if (viewMonth === 11) {
-      setViewMonth(0);
-      setViewYear(prev => prev + 1);
-    } else {
-      setViewMonth(prev => prev + 1);
-    }
-  };
+  // Navegação da janela deslizante: ‹ / › passeiam PAN_STEP dias por vez; "Hoje" volta a janela
+  // para o presente (hoje − DAYS_BEHIND ... à frente) e rola até a coluna de hoje.
+  const handlePanBack = () => setWindowShiftDays((v) => v - PAN_STEP);
+  const handlePanForward = () => setWindowShiftDays((v) => v + PAN_STEP);
 
   const handleToday = () => {
-    setViewYear(todayYear);
-    setViewMonth(todayMonth);
+    setWindowShiftDays(0);
     setTargetDateInput(todayStr);
     setTimeout(() => {
       scrollToDate(todayStr);
     }, 100);
   };
-
-  const monthNames = [
-    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
-    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
-  ];
 
   return (
     <div className="space-y-4 select-none">
@@ -1309,20 +1377,20 @@ export default function ReservationGridMap({
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-1">
             <button
-              onClick={handlePrevMonth}
+              onClick={handlePanBack}
               className={`p-2 rounded-lg transition-colors ${
                 theme.isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white" : "bg-slate-100 hover:bg-slate-200 text-slate-700"
               }`}
-              title="Mês Anterior"
+              title={`Voltar ${PAN_STEP} dias na linha do tempo`}
             >
               <ChevronLeft className="w-5 h-5" />
             </button>
             <button
-              onClick={handleNextMonth}
+              onClick={handlePanForward}
               className={`p-2 rounded-lg transition-colors ${
                 theme.isDark ? "bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white" : "bg-slate-100 hover:bg-slate-200 text-slate-700"
               }`}
-              title="Próximo Mês"
+              title={`Avançar ${PAN_STEP} dias na linha do tempo`}
             >
               <ChevronRight className="w-5 h-5" />
             </button>
@@ -1332,10 +1400,19 @@ export default function ReservationGridMap({
             <h1 className={`text-xl font-bold tracking-tight flex items-center gap-2 ${
               theme.isDark ? "text-white" : "text-slate-900"
             }`}>
-              {monthNames[viewMonth]} {viewYear}
+              {(() => {
+                const first = monthDays[0]?.dateObj;
+                const last = monthDays[monthDays.length - 1]?.dateObj;
+                if (!first || !last) return null;
+                const fmt = (o: Date) => `${String(o.getDate()).padStart(2, "0")} ${monthAbbr[o.getMonth()]}`;
+                const sameYear = first.getFullYear() === last.getFullYear();
+                return sameYear
+                  ? `${fmt(first)} — ${fmt(last)} ${last.getFullYear()}`
+                  : `${fmt(first)} ${first.getFullYear()} — ${fmt(last)} ${last.getFullYear()}`;
+              })()}
             </h1>
             <span className={`text-xs ${theme.isDark ? "text-slate-400" : "text-slate-500"}`}>
-              Mapa de reserva dos quartos -
+              Mapa de reserva dos quartos — janela deslizante a partir de {DAYS_BEHIND} dias atrás
             </span>
           </div>
         </div>
@@ -1360,18 +1437,18 @@ export default function ReservationGridMap({
             />
           </div>
 
-          {/* Toggle Filtro -3 Dias */}
+          {/* Toggle: ampliar a janela de dias à frente */}
           <button
-            onClick={() => setHideOlderThan3Days(!hideOlderThan3Days)}
+            onClick={() => setWideWindow(!wideWindow)}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all border ${
-              hideOlderThan3Days
+              wideWindow
                 ? "bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm"
                 : theme.isDark ? "bg-[#1E293B] text-slate-400 border-slate-700 hover:text-slate-200" : "bg-slate-100 text-slate-600 border-slate-200"
             }`}
-            title={hideOlderThan3Days ? "Filtro Ativo: Exibindo apenas a partir de 3 dias antes da data atual (Clique para ver mês completo)" : "Exibindo mês completo (Clique para ocultar datas anteriores a 3 dias atrás)"}
+            title={wideWindow ? "Janela ampliada: mais dias à frente na grade (clique para reduzir)" : "Clique para ampliar a janela e ver mais dias à frente"}
           >
             <Clock className="w-3.5 h-3.5 text-amber-400" />
-            {hideOlderThan3Days ? "-3 dias ativado" : "Mês completo"}
+            {wideWindow ? "Janela ampliada" : "Ampliar janela"}
           </button>
 
           {/* Quick Scroll Days: -7d / +7d */}

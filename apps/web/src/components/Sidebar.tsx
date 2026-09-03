@@ -8,7 +8,6 @@ import {
   BedDouble,
   Users,
   Package,
-  ShoppingBag,
   DollarSign,
   FileText,
   FileBarChart,
@@ -26,7 +25,8 @@ import {
   LayoutDashboard,
   Receipt,
   Wallet,
-  FileCheck2
+  FileCheck2,
+  UtensilsCrossed
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
@@ -88,8 +88,8 @@ export default function Sidebar() {
     { href: "/app/cadastros", label: "Central de Cadastros", icon: FolderKanban, iconColor: isSidebarLight ? "text-indigo-600" : "text-[#8B5CF6]" },
     { href: "/app/governance", label: "Governança & Quartos", icon: BedDouble },
     { href: "/app/stock", label: "Estoque Multi-PDV", icon: Package },
-    { href: "/app/consumption", label: "PDV & Consumo", icon: ShoppingBag },
-    { href: "/app/fiscal", label: "Módulo Fiscal NFSe/NFCe", icon: FileText, iconColor: isSidebarLight ? "text-cyan-600" : "text-[#38BDF8]" },
+    { href: "/app/pdv", label: "PDV Restaurante / Bar", icon: UtensilsCrossed, iconColor: isSidebarLight ? "text-orange-600" : "text-[#FB923C]" },
+    { href: "/app/fiscal", label: "Fiscal & PDV do Restaurante", icon: FileText, iconColor: isSidebarLight ? "text-cyan-600" : "text-[#38BDF8]" },
   ];
 
   return (

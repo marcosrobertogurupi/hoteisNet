@@ -69,11 +69,17 @@ export async function reservationsMapVersion(tenantId: string): Promise<string> 
   }
 }
 
+// IMPORTANTE: `reservations."tenantId"` NÃO é o tenant do hotel — é um rótulo legado fixo ("TNT-01")
+// para todas as reservas (ver RESERVATION_TENANT_ID em lib/mapQueries.ts). O isolamento real por
+// hotel é sempre `reservations.room.tenantId`. Filtrar a versão por `reservations."tenantId" = $1`
+// (o tenant da sessão) casava zero linhas e o carimbo ficava CONGELADO em `resv:0:0` — criar/editar/
+// mover/excluir reserva não mudava o ETag, o polling recebia 304 e a tela continuava mostrando o
+// retrato antigo. Toda contagem/timestamp de reserva abaixo passa por JOIN em "rooms".
 function computeReservationsMapVersion(tenantId: string): Promise<string> {
   return combinedSig(tenantId, [
-    { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "reservations" WHERE "tenantId" = $1` },
+    { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX(r."updatedAt"), 'epoch'), COALESCE(MAX(r."createdAt"), 'epoch')) AS ts FROM "reservations" r JOIN "rooms" rm ON r."roomId" = rm.id WHERE rm."tenantId" = $1` },
     { label: "stay", sql: `SELECT 'stay' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("checkInDate"), 'epoch')) AS ts FROM "stay_checkins" WHERE "tenantId" = $1` },
-    { label: "fnrh", sql: `SELECT 'fnrh' AS lbl, COUNT(*)::int AS c, COALESCE(MAX(fr."createdAt"), 'epoch') AS ts FROM "fnrh_records" fr JOIN "reservations" r ON fr."reservationId" = r.id WHERE r."tenantId" = $1` },
+    { label: "fnrh", sql: `SELECT 'fnrh' AS lbl, COUNT(*)::int AS c, COALESCE(MAX(fr."createdAt"), 'epoch') AS ts FROM "fnrh_records" fr JOIN "reservations" r ON fr."reservationId" = r.id JOIN "rooms" rm ON r."roomId" = rm.id WHERE rm."tenantId" = $1` },
     { label: "room", sql: `SELECT 'room' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "rooms" WHERE "tenantId" = $1` },
   ]);
 }
@@ -92,7 +98,9 @@ function computeRoomsStatusMapVersion(tenantId: string): Promise<string> {
     { label: "room", sql: `SELECT 'room' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "rooms" WHERE "tenantId" = $1` },
     { label: "stay", sql: `SELECT 'stay' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("checkInDate"), 'epoch')) AS ts FROM "stay_checkins" WHERE "tenantId" = $1 AND "isClosed" = false` },
     { label: "msg", sql: `SELECT 'msg' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "whatsapp_messages" WHERE "tenantId" = $1 AND "direction" = 'IN'` },
-    { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX("updatedAt"), 'epoch'), COALESCE(MAX("createdAt"), 'epoch')) AS ts FROM "reservations" WHERE "tenantId" = $1` },
+    // Ver nota em computeReservationsMapVersion: reservas são isoladas por room.tenantId, não por
+    // reservations.tenantId (rótulo legado fixo). JOIN em "rooms" é obrigatório.
+    { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX(r."updatedAt"), 'epoch'), COALESCE(MAX(r."createdAt"), 'epoch')) AS ts FROM "reservations" r JOIN "rooms" rm ON r."roomId" = rm.id WHERE rm."tenantId" = $1` },
   ]);
 }
 

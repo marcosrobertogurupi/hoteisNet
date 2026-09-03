@@ -799,6 +799,8 @@ export interface PdfResumoData {
   checkInDate: string;
   prevCheckOutDate: string;
   calculatedUntil?: string;
+  checkInOperator?: string;
+  checkOutOperator?: string;
   diariasCount?: number;
   companyData?: PdfResumoCompanyData;
   totalDiarias: number;
@@ -846,7 +848,7 @@ export function generateResumoPdfBase64(data: PdfResumoData): string {
   // ── DADOS DO HÓSPEDE ──────────────────────────────────────────────────────
   y += 6;
   doc.setFontSize(8.5);
-  const box1H = 22;
+  const box1H = 28;
   doc.rect(marginL, y, pageWidth - 20, box1H);
   let bY = y + 5;
 
@@ -886,6 +888,17 @@ export function generateResumoPdfBase64(data: PdfResumoData): string {
   doc.text("Calculado até:", marginL + 2, bY);
   doc.setFont("helvetica", "normal");
   doc.text(data.calculatedUntil || "-", marginL + 28, bY);
+
+  bY += 6;
+  doc.setFont("helvetica", "bold");
+  doc.text("Check-in por:", marginL + 2, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text((data.checkInOperator || "-").toUpperCase(), marginL + 26, bY);
+
+  doc.setFont("helvetica", "bold");
+  doc.text("Check-out por:", marginL + 100, bY);
+  doc.setFont("helvetica", "normal");
+  doc.text((data.checkOutOperator || "-").toUpperCase(), marginL + 127, bY);
 
   y += box1H + 4;
 

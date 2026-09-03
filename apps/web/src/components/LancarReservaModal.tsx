@@ -338,9 +338,27 @@ export default function LancarReservaModal({
     }
   }, [isOpen, initialRoomNumber, rooms]);
 
+  // Guarda de "já preenchi este formulário nesta abertura". Sem ela, este efeito re-executava a
+  // cada mudança de `rooms` / `defaultCheckInTime` / `defaultCheckOutTime` (que chegam de fetches
+  // assíncronos DEPOIS que o modal abre) e sobrescrevia datas/valores que o operador já tinha
+  // alterado — resultado: a edição "não salvava" porque o estado era revertido para o original
+  // logo antes do clique em Salvar; e datas futuras (ex.: trocar a saída de ano) pareciam "não
+  // aceitar" porque o campo voltava sozinho ao valor anterior.
+  const populatedKeyRef = useRef<string | null>(null);
+
   // Populate data when editing an existing reservation or opening with specific date
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      populatedKeyRef.current = null;
+      return;
+    }
+
+    const populateKey = editReservationData?.id
+      ? `edit:${editReservationData.id}`
+      : `new:${initialRoomNumber || ""}:${initialCheckInDate || ""}:${initialCheckOutDate || ""}`;
+    if (populatedKeyRef.current === populateKey) return;
+    populatedKeyRef.current = populateKey;
+
     if (editReservationData) {
       setGuestName(editReservationData.guestName || "");
       setDocNumber(editReservationData.cpf || editReservationData.guestCpf || "");
@@ -398,9 +416,10 @@ export default function LancarReservaModal({
       if (initialCheckOutDate) {
         outDate = initialCheckOutDate.split("T")[0];
       } else {
-        const startDateObj = new Date(inDate);
-        const endDateObj = new Date(startDateObj);
-        endDateObj.setDate(startDateObj.getDate() + 2);
+        // Data LOCAL (não `new Date("YYYY-MM-DD")`, que seria UTC e cairia no dia anterior no
+        // fuso de Brasília).
+        const [iy, im, idd] = inDate.split("-").map(Number);
+        const endDateObj = new Date(iy, (im || 1) - 1, (idd || 1) + 2);
         const endMonth = String(endDateObj.getMonth() + 1).padStart(2, "0");
         const endDay = String(endDateObj.getDate()).padStart(2, "0");
         outDate = `${endDateObj.getFullYear()}-${endMonth}-${endDay}`;
@@ -658,7 +677,10 @@ export default function LancarReservaModal({
   function buildDailyRows(): PdfReservaDiariaRow[] {
     const rows: PdfReservaDiariaRow[] = [];
     try {
-      const d1 = new Date(dtChegadaLocal.split("T")[0]);
+      // Interpretar como data LOCAL — `new Date("2026-08-29")` seria meia-noite UTC, que no
+      // fuso de Brasília (UTC-3) cai no dia 28, fazendo a tabela mostrar um dia a menos.
+      const [y1, m1, day1] = dtChegadaLocal.split("T")[0].split("-").map(Number);
+      const d1 = new Date(y1, (m1 || 1) - 1, day1 || 1);
       for (let i = 0; i < nights; i++) {
         const start = new Date(d1);
         start.setDate(d1.getDate() + i);

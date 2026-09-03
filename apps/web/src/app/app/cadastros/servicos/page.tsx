@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Briefcase, Plus, Search, Edit3, Trash2, ArrowLeft, X } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { cadastroUI } from "../_ui";
 
 interface HotelService {
   id: string;
@@ -16,6 +17,9 @@ interface HotelService {
 
 export default function ServicosPage() {
   const { theme } = useTheme();
+  const isDark = theme.isDark;
+  const c = cadastroUI(isDark);
+
   const [services, setServices] = useState<HotelService[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -99,118 +103,181 @@ export default function ServicosPage() {
   };
 
   return (
-    <div className={`min-h-screen p-4 md:p-8 ${theme.bgCard} text-slate-100 transition-colors`}>
+    <div className={c.page(theme.bgApp, theme.textMain)}>
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
-          <Link href="/app/cadastros" className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white transition">
+          <Link href="/app/cadastros" className={c.backLink}>
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
-          <span className="text-xs font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-3 py-1 rounded-full font-bold">
+          <span
+            className={`text-xs font-mono px-3 py-1 rounded-full font-bold border ${
+              isDark ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" : "bg-cyan-50 text-cyan-700 border-cyan-200"
+            }`}
+          >
             Dados Sincronizados
           </span>
         </div>
 
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-slate-900/80 p-6 rounded-3xl border border-slate-800 shadow-xl">
+        <div className={c.headerCard}>
           <div className="flex items-center gap-4">
-            <div className="p-3.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-2xl">
+            <div
+              className={`p-3.5 border rounded-2xl ${
+                isDark ? "bg-cyan-500/10 border-cyan-500/20 text-cyan-400" : "bg-cyan-50 border-cyan-200 text-cyan-600"
+              }`}
+            >
               <Briefcase className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">Cadastro de Serviços Prestados</h1>
-              <p className="text-xs text-slate-400">Lavanderia, traslado, passeios e taxas adicionais. Também consultado pelo Agente de Atendimento.</p>
+              <h1 className={c.title}>Cadastro de Serviços Prestados</h1>
+              <p className={c.subtitle}>
+                Lavanderia, traslado, passeios e taxas adicionais. Também consultado pelo Agente de Atendimento.
+              </p>
             </div>
           </div>
-          <button onClick={openNew} className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-600 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition">
+          <button
+            onClick={openNew}
+            className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-cyan-600/20 transition"
+          >
             <Plus className="w-4 h-4" /> Novo Serviço
           </button>
         </div>
 
-        {error && <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs">{error}</div>}
+        {error && <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-500 text-xs">{error}</div>}
 
-        <div className="flex items-center justify-between gap-4 bg-slate-900/50 p-4 rounded-2xl border border-slate-800">
+        <div className={c.toolbar}>
           <div className="relative w-full md:w-96">
-            <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-500" />
+            <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
             <input
               type="text"
               placeholder="Buscar serviço por descrição ou código..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-500"
+              className={`${c.input} pl-10 pr-4 py-2`}
             />
           </div>
-          <span className="text-xs font-mono text-slate-400">Total: <strong className="text-white">{services.length}</strong></span>
+          <span className={`text-xs font-mono ${c.muted}`}>
+            Total: <strong className={c.strong}>{services.length}</strong>
+          </span>
         </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 uppercase tracking-wider">
-              <tr>
-                <th className="px-5 py-3.5">Cód / Serviço</th>
-                <th className="px-5 py-3.5">Categoria / Tipo</th>
-                <th className="px-5 py-3.5">Valor Unitário</th>
-                <th className="px-5 py-3.5 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {isLoading ? (
-                <tr><td colSpan={4} className="px-5 py-6 text-center text-slate-500">Carregando...</td></tr>
-              ) : filtered.length === 0 ? (
-                <tr><td colSpan={4} className="px-5 py-6 text-center text-slate-500">Nenhum serviço cadastrado ainda.</td></tr>
-              ) : (
-                filtered.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-800/40 transition">
-                    <td className="px-5 py-4">
-                      <span className="font-bold text-white text-sm block">{s.description}</span>
-                      {s.code && <span className="font-mono text-[10px] text-slate-400">Cód: {s.code}</span>}
-                    </td>
-                    <td className="px-5 py-4 text-slate-300 font-medium">{s.category || "—"}</td>
-                    <td className="px-5 py-4 font-mono font-bold text-cyan-400">R$ {Number(s.price).toFixed(2)}</td>
-                    <td className="px-5 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => openEdit(s)} className="p-2 rounded-xl bg-slate-800 text-cyan-400 hover:bg-cyan-600 hover:text-white transition"><Edit3 className="w-4 h-4" /></button>
-                        <button onClick={() => handleDelete(s.id)} className="p-2 rounded-xl bg-slate-800 text-rose-400 hover:bg-rose-500 hover:text-white transition"><Trash2 className="w-4 h-4" /></button>
-                      </div>
+        <div className={c.tableCard}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className={c.thead}>
+                <tr>
+                  <th className="px-5 py-3.5">Cód / Serviço</th>
+                  <th className="px-5 py-3.5">Categoria / Tipo</th>
+                  <th className="px-5 py-3.5">Valor Unitário</th>
+                  <th className="px-5 py-3.5 text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody className={`divide-y ${c.tdivide}`}>
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={4} className={`px-5 py-6 text-center ${c.empty}`}>
+                      Carregando...
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className={`px-5 py-6 text-center ${c.empty}`}>
+                      Nenhum serviço cadastrado ainda.
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((s) => (
+                    <tr key={s.id} className={`transition ${c.rowHover}`}>
+                      <td className="px-5 py-4">
+                        <span className={`font-bold text-sm block ${c.strong}`}>{s.description}</span>
+                        {s.code && <span className={`font-mono text-[10px] ${c.muted}`}>Cód: {s.code}</span>}
+                      </td>
+                      <td className={`px-5 py-4 font-medium ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                        {s.category || "—"}
+                      </td>
+                      <td className="px-5 py-4 font-mono font-bold text-cyan-600 dark:text-cyan-400">
+                        R$ {Number(s.price).toFixed(2)}
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => openEdit(s)}
+                            className={`p-2 rounded-xl transition ${
+                              isDark ? "bg-slate-800 text-cyan-400 hover:bg-cyan-600 hover:text-white" : "bg-slate-100 text-cyan-700 hover:bg-cyan-600 hover:text-white"
+                            }`}
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(s.id)}
+                            className={`p-2 rounded-xl transition ${
+                              isDark ? "bg-slate-800 text-rose-400 hover:bg-rose-600 hover:text-white" : "bg-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white"
+                            }`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
       {showModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-base font-semibold text-white flex items-center gap-2">
-                <Briefcase className="w-4 h-4 text-cyan-400" /> {editingId ? "Editar Serviço" : "Novo Serviço"}
+        <div className={c.modalBackdrop}>
+          <div className={`${c.modalCard} max-w-md`}>
+            <div className={`p-6 border-b flex items-center justify-between ${c.modalDivider}`}>
+              <h3 className="text-base font-semibold flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-cyan-500" /> {editingId ? "Editar Serviço" : "Novo Serviço"}
               </h3>
-              <button onClick={() => setShowModal(false)}><X className="w-4 h-4 text-slate-400" /></button>
+              <button onClick={() => setShowModal(false)} className={c.muted}>
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div className="space-y-3 text-xs">
+            <div className="p-6 space-y-3 text-xs">
               <div className="space-y-1">
-                <label className="font-semibold text-slate-300">Descrição</label>
-                <input value={description} onChange={(e) => setDescription(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+                <label className={c.label}>Descrição</label>
+                <input value={description} onChange={(e) => setDescription(e.target.value)} className={c.field} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-semibold text-slate-300">Código</label>
-                  <input value={code} onChange={(e) => setCode(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+                  <label className={c.label}>Código</label>
+                  <input value={code} onChange={(e) => setCode(e.target.value)} className={c.field} />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-semibold text-slate-300">Categoria</label>
-                  <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Transporte, Lavanderia..." className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white" />
+                  <label className={c.label}>Categoria</label>
+                  <input
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    placeholder="Transporte, Lavanderia..."
+                    className={c.field}
+                  />
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="font-semibold text-slate-300">Valor (R$)</label>
-                <input type="number" min={0} step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono" />
+                <label className={c.label}>Valor (R$)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  className={`${c.field} font-mono`}
+                />
               </div>
             </div>
-            <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
-              <button onClick={() => setShowModal(false)} className="px-4 py-2 bg-slate-800 text-slate-300 text-sm rounded-lg hover:bg-slate-700">Cancelar</button>
-              <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-cyan-500 text-slate-950 text-sm rounded-lg font-bold hover:bg-cyan-600 disabled:opacity-50">
+            <div className={`px-6 pb-6 flex justify-end gap-3 pt-3 border-t ${c.modalDivider}`}>
+              <button onClick={() => setShowModal(false)} className={c.ghostBtn}>
+                Cancelar
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-4 py-2 bg-cyan-600 text-white text-sm rounded-lg font-bold hover:bg-cyan-700 disabled:opacity-50"
+              >
                 {saving ? "Salvando..." : "Salvar"}
               </button>
             </div>

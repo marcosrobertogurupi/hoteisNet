@@ -110,10 +110,10 @@ export default function LancarConsumoQuartoModal({
     setSuggestions([]);
     setShowSuggestions(false);
 
-    fetch("/api/stock/pos-locations")
+    fetch("/api/cadastros/pdv")
       .then((r) => r.json())
       .then((data) => {
-        if (data.success) setPosLocations(data.posLocations);
+        if (data.success) setPosLocations((data.posLocations || []).filter((x: any) => x.active !== false));
       })
       .catch(() => toast.error("Não foi possível carregar os Pontos de Venda (PDV)."));
 

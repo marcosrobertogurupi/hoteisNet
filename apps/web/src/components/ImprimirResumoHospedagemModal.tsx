@@ -17,6 +17,8 @@ export interface ResumoRoomData {
   phone?: string;
   checkInDate: string; // e.g. "23/01/2026 21:18:49"
   prevCheckOutDate: string; // e.g. "24/01/2026 14:00:00"
+  checkInOperator?: string;
+  checkOutOperator?: string;
   calculatedUntil?: string; // e.g. "11/08/2026 16:37:11"
   diariasCount?: number;
   totalDiarias?: number;
@@ -166,6 +168,17 @@ export const ImprimirResumoHospedagemModal: React.FC<ImprimirResumoHospedagemMod
               <div>
                 <span className="font-semibold text-slate-600">Calculado ate:</span>{" "}
                 <span>{roomData.calculatedUntil || "11/08/2026 16:37:11"}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div>
+                <span className="font-semibold text-slate-600">Check-in feito por:</span>{" "}
+                <span>{roomData.checkInOperator || "-"}</span>
+              </div>
+              <div>
+                <span className="font-semibold text-slate-600">Check-out feito por:</span>{" "}
+                <span>{roomData.checkOutOperator || "-"}</span>
               </div>
             </div>
 

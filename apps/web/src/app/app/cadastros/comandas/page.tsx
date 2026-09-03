@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Receipt, Plus, Edit3, Trash2, ArrowLeft, X, Check } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { cadastroUI } from "../_ui";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useToast } from "@/context/ToastContext";
 import LoadingOverlay from "@/components/LoadingOverlay";
@@ -14,12 +15,15 @@ interface MesaComanda {
   description: string | null;
   type: "MESA" | "COMANDA_AVULSA";
   status: "LIVRE" | "ABERTA";
+  active: boolean;
 }
 
-const EMPTY_FORM = { id: "", numero: "", descricao: "", tipo: "MESA" as MesaComanda["type"], status: "LIVRE" as MesaComanda["status"] };
+const EMPTY_FORM = { id: "", numero: "", descricao: "", tipo: "MESA" as MesaComanda["type"], status: "LIVRE" };
 
 export default function ComandasPage() {
   const { theme } = useTheme();
+  const isDark = theme.isDark;
+  const c = cadastroUI(isDark);
   const confirmDialog = useConfirm();
   const toast = useToast();
 
@@ -32,7 +36,7 @@ export default function ComandasPage() {
     try {
       const res = await fetch("/api/cadastros/comandas");
       const data = await res.json();
-      if (data?.success && Array.isArray(data.tables)) setMesas(data.tables);
+      if (data?.success && Array.isArray(data.items)) setMesas(data.items);
     } catch (err) {
       console.warn("[CadastroComandas] Erro ao buscar mesas/comandas:", err);
     } finally {
@@ -50,7 +54,13 @@ export default function ComandasPage() {
   };
 
   const handleOpenEdit = (m: MesaComanda) => {
-    setForm({ id: m.id, numero: m.number, descricao: m.description || "", tipo: m.type, status: m.status });
+    setForm({
+      id: m.id,
+      numero: m.number,
+      descricao: m.description || "",
+      tipo: m.type,
+      status: m.type === "COMANDA_AVULSA" ? (m.active ? "ATIVA" : "INATIVA") : m.status,
+    });
     setIsModalOpen(true);
   };
 
@@ -96,11 +106,11 @@ export default function ComandasPage() {
   };
 
   return (
-    <div className={`min-h-screen p-4 md:p-8 ${theme.bgCard} text-slate-100 transition-colors`}>
+    <div className={`min-h-screen p-4 md:p-8 ${theme.bgApp} ${theme.textMain} transition-colors`}>
       <LoadingOverlay show={isLoading} message="Buscando mesas e comandas..." submessage="Estamos carregando o cadastro de mesas." />
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
-          <Link href="/app/cadastros" className="inline-flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white transition">
+          <Link href="/app/cadastros" className={c.backLink}>
             <ArrowLeft className="w-4 h-4" /> Voltar para a Central de Cadastros
           </Link>
           <span className="text-xs font-mono bg-pink-500/10 text-pink-400 border border-pink-500/20 px-3 py-1 rounded-full font-bold">
@@ -108,24 +118,24 @@ export default function ComandasPage() {
           </span>
         </div>
 
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-slate-900/80 p-6 rounded-3xl border border-slate-800 shadow-xl">
+        <div className={c.headerCard}>
           <div className="flex items-center gap-4">
             <div className="p-3.5 bg-pink-500/10 border border-pink-500/20 text-pink-400 rounded-2xl">
               <Receipt className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">Cadastro de Mesas & Comandas</h1>
-              <p className="text-xs text-slate-400">Restaurante, bar da piscina e comandas avulsas (SaaS Multi-tenant).</p>
+              <h1 className={c.title}>Cadastro de Mesas & Comandas</h1>
+              <p className={c.subtitle}>Restaurante, bar da piscina e comandas avulsas (SaaS Multi-tenant).</p>
             </div>
           </div>
-          <button onClick={handleOpenAdd} className="px-5 py-2.5 bg-pink-500 hover:bg-pink-600 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-pink-500/20 transition">
+          <button onClick={handleOpenAdd} className="px-5 py-2.5 bg-pink-600 hover:bg-pink-700 text-white rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-pink-600/20 transition">
             <Plus className="w-4 h-4" /> Nova Mesa / Comanda
           </button>
         </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
+        <div className={c.tableCard}>
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-950/80 text-slate-400 font-mono border-b border-slate-800 uppercase tracking-wider">
+            <thead className={c.thead}>
               <tr>
                 <th className="px-5 py-3.5">Número / Identificador</th>
                 <th className="px-5 py-3.5">Descrição / Localização</th>
@@ -134,25 +144,33 @@ export default function ComandasPage() {
                 <th className="px-5 py-3.5 text-right">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60">
+            <tbody className={`divide-y ${c.tdivide}`}>
               {mesas.map((m) => (
-                <tr key={m.id} className="hover:bg-slate-800/40 transition">
-                  <td className="px-5 py-4 font-mono font-bold text-white text-base">
+                <tr key={m.id} className={`transition ${c.rowHover}`}>
+                  <td className={`px-5 py-4 font-mono font-bold  text-base ${c.strong}`}>
                     Nº {m.number}
                   </td>
-                  <td className="px-5 py-4 text-slate-300 font-medium">{m.description || "-"}</td>
-                  <td className="px-5 py-4 font-mono text-slate-400">{m.type}</td>
+                  <td className={`px-5 py-4 font-medium ${isDark ? "text-slate-200" : "text-slate-700"}`}>{m.description || "-"}</td>
+                  <td className={`px-5 py-4 font-mono ${c.muted}`}>{m.type === "COMANDA_AVULSA" ? "COMANDA" : "MESA"}</td>
                   <td className="px-5 py-4">
-                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      m.status === "LIVRE" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"
-                    }`}>
-                      {m.status}
-                    </span>
+                    {m.type === "COMANDA_AVULSA" ? (
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        m.active ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-500/20 text-slate-400"
+                      }`}>
+                        {m.active ? "ATIVA" : "INATIVA"}
+                      </span>
+                    ) : (
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        m.status === "LIVRE" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"
+                      }`}>
+                        {m.status}
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      <button onClick={() => handleOpenEdit(m)} className="p-2 rounded-xl bg-slate-800 text-pink-400 hover:bg-pink-600 hover:text-white transition"><Edit3 className="w-4 h-4" /></button>
-                      <button onClick={() => handleDelete(m.id)} className="p-2 rounded-xl bg-slate-800 text-rose-400 hover:bg-rose-500 hover:text-white transition"><Trash2 className="w-4 h-4" /></button>
+                      <button onClick={() => handleOpenEdit(m)} className={`p-2 rounded-xl transition ${isDark ? "bg-slate-800 text-pink-400 hover:bg-pink-600 hover:text-white" : "bg-slate-100 text-pink-700 hover:bg-pink-600 hover:text-white"}`}><Edit3 className="w-4 h-4" /></button>
+                      <button onClick={() => handleDelete(m.id)} className={`p-2 rounded-xl transition ${isDark ? "bg-slate-800 text-rose-400 hover:bg-rose-600 hover:text-white" : "bg-slate-100 text-rose-700 hover:bg-rose-600 hover:text-white"}`}><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </td>
                 </tr>
@@ -160,7 +178,7 @@ export default function ComandasPage() {
 
               {mesas.length === 0 && !isLoading && (
                 <tr>
-                  <td colSpan={5} className="px-5 py-12 text-center text-slate-400">Nenhuma mesa/comanda cadastrada.</td>
+                  <td colSpan={5} className={`px-5 py-12 text-center ${c.empty}`}>Nenhuma mesa/comanda cadastrada.</td>
                 </tr>
               )}
             </tbody>
@@ -169,42 +187,64 @@ export default function ComandasPage() {
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="border border-slate-800 bg-slate-900 text-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden">
-            <div className="p-6 border-b border-slate-800 flex items-center justify-between">
+        <div className={c.modalBackdrop}>
+          <div className={`${c.modalCard} max-w-lg`}>
+            <div className={`p-6 border-b flex items-center justify-between ${c.modalDivider}`}>
               <h2 className="text-lg font-bold">{form.id ? "Editar Mesa/Comanda" : "Nova Mesa / Comanda"}</h2>
-              <button onClick={() => setIsModalOpen(false)} className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"><X className="w-5 h-5" /></button>
+              <button onClick={() => setIsModalOpen(false)} className={`p-2 rounded-xl transition ${isDark ? "text-slate-400 hover:text-white hover:bg-slate-800" : "text-slate-500 hover:text-slate-900 hover:bg-slate-200"}`}><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">Número <span className="text-rose-500">*</span></label>
-                  <input type="text" required value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-pink-500" />
+                  <label className={c.label}>Número <span className="text-rose-500">*</span></label>
+                  <input type="text" required value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} className={c.field} />
                 </div>
                 <div className="space-y-1.5 col-span-2">
-                  <label className="text-xs font-semibold text-slate-300">Descrição / Localização</label>
-                  <input type="text" value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-pink-500" />
+                  <label className={c.label}>Descrição / Localização</label>
+                  <input type="text" value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} className={c.field} />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">Tipo</label>
-                  <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value as MesaComanda["type"] })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-pink-500">
+                  <label className={c.label}>Tipo</label>
+                  <select
+                    value={form.tipo}
+                    disabled={!!form.id}
+                    onChange={(e) => {
+                      const tipo = e.target.value as MesaComanda["type"];
+                      setForm({ ...form, tipo, status: tipo === "COMANDA_AVULSA" ? "ATIVA" : "LIVRE" });
+                    }}
+                    className={c.field}
+                  >
                     <option value="MESA">MESA</option>
-                    <option value="COMANDA_AVULSA">COMANDA AVULSA</option>
+                    <option value="COMANDA_AVULSA">COMANDA</option>
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">Status</label>
-                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as MesaComanda["status"] })} className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-pink-500">
-                    <option value="LIVRE">LIVRE</option>
-                    <option value="ABERTA">ABERTA</option>
+                  <label className={c.label}>Status</label>
+                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className={c.field}>
+                    {form.tipo === "COMANDA_AVULSA" ? (
+                      <>
+                        <option value="ATIVA">ATIVA</option>
+                        <option value="INATIVA">INATIVA</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="LIVRE">LIVRE</option>
+                        <option value="ABERTA">ABERTA</option>
+                      </>
+                    )}
                   </select>
                 </div>
               </div>
+              {form.tipo === "COMANDA_AVULSA" && !form.id && (
+                <p className={`text-[11px] ${c.subtitle}`}>
+                  Dica: digite um intervalo como <span className="font-mono font-bold">1-50</span> para criar várias comandas de uma vez.
+                </p>
+              )}
               <div className="pt-2 flex items-center justify-end gap-3">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-5 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-xs font-semibold transition">Cancelar</button>
-                <button type="submit" className="px-6 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-pink-500/20 transition"><Check className="w-4 h-4" /> Salvar</button>
+                <button type="button" onClick={() => setIsModalOpen(false)} className={c.ghostBtn}>Cancelar</button>
+                <button type="submit" className="px-6 py-2.5 rounded-xl bg-pink-600 hover:bg-pink-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-pink-600/20 transition"><Check className="w-4 h-4" /> Salvar</button>
               </div>
             </form>
           </div>

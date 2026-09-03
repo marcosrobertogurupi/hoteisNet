@@ -6,13 +6,16 @@ import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib
 const ADMIN_ONLY_PREFIXES = ["/app/settings", "/app/cadastros/usuarios", "/app/fiscal"];
 
 // Únicas rotas de API que não exigem sessão — autenticadas por outro meio (token de URL,
-// segredo de webhook) ou são o próprio endpoint de login. Ver CLAUDE.md, regra 1.
+// segredo de webhook, token de caixa) ou são o próprio endpoint de login. Ver CLAUDE.md, regra 1.
 const PUBLIC_API_PREFIXES = [
   "/api/auth/login",
   "/api/housekeeping/login",
   "/api/housekeeping/logout",
   "/api/uazapi/webhook/",
   "/api/public/",
+  // Agente fiscal do PDV do restaurante: autentica com o token do caixa (Bearer), verificado
+  // em lib/agentAuth.ts — cada rota /api/pdv/agente/* faz a própria checagem.
+  "/api/pdv/agente/",
 ];
 
 // Rotas de governança (app mobile da housekeeper) usam um cookie de sessão próprio,
