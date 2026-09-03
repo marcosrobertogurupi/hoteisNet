@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
         passwordHash: true,
         failedLoginAttempts: true,
         lockedUntil: true,
+        tenant: { select: { theme: true } },
       },
     });
     const matches = candidates.filter((c) => onlyDigits(c.phone || "") === digits);
@@ -92,6 +93,7 @@ export async function POST(req: NextRequest) {
     const res = NextResponse.json({
       success: true,
       employee: { id: employee.id, name: employee.name, phone: employee.phone },
+      theme: employee.tenant?.theme || "dark",
     });
 
     res.cookies.set(STOCK_COUNT_SESSION_COOKIE, token, {

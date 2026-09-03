@@ -6,6 +6,7 @@ import type { TaxRegime } from "@prisma/client";
 const TAX_REGIMES: TaxRegime[] = ["SIMPLES_NACIONAL", "LUCRO_PRESUMIDO", "LUCRO_REAL", "MEI"];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const EARLY_ARRIVAL_CHARGES = ["EXTRA_NIGHT", "HALF_NIGHT", "FIXED_FEE"] as const;
+const THEMES = ["dark", "light-white", "light-blue"] as const;
 
 // GET /api/tenant/settings — configurações do tenant da sessão, incluindo os "Dados do Hotel"
 // (equivalente à tabela Hotel.fic do sistema legado WinDev — ver memória
@@ -40,6 +41,7 @@ export async function GET(req: NextRequest) {
         interestRate: true,
         logoUrl: true,
         // Operacionais
+        theme: true,
         dailyRolloverTime: true,
         allowNegativeStock: true,
         breakfastHours: true,
@@ -64,6 +66,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       settings: {
+        theme: tenant.theme,
         name: tenant.name,
         tradeName: tenant.tradeName,
         cnpj: tenant.cnpj,
@@ -117,6 +120,14 @@ export async function PATCH(req: NextRequest) {
 
     const body = await req.json();
     const data: Record<string, any> = {};
+
+    // Tema de cores do hotel — vale para todos os terminais e para os apps satélite.
+    if (body.theme !== undefined) {
+      if (!THEMES.includes(body.theme)) {
+        return NextResponse.json({ success: false, error: "Tema inválido." }, { status: 400 });
+      }
+      data.theme = body.theme;
+    }
 
     // --- Dados do Hotel (editáveis pelo assinante) ---
     const strField = (key: string, max: number) => {

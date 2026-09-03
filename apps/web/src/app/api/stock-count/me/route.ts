@@ -13,13 +13,17 @@ export async function GET(req: NextRequest) {
 
     const employee = await prisma.employee.findFirst({
       where: { id: session.employeeId, tenantId: session.tenantId, active: true, passwordHash: { not: null } },
-      select: { id: true, name: true, phone: true },
+      select: { id: true, name: true, phone: true, tenant: { select: { theme: true } } },
     });
     if (!employee) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
 
-    return NextResponse.json({ success: true, employee });
+    return NextResponse.json({
+      success: true,
+      employee: { id: employee.id, name: employee.name, phone: employee.phone },
+      theme: employee.tenant?.theme || "dark",
+    });
   } catch (error: any) {
     console.error("[GET /api/stock-count/me] Erro:", error);
     return NextResponse.json({ success: false, error: error.message || "Erro." }, { status: 500 });

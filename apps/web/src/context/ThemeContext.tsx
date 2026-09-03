@@ -79,7 +79,9 @@ export const THEMES: Record<ThemeId, ThemeConfig> = {
 export interface ThemeContextType {
   currentTheme: ThemeId;
   theme: ThemeConfig;
-  setTheme: (themeId: ThemeId) => void;
+  // persist=false: só aplica localmente (usado pelos apps satélite, que recebem o tema do
+  // próprio /me e não têm sessão de admin para gravar em Configurações).
+  setTheme: (themeId: ThemeId, persist?: boolean) => void;
   hotelLogo: string | null;
   setHotelLogo: (logoUrl: string | null) => void;
   hotelName: string;
@@ -266,6 +268,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       .then((data) => {
         if (cancelled || !data?.success || !data.settings) return;
         const s = data.settings;
+        // O tema é autoritativo no banco (Tenant.theme) — o localStorage é só cache offline.
+        // Assim a escolha do assinante segue entre terminais (antes ficava presa ao navegador).
+        if (s.theme && THEMES[s.theme as ThemeId]) {
+          setCurrentThemeState(s.theme);
+          try {
+            localStorage.setItem("hoteisnet_theme", s.theme);
+            if (typeof document !== "undefined") document.documentElement.setAttribute("data-theme", s.theme);
+          } catch {}
+        }
         if (s.standardCheckInTime) {
           setDefaultCheckInTimeState(s.standardCheckInTime);
           try { localStorage.setItem("hoteisnet_checkin_time", s.standardCheckInTime); } catch {}
@@ -285,13 +296,23 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
-  const setTheme = (themeId: ThemeId) => {
-    if (THEMES[themeId]) {
-      setCurrentThemeState(themeId);
+  const setTheme = (themeId: ThemeId, persist = true) => {
+    if (!THEMES[themeId]) return;
+    setCurrentThemeState(themeId);
+    try {
       localStorage.setItem("hoteisnet_theme", themeId);
       if (typeof document !== "undefined") {
         document.documentElement.setAttribute("data-theme", themeId);
       }
+    } catch {}
+    if (persist) {
+      // Persiste no hotel (Tenant.theme) — só admin; a rota ignora quem não for. Falha de rede
+      // não desfaz a troca local (o localStorage segura até a próxima sincronização).
+      fetch("/api/tenant/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ theme: themeId }),
+      }).catch(() => {});
     }
   };
 

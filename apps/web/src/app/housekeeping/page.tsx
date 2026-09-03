@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { usePolling } from "@/lib/usePolling";
+import { useTheme } from "@/context/ThemeContext";
 import {
   Sparkles,
   Phone,
@@ -44,6 +45,7 @@ interface FloorGroup {
 
 export default function HousekeepingAppPage() {
   const router = useRouter();
+  const { setTheme } = useTheme();
 
   const [authChecked, setAuthChecked] = useState(false);
   const [housekeeper, setHousekeeper] = useState<HousekeeperInfo | null>(null);
@@ -67,12 +69,13 @@ export default function HousekeepingAppPage() {
       } else {
         setHousekeeper(null);
       }
+      if (data?.theme) setTheme(data.theme, false); // tema do hotel, sem tentar gravar (não é admin)
     } catch {
       setHousekeeper(null);
     } finally {
       setAuthChecked(true);
     }
-  }, []);
+  }, [setTheme]);
 
   // `silent` evita o spinner do botão "Atualizar" nas atualizações automáticas em segundo plano —
   // só o clique manual mostra o indicador de carregando.
@@ -127,6 +130,7 @@ export default function HousekeepingAppPage() {
         return;
       }
       setHousekeeper(data.housekeeper);
+      if (data.theme) setTheme(data.theme, false);
       setPassword("");
     } catch (err: any) {
       setLoginError(err.message || "Erro de rede ao entrar.");

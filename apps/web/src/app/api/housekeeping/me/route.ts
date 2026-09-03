@@ -12,12 +12,28 @@ export async function GET(req: NextRequest) {
 
   const housekeeper = await prisma.housekeeper.findUnique({
     where: { id: session.housekeeperId },
-    select: { id: true, name: true, whatsapp: true, photoUrl: true, active: true },
+    select: {
+      id: true,
+      name: true,
+      whatsapp: true,
+      photoUrl: true,
+      active: true,
+      tenant: { select: { theme: true } },
+    },
   });
 
   if (!housekeeper || !housekeeper.active) {
     return NextResponse.json({ success: false, error: "Governanta não encontrada ou inativa." }, { status: 401 });
   }
 
-  return NextResponse.json({ success: true, housekeeper });
+  return NextResponse.json({
+    success: true,
+    housekeeper: {
+      id: housekeeper.id,
+      name: housekeeper.name,
+      whatsapp: housekeeper.whatsapp,
+      photoUrl: housekeeper.photoUrl,
+    },
+    theme: housekeeper.tenant?.theme || "dark",
+  });
 }

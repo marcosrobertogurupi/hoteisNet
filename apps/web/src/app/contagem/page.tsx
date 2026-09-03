@@ -18,6 +18,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import PwaInstallButton from "@/components/contagem/PwaInstallButton";
+import { useTheme } from "@/context/ThemeContext";
 
 interface Me {
   id: string;
@@ -52,6 +53,7 @@ const STATUS_LABEL: Record<CountRow["status"], { text: string; cls: string }> = 
 
 export default function ContagemHomePage() {
   const router = useRouter();
+  const { setTheme } = useTheme();
 
   const [authChecked, setAuthChecked] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
@@ -77,12 +79,13 @@ export default function ContagemHomePage() {
       const res = await fetch("/api/stock-count/me");
       const data = await res.json();
       setMe(data.success ? data.employee : null);
+      if (data?.theme) setTheme(data.theme, false); // tema do hotel, sem tentar gravar (não é admin)
     } catch {
       setMe(null);
     } finally {
       setAuthChecked(true);
     }
-  }, []);
+  }, [setTheme]);
 
   const loadCounts = useCallback(async () => {
     setLoading(true);
@@ -143,6 +146,7 @@ export default function ContagemHomePage() {
         return;
       }
       setMe(data.employee);
+      if (data.theme) setTheme(data.theme, false);
       setPassword("");
     } catch (err: any) {
       setLoginError(err.message || "Erro de rede ao entrar.");

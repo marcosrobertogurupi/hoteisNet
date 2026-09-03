@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
 
     const housekeeper = await prisma.housekeeper.findFirst({
       where: { whatsapp: whatsapp.trim() },
+      include: { tenant: { select: { theme: true } } },
     });
 
     const validPassword = await verifyPasswordTimingSafe(password, housekeeper?.passwordHash);
@@ -73,6 +74,7 @@ export async function POST(req: NextRequest) {
     const res = NextResponse.json({
       success: true,
       housekeeper: { id: housekeeper.id, name: housekeeper.name, whatsapp: housekeeper.whatsapp, photoUrl: housekeeper.photoUrl },
+      theme: housekeeper.tenant?.theme || "dark",
     });
 
     res.cookies.set(HOUSEKEEPER_SESSION_COOKIE, token, {

@@ -99,6 +99,10 @@ model Tenant {
   // Configurável só pelo admin em Configurações. Serve também para troca rápida de operador no terminal
   // (quem autenticar na tela de bloqueio assume a sessão). Ver components/InactivityLock.tsx.
   screenLockMinutes          Int                     @default(0)
+  // Tema de cores escolhido pelo assinante em Configurações ("dark" | "light-white" | "light-blue" —
+  // ver THEMES em apps/web/src/context/ThemeContext.tsx). Antes vivia só no localStorage do navegador;
+  // agora é do hotel, para seguir entre terminais e valer também nos apps satélite (contagem, governança).
+  theme                      String                  @default("dark")
   // Horários padrão da propriedade (Configurações → "Horários Padrão de Check-in e Check-out").
   // Antes viviam só no localStorage do navegador; agora persistidos no Tenant porque o backend
   // precisa deles para validar chegada antecipada dentro da transação do check-in (o cliente
