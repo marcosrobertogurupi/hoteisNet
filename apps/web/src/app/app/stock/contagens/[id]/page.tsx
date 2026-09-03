@@ -13,6 +13,10 @@ import {
   CheckCircle2,
   Warehouse,
   Store,
+  Search,
+  Link2,
+  PackagePlus,
+  X,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
@@ -71,6 +75,17 @@ export default function ReconcilePage({ params }: { params: Promise<{ id: string
 
   const [targets, setTargets] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+
+  // Resolver um "código sem cadastro": vincular a um produto existente ou cadastrar um novo.
+  const [resolving, setResolving] = useState<SemCadastro | null>(null);
+  const [resolveTab, setResolveTab] = useState<"link" | "new">("link");
+  const [linkQuery, setLinkQuery] = useState("");
+  const [linkHits, setLinkHits] = useState<{ id: string; name: string }[]>([]);
+  const [linkSearching, setLinkSearching] = useState(false);
+  const [newForm, setNewForm] = useState({ nome: "", grupoId: "", unidade: "UN", precoCusto: "", precoVenda: "" });
+  const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
+  const [resolveBusy, setResolveBusy] = useState(false);
+  const [resolveErr, setResolveErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -179,6 +194,78 @@ export default function ReconcilePage({ params }: { params: Promise<{ id: string
       toast.error("Falha de comunicação.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  // ——— resolver "código sem cadastro" ———
+  const openResolve = (s: SemCadastro) => {
+    setResolving(s);
+    setResolveTab("link");
+    setResolveErr(null);
+    setLinkQuery("");
+    setLinkHits([]);
+    setNewForm({ nome: "", grupoId: groups[0]?.id ?? "", unidade: "UN", precoCusto: "", precoVenda: "" });
+    if (groups.length === 0) {
+      fetch("/api/cadastros/grupos?type=PRODUTO&active=1")
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.success) {
+            setGroups(d.groups || []);
+            setNewForm((f) => ({ ...f, grupoId: f.grupoId || d.groups?.[0]?.id || "" }));
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    if (!resolving || resolveTab !== "link") return;
+    const term = linkQuery.trim();
+    if (term.length < 2) {
+      setLinkHits([]);
+      return;
+    }
+    setLinkSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/stock/lookup?code=${encodeURIComponent(term)}`);
+        const data = await res.json();
+        setLinkHits(data.success ? (data.products || []).map((p: any) => ({ id: p.id, name: p.name })) : []);
+      } catch {
+        setLinkHits([]);
+      } finally {
+        setLinkSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [linkQuery, resolving, resolveTab]);
+
+  const submitResolve = async (payload: { productId: string } | { novo: typeof newForm }) => {
+    if (!resolving) return;
+    setResolveBusy(true);
+    setResolveErr(null);
+    try {
+      const res = await fetch(`/api/stock/counts/${id}/resolve-item`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: resolving.id, ...payload }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setResolveErr(data.error || "Não foi possível resolver o código.");
+        return;
+      }
+      toast.success(
+        data.merged
+          ? `Código somado ao produto "${data.productName}".`
+          : `Código vinculado a "${data.productName}".`
+      );
+      setResolving(null);
+      await load();
+    } catch {
+      setResolveErr("Falha de comunicação.");
+    } finally {
+      setResolveBusy(false);
     }
   };
 
@@ -364,15 +451,19 @@ export default function ReconcilePage({ params }: { params: Promise<{ id: string
             {semCadastro.map((s) => (
               <div key={s.id} className={`flex items-center justify-between gap-3 px-4 py-3 ${c.tdivide}`}>
                 <div className="min-w-0">
-                  <p className={`text-sm font-semibold ${c.strong}`}>{s.codigoBarras || s.nome}</p>
-                  <p className={`text-[11px] ${c.empty}`}>Contado: {s.contado} · {s.observacao || "—"}</p>
+                  <p className={`text-sm font-semibold font-mono ${c.strong}`}>{s.codigoBarras || s.nome}</p>
+                  <p className={`text-[11px] ${c.empty}`}>Contado: {s.contado} un.</p>
                 </div>
-                <Link
-                  href={`/app/cadastros/produtos?novo=${encodeURIComponent(s.codigoBarras || "")}`}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 shrink-0"
-                >
-                  Cadastrar produto
-                </Link>
+                {canEdit ? (
+                  <button
+                    onClick={() => openResolve(s)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 shrink-0 inline-flex items-center gap-1.5"
+                  >
+                    <Link2 className="w-3.5 h-3.5" /> Vincular / cadastrar
+                  </button>
+                ) : (
+                  <span className={`text-[11px] ${c.empty} shrink-0`}>—</span>
+                )}
               </div>
             ))}
           </div>
@@ -406,6 +497,149 @@ export default function ReconcilePage({ params }: { params: Promise<{ id: string
               >
                 <CheckCircle2 className="w-4 h-4" /> Aplicar e concluir
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sheet: resolver código sem cadastro */}
+      {resolving && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className={`${c.modalCard} max-w-md`}>
+            <div className={`p-5 border-b flex items-center justify-between ${c.modalDivider}`}>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold">Código sem cadastro</h3>
+                <p className={`text-xs font-mono ${c.muted} truncate`}>
+                  {resolving.codigoBarras || resolving.nome} · contado {resolving.contado} un.
+                </p>
+              </div>
+              <button onClick={() => setResolving(null)} className={c.muted}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className={`flex border-b ${c.modalDivider}`}>
+              <button
+                onClick={() => setResolveTab("link")}
+                className={`flex-1 py-2.5 text-xs font-bold flex items-center justify-center gap-1.5 ${
+                  resolveTab === "link" ? "text-emerald-600 dark:text-emerald-400 border-b-2 border-emerald-500" : c.muted
+                }`}
+              >
+                <Link2 className="w-3.5 h-3.5" /> Produto já cadastrado
+              </button>
+              <button
+                onClick={() => setResolveTab("new")}
+                className={`flex-1 py-2.5 text-xs font-bold flex items-center justify-center gap-1.5 ${
+                  resolveTab === "new" ? "text-emerald-600 dark:text-emerald-400 border-b-2 border-emerald-500" : c.muted
+                }`}
+              >
+                <PackagePlus className="w-3.5 h-3.5" /> Cadastrar novo
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <p className={`text-[11px] ${c.muted}`}>
+                O código vira mais um código de barras do produto (um produto pode ter vários). Qualquer leitura futura
+                desse código passa a encontrar o produto.
+              </p>
+
+              {resolveTab === "link" && (
+                <>
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      autoFocus
+                      value={linkQuery}
+                      onChange={(e) => setLinkQuery(e.target.value)}
+                      placeholder="Nome ou código do produto"
+                      className={`w-full pl-9 ${c.field}`}
+                    />
+                  </div>
+                  <div className={`border rounded-xl overflow-hidden max-h-56 overflow-y-auto ${c.modalDivider}`}>
+                    {linkSearching && <div className={`p-3 text-center text-xs ${c.muted}`}>Buscando…</div>}
+                    {!linkSearching && linkQuery.trim().length >= 2 && linkHits.length === 0 && (
+                      <div className={`p-3 text-center text-xs ${c.empty}`}>Nenhum produto encontrado.</div>
+                    )}
+                    {linkHits.map((p) => (
+                      <button
+                        key={p.id}
+                        disabled={resolveBusy}
+                        onClick={() => submitResolve({ productId: p.id })}
+                        className={`w-full text-left px-3 py-2.5 text-sm border-b last:border-b-0 ${c.modalDivider} ${c.rowHover} ${c.strong} disabled:opacity-50`}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {resolveTab === "new" && (
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className={c.label}>Nome do produto</label>
+                    <input
+                      value={newForm.nome}
+                      onChange={(e) => setNewForm({ ...newForm, nome: e.target.value })}
+                      className={c.field}
+                      placeholder="Ex.: Picolé de fruta"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={c.label}>Grupo</label>
+                    <select
+                      value={newForm.grupoId}
+                      onChange={(e) => setNewForm({ ...newForm, grupoId: e.target.value })}
+                      className={c.field}
+                    >
+                      <option value="">Selecione…</option>
+                      {groups.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="space-y-1">
+                      <label className={c.label}>Unidade</label>
+                      <input
+                        value={newForm.unidade}
+                        onChange={(e) => setNewForm({ ...newForm, unidade: e.target.value })}
+                        className={c.field}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className={c.label}>Custo R$</label>
+                      <input
+                        type="number"
+                        value={newForm.precoCusto}
+                        onChange={(e) => setNewForm({ ...newForm, precoCusto: e.target.value })}
+                        className={c.field}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className={c.label}>Venda R$</label>
+                      <input
+                        type="number"
+                        value={newForm.precoVenda}
+                        onChange={(e) => setNewForm({ ...newForm, precoVenda: e.target.value })}
+                        className={c.field}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    disabled={resolveBusy || !newForm.nome.trim() || !newForm.grupoId}
+                    onClick={() => submitResolve({ novo: newForm })}
+                    className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {resolveBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    Cadastrar e vincular
+                  </button>
+                </div>
+              )}
+
+              {resolveErr && <p className="text-xs text-rose-500">{resolveErr}</p>}
             </div>
           </div>
         </div>
