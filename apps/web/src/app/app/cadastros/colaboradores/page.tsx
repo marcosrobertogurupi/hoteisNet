@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { UserCheck, Plus, Edit3, Trash2, ArrowLeft, X, Check } from "lucide-react";
+import { UserCheck, Plus, Edit3, Trash2, ArrowLeft, X, Check, ScanBarcode } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useToast } from "@/context/ToastContext";
@@ -17,9 +17,21 @@ interface Colaborador {
   phone: string | null;
   email: string | null;
   active: boolean;
+  temSenha: boolean;
 }
 
-const EMPTY_FORM = { id: "", nome: "", cargo: "", cpf: "", telefone: "", email: "", status: "ATIVO" as "ATIVO" | "INATIVO" };
+const EMPTY_FORM = {
+  id: "",
+  nome: "",
+  cargo: "",
+  cpf: "",
+  telefone: "",
+  email: "",
+  status: "ATIVO" as "ATIVO" | "INATIVO",
+  senha: "",
+  removerSenha: false,
+  temSenha: false,
+};
 
 export default function ColaboradoresPage() {
   const { theme } = useTheme();
@@ -63,6 +75,9 @@ export default function ColaboradoresPage() {
       telefone: col.phone || "",
       email: col.email || "",
       status: col.active ? "ATIVO" : "INATIVO",
+      senha: "",
+      removerSenha: false,
+      temSenha: col.temSenha,
     });
     setIsModalOpen(true);
   };
@@ -174,6 +189,11 @@ export default function ColaboradoresPage() {
                     <td className={`px-5 py-4 font-mono ${ui.muted}`}>
                       <div>{col.phone || "-"}</div>
                       <div className={`text-[10px] ${ui.empty}`}>{col.email || "-"}</div>
+                      {col.temSenha && (
+                        <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/15 text-purple-600 dark:text-purple-400">
+                          <ScanBarcode className="w-2.5 h-2.5" /> app de contagem
+                        </span>
+                      )}
                     </td>
                     <td className="px-5 py-4">
                       <span
@@ -274,6 +294,46 @@ export default function ColaboradoresPage() {
                   <option value="INATIVO">INATIVO</option>
                 </select>
               </div>
+
+              {/* Acesso ao app mobile de contagem de estoque — login por telefone + senha */}
+              <div
+                className={`space-y-3 rounded-xl border p-4 ${
+                  isDark ? "border-slate-800 bg-slate-950/40" : "border-slate-200 bg-slate-50"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <ScanBarcode className={`w-4 h-4 ${isDark ? "text-purple-400" : "text-purple-600"}`} />
+                  <span className={`text-xs font-bold ${ui.strong}`}>Acesso ao app de contagem de estoque</span>
+                </div>
+                <p className={`text-[11px] ${ui.muted}`}>
+                  O colaborador entra no app pelo <strong>telefone</strong> acima e pela senha definida aqui. Deixe a
+                  senha em branco para não alterar.
+                  {form.temSenha ? " Este colaborador já tem acesso." : " Este colaborador ainda não tem acesso."}
+                </p>
+                <div className="space-y-1.5">
+                  <label className={ui.label}>{form.temSenha ? "Nova senha" : "Senha"}</label>
+                  <input
+                    type="text"
+                    autoComplete="new-password"
+                    value={form.senha}
+                    disabled={form.removerSenha}
+                    onChange={(e) => setForm({ ...form, senha: e.target.value })}
+                    placeholder={form.temSenha ? "•••• (deixe em branco para manter)" : "mínimo 4 caracteres"}
+                    className={`${field} ${form.removerSenha ? "opacity-50" : ""}`}
+                  />
+                </div>
+                {form.temSenha && (
+                  <label className="flex items-center gap-2 text-[11px] font-medium cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.removerSenha}
+                      onChange={(e) => setForm({ ...form, removerSenha: e.target.checked, senha: "" })}
+                    />
+                    Remover o acesso deste colaborador ao app de contagem
+                  </label>
+                )}
+              </div>
+
               <div className={`pt-2 flex items-center justify-end gap-3 border-t ${ui.modalDivider}`}>
                 <button type="button" onClick={() => setIsModalOpen(false)} className={ui.ghostBtn}>
                   Cancelar
