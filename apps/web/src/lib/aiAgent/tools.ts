@@ -7,7 +7,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
-import { findConflictingReservation } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, stayOccupiedUntil } from "@/lib/reservationHelpers";
 import { sendUazapiImage } from "@/lib/uazapi";
 import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
@@ -86,12 +86,17 @@ async function busyRoomIdsForPeriod(roomIds: string[], checkIn: Date, checkOut: 
       },
       select: { roomId: true },
     }),
+    // Hospedagens em aberto: NUNCA filtrar por `expectedCheckOut > checkIn` — um hóspede em
+    // overstay (saída prevista no passado, hospedagem ainda não finalizada) continua ocupando o
+    // quarto. Traz as candidatas e filtra pela ocupação efetiva (stayOccupiedUntil), a mesma régua
+    // do Mapa de Reservas.
     prisma.stayCheckin.findMany({
-      where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut }, expectedCheckOut: { gt: checkIn } },
-      select: { roomId: true },
+      where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut } },
+      select: { roomId: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
     }),
   ]);
-  return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...openStays.map((s) => s.roomId)]);
+  const busyByStay = openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId);
+  return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...busyByStay]);
 }
 
 async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date, adults: number) {
@@ -119,7 +124,7 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
 
   const byCategory = new Map<
     string,
-    { categoria: string; capacidade: number; precoDiaria: number; quartosDisponiveis: number; quartos: Array<{ numero: string; andar: string; bloco: string | null; caracteristicas: string[] }> }
+    { categoria: string; capacidade: number; precoDiaria: number; quartosDisponiveis: number; quartos: Array<{ numero: string; andar: string; bloco: string | null; camasCasal: number; camasSolteiro: number; caracteristicas: string[] }> }
   >();
   for (const room of lodgingRooms) {
     if (busyRoomIds.has(room.id)) continue;
@@ -137,6 +142,11 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
         numero: room.number,
         andar: room.floor || "Térreo",
         bloco: room.bloco || null,
+        // Configuração de camas do quarto (cadastrada por quarto, não por categoria — dois quartos
+        // da mesma categoria podem diferir). Deixa o agente responder "tem quarto com 3 camas de
+        // solteiro?" e honrar essa preferência até a reserva.
+        camasCasal: room.camasCasal,
+        camasSolteiro: room.camasSolteiro,
         caracteristicas: room.caracteristicas || [],
       });
     }
@@ -174,6 +184,8 @@ async function checkRoomByNumber(tenantId: string, roomNumber: string, checkIn: 
     categoria: room.category.name,
     andar: room.floor || "Térreo",
     bloco: room.bloco || null,
+    camasCasal: room.camasCasal,
+    camasSolteiro: room.camasSolteiro,
     caracteristicas: room.caracteristicas || [],
     capacidade: room.category.capacity,
     disponivel: !busy.has(room.id),
@@ -201,7 +213,7 @@ async function listRoomsByFloor(tenantId: string, andar: string | undefined, che
     resolveTariff(prisma, tenantId, adults),
   ]);
 
-  const byFloor = new Map<string, Array<{ numero: string; categoria: string; disponivel: boolean; caracteristicas: string[] }>>();
+  const byFloor = new Map<string, Array<{ numero: string; categoria: string; disponivel: boolean; camasCasal: number; camasSolteiro: number; caracteristicas: string[] }>>();
   for (const room of filtered) {
     const key = room.floor || "Térreo";
     const list = byFloor.get(key) ?? [];
@@ -209,6 +221,8 @@ async function listRoomsByFloor(tenantId: string, andar: string | undefined, che
       numero: room.number,
       categoria: room.category.name,
       disponivel: !busy.has(room.id),
+      camasCasal: room.camasCasal,
+      camasSolteiro: room.camasSolteiro,
       caracteristicas: room.caracteristicas || [],
     });
     byFloor.set(key, list);
@@ -384,6 +398,15 @@ async function searchKnowledgeBase(tenantId: string, query: string) {
 const DEFAULT_CHECK_IN_TIME = "14:00";
 const DEFAULT_CHECK_OUT_TIME = "12:00";
 
+// O modelo manda só a data (AAAA-MM-DD). Ancoramos no horário padrão de check-in/out do hotel no
+// fuso de Brasília (UTC-3 o ano todo — o Brasil não tem mais horário de verão desde 2019), igual
+// ao fluxo manual (LancarReservaModal/POST /api/reservations). Sem isso a reserva era gravada à
+// meia-noite UTC, que é 21h do dia ANTERIOR em BRT — desalinhava a barra do Mapa de Reservas, a
+// checagem de conflito e a régua de tolerância de no-show (a reserva "nascia" já quase expirada).
+function atBrasiliaTime(dateYmd: string, hhmm: string): Date {
+  return new Date(`${dateYmd}T${hhmm}:00-03:00`);
+}
+
 // Cria a reserva de verdade, dentro de uma transação (mesmo princípio de atomic-checkout-balance-guard
 // já aplicado no resto do sistema: a checagem de conflito acontece dentro da própria transação, não
 // só antes dela). O status (CONFIRMED vs PRE_RESERVATION) nunca é decidido pelo modelo — vem de
@@ -392,7 +415,18 @@ const DEFAULT_CHECK_OUT_TIME = "12:00";
 async function createReservationForAgent(
   tenantId: string,
   guestPhone: string,
-  params: { checkIn: Date; checkOut: Date; categoryName?: string; roomNumber?: string; floor?: string; guestName: string; guestCpf?: string; adults: number }
+  params: {
+    checkIn: Date;
+    checkOut: Date;
+    categoryName?: string;
+    roomNumber?: string;
+    floor?: string;
+    camasCasal?: number;
+    camasSolteiro?: number;
+    guestName: string;
+    guestCpf?: string;
+    adults: number;
+  }
 ) {
   // Se o hóspede pediu um quarto específico pelo número, é o quarto que manda — a categoria é
   // derivada dele, não do que o modelo passou. O número vem do modelo, então é revalidado contra o
@@ -422,6 +456,20 @@ async function createReservationForAgent(
   }
 
   const floorPref = params.floor?.trim() || null;
+  const bedsDoublePref = params.camasCasal && params.camasCasal > 0 ? params.camasCasal : null;
+  const bedsSinglePref = params.camasSolteiro && params.camasSolteiro > 0 ? params.camasSolteiro : null;
+  const bedsPrefLabel = [
+    bedsDoublePref ? `${bedsDoublePref} de casal` : null,
+    bedsSinglePref ? `${bedsSinglePref} de solteiro` : null,
+  ]
+    .filter(Boolean)
+    .join(" + ");
+
+  // Datas ancoradas no horário padrão do hotel (BRT) — usadas em TODAS as checagens e na gravação,
+  // para o agente nunca divergir do fluxo manual. params.checkIn/checkOut chegam à meia-noite UTC
+  // (o modelo só informa a data), então extraímos só a parte AAAA-MM-DD.
+  const checkInAt = atBrasiliaTime(params.checkIn.toISOString().slice(0, 10), DEFAULT_CHECK_IN_TIME);
+  const checkOutAt = atBrasiliaTime(params.checkOut.toISOString().slice(0, 10), DEFAULT_CHECK_OUT_TIME);
 
   const result = await prisma.$transaction(async (tx) => {
     let rooms = requestedRoom
@@ -442,13 +490,31 @@ async function createReservationForAgent(
       rooms = onFloor;
     }
 
+    // Preferência de configuração de camas: mesma régua do andar — se o hóspede pediu "3 camas de
+    // solteiro", nunca reservar um quarto que não atende. Trata os números como mínimo (um quarto
+    // com 4 de solteiro serve para quem pediu 3).
+    if ((bedsDoublePref || bedsSinglePref) && !requestedRoom) {
+      const matching = rooms.filter(
+        (r) =>
+          (!bedsDoublePref || r.camasCasal >= bedsDoublePref) &&
+          (!bedsSinglePref || r.camasSolteiro >= bedsSinglePref)
+      );
+      if (matching.length === 0) {
+        return {
+          sucesso: false as const,
+          erro: `A categoria ${category.name} não tem quarto com ${bedsPrefLabel}. Ofereça outra categoria ou outra configuração de camas — nunca reserve um quarto que não atende o que o hóspede pediu.`,
+        };
+      }
+      rooms = matching;
+    }
+
     let freeRoom: (typeof rooms)[number] | null = null;
     for (const room of rooms) {
       const [conflict, openStay] = await Promise.all([
-        findConflictingReservation(tx, room.id, params.checkIn, params.checkOut),
-        tx.stayCheckin.findFirst({
-          where: { roomId: room.id, isClosed: false, checkInDate: { lt: params.checkOut }, expectedCheckOut: { gt: params.checkIn } },
-        }),
+        findConflictingReservation(tx, room.id, checkInAt, checkOutAt),
+        // Hospedagem em aberto (inclui overstay) — findBlockingOpenStay usa a ocupação efetiva, não
+        // o expectedCheckOut cru. Impede o agente de reservar um quarto onde ainda há hóspede.
+        findBlockingOpenStay(tx, room.id, checkInAt, checkOutAt),
       ]);
       if (!conflict && !openStay) {
         freeRoom = room;
@@ -462,7 +528,9 @@ async function createReservationForAgent(
           ? `O quarto ${requestedRoom.number} não está livre no período pedido. Ofereça outro quarto da mesma categoria (${category.name}).`
           : floorPref
             ? `Não há quarto livre da categoria ${category.name} no andar "${params.floor}" para o período. Ofereça outro andar ou categoria — nunca reserve num andar diferente do pedido.`
-            : "Não há mais quartos livres nessa categoria para o período pedido.",
+            : bedsPrefLabel
+              ? `Não há quarto livre da categoria ${category.name} com ${bedsPrefLabel} para o período. Ofereça outra categoria ou configuração de camas — nunca reserve um quarto que não atende o pedido.`
+              : "Não há mais quartos livres nessa categoria para o período pedido.",
       };
     }
 
@@ -471,7 +539,7 @@ async function createReservationForAgent(
       return { sucesso: false as const, erro: "Hotel ainda não tem tarifa cadastrada — encaminhe para a recepção fechar a reserva manualmente." };
     }
 
-    const nights = Math.max(1, Math.round((params.checkOut.getTime() - params.checkIn.getTime()) / (24 * 60 * 60 * 1000)));
+    const nights = Math.max(1, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / (24 * 60 * 60 * 1000)));
     const totalAmount = Number(tariff.price) * nights;
     const status = agentSetting?.autoConfirmReservations ? "CONFIRMED" : "PRE_RESERVATION";
     const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
@@ -483,8 +551,8 @@ async function createReservationForAgent(
         guestName: params.guestName,
         guestPhone,
         guestCpf: params.guestCpf || null,
-        checkInDate: params.checkIn,
-        checkOutDate: params.checkOut,
+        checkInDate: checkInAt,
+        checkOutDate: checkOutAt,
         tariffId: tariff.id,
         tariffName: tariff.name,
         dailyRate: tariff.price,
@@ -509,6 +577,8 @@ async function createReservationForAgent(
       status,
       quarto: freeRoom.number,
       andar: freeRoom.floor || "Térreo",
+      camasCasal: freeRoom.camasCasal,
+      camasSolteiro: freeRoom.camasSolteiro,
       categoria: category.name,
       diarias: nights,
       valorTotal: totalAmount,
@@ -709,7 +779,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
   return {
     check_availability: tool({
       description:
-        "Verifica quartos disponíveis por período e o preço real da diária para a quantidade de adultos informada. Use sempre que o hóspede perguntar sobre disponibilidade, preço de diária ou quiser reservar. O retorno traz, por categoria, a lista de quartos livres com número, andar, bloco e características — dá para responder sobre um quarto ou andar específico a partir disso. `espacosEventos` lista espaços que NÃO são hospedagem (auditório, sala de reunião): nunca ofereça como quarto/diária.",
+        "Verifica quartos disponíveis por período e o preço real da diária para a quantidade de adultos informada. Use sempre que o hóspede perguntar sobre disponibilidade, preço de diária ou quiser reservar. O retorno traz, por categoria, a lista de quartos livres com número, andar, bloco, configuração de camas (`camasCasal`/`camasSolteiro`) e características — dá para responder sobre um quarto, andar ou tipo de cama específico a partir disso. `espacosEventos` lista espaços que NÃO são hospedagem (auditório, sala de reunião): nunca ofereça como quarto/diária.",
       inputSchema: z.object({
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
         checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
@@ -730,7 +800,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     check_room_by_number: tool({
       description:
-        "Consulta um quarto específico pelo número, para um período. Use quando o hóspede pedir um quarto pelo número ('queria o 207', 'o mesmo da última vez, 305'). Devolve categoria, andar, bloco, características, capacidade, se está disponível no período e o preço da diária. Se `ehEspacoEventos` for true, não é quarto de hospedagem — encaminhe para a recepção.",
+        "Consulta um quarto específico pelo número, para um período. Use quando o hóspede pedir um quarto pelo número ('queria o 207', 'o mesmo da última vez, 305'). Devolve categoria, andar, bloco, configuração de camas (`camasCasal`/`camasSolteiro`), características, capacidade, se está disponível no período e o preço da diária. Se `ehEspacoEventos` for true, não é quarto de hospedagem — encaminhe para a recepção.",
       inputSchema: z.object({
         roomNumber: z.string().describe("Número do quarto exatamente como o hóspede falou (ex: '207')"),
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
@@ -752,7 +822,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     list_rooms_by_floor: tool({
       description:
-        "Lista os quartos de hospedagem de um andar (ou de todos os andares, se `andar` for omitido), para um período, indicando quais estão livres. Use quando o hóspede perguntar por andar ('o que tem no segundo andar?', 'algo no térreo?'). Casa '2', '2º andar', 'segundo andar' com o cadastro. Se não achar o andar, o retorno traz `andaresConhecidos` para você oferecer as opções reais.",
+        "Lista os quartos de hospedagem de um andar (ou de todos os andares, se `andar` for omitido), para um período, indicando quais estão livres e a configuração de camas de cada um (`camasCasal`/`camasSolteiro`). Use quando o hóspede perguntar por andar ('o que tem no segundo andar?', 'algo no térreo?'). Casa '2', '2º andar', 'segundo andar' com o cadastro. Se não achar o andar, o retorno traz `andaresConhecidos` para você oferecer as opções reais.",
       inputSchema: z.object({
         andar: z.string().optional().describe("Andar como o hóspede falou (ex: 'segundo andar', '2', 'térreo'). Omita para listar todos."),
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
@@ -823,18 +893,20 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     create_reservation: tool({
       description:
-        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Informe `roomNumber` quando o hóspede tiver pedido um quarto específico pelo número — a reserva sai nesse quarto exato. Informe `floor` quando ele tiver pedido um andar específico ('quero no segundo andar') — a reserva só sai num quarto daquele andar; se não houver, a tool avisa e você oferece outro andar/categoria, NUNCA reserve num andar diferente do que ele pediu. Sem `roomNumber`/`floor`, o sistema escolhe qualquer quarto livre da categoria. Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando a recepção — informe o resultado exato que a tool devolver, não invente. Se o retorno tiver precisaEscalar:true (ex: categoria é espaço de eventos), use escalate_to_human. O retorno inclui `quarto`, `andar`, horarioCheckIn/horarioCheckOut — informe o quarto, o andar e os dois horários na confirmação, junto com as datas.",
+        "Cria a reserva de verdade no sistema. Só use depois de confirmar com o hóspede: categoria escolhida (via check_availability), datas, quantidade de adultos, nome e CPF (via get_guest_by_cpf). Informe `roomNumber` quando o hóspede tiver pedido um quarto específico pelo número — a reserva sai nesse quarto exato. Informe `floor` quando ele tiver pedido um andar específico ('quero no segundo andar') — a reserva só sai num quarto daquele andar; se não houver, a tool avisa e você oferece outro andar/categoria, NUNCA reserve num andar diferente do que ele pediu. Informe `camasSolteiro`/`camasCasal` quando ele tiver pedido uma configuração de camas ('quero um quarto com 3 camas de solteiro') — a reserva só sai num quarto que atende; se não houver, a tool avisa e você oferece outra categoria/configuração, NUNCA reserve um quarto que não atende o pedido. Sem `roomNumber`/`floor`/camas, o sistema escolhe qualquer quarto livre da categoria. Dependendo da configuração do hotel, a reserva pode sair já confirmada ou como pré-reserva aguardando a recepção — informe o resultado exato que a tool devolver, não invente. Se o retorno tiver precisaEscalar:true (ex: categoria é espaço de eventos), use escalate_to_human. O retorno inclui `quarto`, `andar`, `camasCasal`/`camasSolteiro`, horarioCheckIn/horarioCheckOut — informe o quarto, o andar e os dois horários na confirmação, junto com as datas.",
       inputSchema: z.object({
         checkIn: z.string().describe("Data de entrada no formato AAAA-MM-DD"),
         checkOut: z.string().describe("Data de saída no formato AAAA-MM-DD"),
         categoryName: z.string().optional().describe("Nome da categoria de apartamento, como retornado por check_availability/list_room_categories. Opcional se roomNumber for informado."),
         roomNumber: z.string().optional().describe("Número de um quarto específico pedido pelo hóspede (ex: '207'). Quando informado, a categoria é derivada do próprio quarto."),
         floor: z.string().optional().describe("Andar pedido pelo hóspede, como ele falou (ex: 'segundo andar', '2'). Obrigatório quando ele expressou preferência de andar e não escolheu um quarto pelo número."),
+        camasSolteiro: z.number().int().min(1).optional().describe("Nº mínimo de camas de solteiro pedido pelo hóspede (ex: 3 para 'quarto com 3 camas de solteiro'). Só quando ele expressou essa preferência."),
+        camasCasal: z.number().int().min(1).optional().describe("Nº mínimo de camas de casal pedido pelo hóspede. Só quando ele expressou essa preferência."),
         guestName: z.string().describe("Nome completo do hóspede"),
         guestCpf: z.string().optional().describe("CPF do hóspede, se já identificado"),
         adults: z.number().int().min(1).default(1),
       }),
-      execute: async ({ checkIn, checkOut, categoryName, roomNumber, floor, guestName, guestCpf, adults }) => {
+      execute: async ({ checkIn, checkOut, categoryName, roomNumber, floor, camasSolteiro, camasCasal, guestName, guestCpf, adults }) => {
         const inDate = new Date(checkIn);
         const outDate = new Date(checkOut);
         if (isNaN(inDate.getTime()) || isNaN(outDate.getTime()) || outDate <= inDate) {
@@ -846,7 +918,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
         if (!categoryName && !roomNumber) {
           return { sucesso: false, erro: "Informe categoryName ou roomNumber." };
         }
-        return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, roomNumber, floor, guestName, guestCpf, adults });
+        return await createReservationForAgent(tenantId, guestPhone, { checkIn: inDate, checkOut: outDate, categoryName, roomNumber, floor, camasSolteiro, camasCasal, guestName, guestCpf, adults });
       },
     }),
 

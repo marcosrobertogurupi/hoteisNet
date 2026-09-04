@@ -247,6 +247,53 @@ async function detectOccupiedRoomsWithIncomingReservation(tenantId: string): Pro
   return issues;
 }
 
+// ─────────────── Configuração de camas do quarto mal preenchida ───────────────
+//
+// O agente de atendimento usa Room.camasCasal / Room.camasSolteiro para responder "tem quarto com
+// 3 camas de solteiro?" e para honrar essa preferência até a reserva (ver
+// apps/web/src/lib/aiAgent/tools.ts). Se o cadastro estiver zerado ou incoerente com a capacidade
+// da categoria, ele não consegue — então a equipe precisa corrigir em Cadastros → Apartamentos.
+// Só faz sentido para tenants com o agente de atendimento ligado (quem usa esse dado). É sempre
+// só alerta: o agente nunca "chuta" uma configuração de camas.
+const SLEEPS_PER_DOUBLE_BED = 2;
+const SLEEPS_PER_SINGLE_BED = 1;
+
+async function detectRoomBedRegistrationIssues(tenantId: string): Promise<DetectedIssue[]> {
+  const rooms = await prisma.room.findMany({
+    where: { tenantId, active: true, category: { kind: "LODGING" } },
+    select: {
+      id: true,
+      number: true,
+      camasCasal: true,
+      camasSolteiro: true,
+      category: { select: { name: true, capacity: true } },
+    },
+  });
+
+  const issues: DetectedIssue[] = [];
+  for (const room of rooms) {
+    if (room.camasCasal + room.camasSolteiro === 0) {
+      issues.push({
+        issueType: "ROOM_BEDS_UNSET",
+        entityId: room.id,
+        description: `Quarto ${room.number} (${room.category.name}) está sem nenhuma cama cadastrada — preencha "Camas de Casal" e "Camas de Solteiro" em Cadastros → Apartamentos. Sem isso o atendimento automático não consegue responder sobre tipo de cama nem reservar por essa preferência.`,
+      });
+      continue;
+    }
+    const sleeps = room.camasCasal * SLEEPS_PER_DOUBLE_BED + room.camasSolteiro * SLEEPS_PER_SINGLE_BED;
+    // Só compara quando a categoria tem uma capacidade definida de propósito (> 1) — capacity=1 é o
+    // valor padrão do pré-cadastro de categoria e não é confiável (ver comentário no schema).
+    if (room.category.capacity > 1 && sleeps < room.category.capacity) {
+      issues.push({
+        issueType: "ROOM_BEDS_MISMATCH",
+        entityId: room.id,
+        description: `Quarto ${room.number} (${room.category.name}) tem camas para ${sleeps} pessoa(s), mas a categoria acomoda ${room.category.capacity} — confira o cadastro de camas em Cadastros → Apartamentos.`,
+      });
+    }
+  }
+  return issues;
+}
+
 async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   const issues: DetectedIssue[] = [];
   const now = new Date();
@@ -749,15 +796,16 @@ async function runOperationalAgentInner(): Promise<void> {
       // apenas com o opt-in dedicado + modo AUTONOMOUS_LIMITED, senão também só sinaliza.
       let kbAutoNotes: string[] = [];
       if (setting.enabled) {
-        const [staleIssues, drift] = await Promise.all([
+        const [staleIssues, bedIssues, drift] = await Promise.all([
           detectStaleKnowledge(setting.tenantId, setting.knowledgeReviewIntervalDays),
+          detectRoomBedRegistrationIssues(setting.tenantId),
           runKnowledgeDrift(
             setting.tenantId,
             hotelName,
             setting.knowledgeAutoRewriteEnabled && setting.operationalAutonomyMode === "AUTONOMOUS_LIMITED"
           ),
         ]);
-        issues.push(...staleIssues, ...drift.driftIssues);
+        issues.push(...staleIssues, ...bedIssues, ...drift.driftIssues);
         kbAutoNotes = drift.autoNotes;
       }
 

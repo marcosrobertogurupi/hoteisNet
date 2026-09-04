@@ -35,6 +35,44 @@ export async function resolveRoomId(
   return created.id;
 }
 
+// Data-limite EFETIVA de ocupação de uma hospedagem: o maior valor entre a saída prevista e
+// (check-in + diárias já lançadas). É a mesma régua que o Mapa de Reservas usa para desenhar a
+// barra "EM VIGÊNCIA" (ver occupiedUntilDate em lib/mapQueries.ts, que delega para cá).
+//
+// Por que não confiar só em `expectedCheckOut`: um hóspede em overstay tem saída prevista no
+// passado mas continua no quarto até a recepção finalizar a hospedagem, e o rollover automático de
+// diárias empurra `dailiesCount` dia a dia. Um caso real: o agente de IA reservou um quarto para
+// "hoje" porque a saída prevista da hospedagem em aberto já tinha passado (23/08), mesmo o hóspede
+// ainda estando lá e o sistema já cobrando a 18ª diária.
+export function stayOccupiedUntil(stay: {
+  checkInDate: Date;
+  expectedCheckOut: Date;
+  dailiesCount: number;
+}): Date {
+  const billedThrough = new Date(stay.checkInDate);
+  billedThrough.setDate(billedThrough.getDate() + stay.dailiesCount);
+  return billedThrough > stay.expectedCheckOut ? billedThrough : stay.expectedCheckOut;
+}
+
+// Hospedagem em aberto (isClosed:false) que impede uma reserva nova para o período pedido.
+// Diferente de findConflictingReservation (que olha a tabela de reservas), aqui a fonte é
+// StayCheckin — e a checagem NUNCA usa `expectedCheckOut > checkIn` cru: usa stayOccupiedUntil,
+// para pegar overstay. Bloqueia quando a hospedagem começou antes do checkOut pedido E sua
+// ocupação efetiva alcança o checkIn pedido. Uma hospedagem que termina antes do período (hóspede
+// sai antes da nova reserva começar) não bloqueia.
+export async function findBlockingOpenStay(
+  tx: PrismaClientOrTx,
+  roomId: string,
+  checkInDate: Date,
+  checkOutDate: Date
+) {
+  const stays = await tx.stayCheckin.findMany({
+    where: { roomId, isClosed: false, checkInDate: { lt: checkOutDate } },
+    select: { id: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
+  });
+  return stays.find((s) => stayOccupiedUntil(s) > checkInDate) ?? null;
+}
+
 // Verifica se existe alguma reserva ativa (não CANCELLED/CHECKED_OUT) sobrepondo o período
 // informado para o quarto indicado. Usado tanto na criação individual quanto em lote, sempre
 // dentro da própria transação Prisma, para que a checagem de conflito seja atômica e não apenas

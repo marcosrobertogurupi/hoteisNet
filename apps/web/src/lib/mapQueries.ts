@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { stayOccupiedUntil } from "@/lib/reservationHelpers";
 
 // Consultas compartilhadas pelos pollings do Mapa de Quartos e do Mapa de Reservas.
 //
@@ -22,9 +23,14 @@ function occupiedUntilDate(
   stayCheckin: { checkInDate: Date; dailiesCount: number; isClosed: boolean } | null | undefined,
 ): Date {
   if (!stayCheckin || stayCheckin.isClosed) return expectedCheckOut;
-  const billedThrough = new Date(stayCheckin.checkInDate);
-  billedThrough.setDate(billedThrough.getDate() + stayCheckin.dailiesCount);
-  return billedThrough > expectedCheckOut ? billedThrough : expectedCheckOut;
+  // Régua única compartilhada com a checagem de disponibilidade do agente de IA (ver
+  // stayOccupiedUntil / findBlockingOpenStay em lib/reservationHelpers.ts) — as duas nunca podem
+  // divergir sobre "até quando o quarto está ocupado".
+  return stayOccupiedUntil({
+    checkInDate: stayCheckin.checkInDate,
+    expectedCheckOut,
+    dailiesCount: stayCheckin.dailiesCount,
+  });
 }
 
 /**
