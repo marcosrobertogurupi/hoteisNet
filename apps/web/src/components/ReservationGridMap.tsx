@@ -1624,8 +1624,40 @@ export default function ReservationGridMap({
 
           {/* ROOM ROWS */}
           <div className={`divide-y ${theme.isDark ? "divide-slate-800/80" : "divide-slate-200"}`}>
-            {rooms.map((room) => (
-              <div key={room.id} className={`flex relative min-h-[70px] group transition-colors ${theme.isDark ? "hover:bg-slate-900/30" : "hover:bg-slate-50"}`}>
+            {rooms.map((room) => {
+              // O quarto tem uma reserva CONFIRMED/PRE que se sobrepõe a uma hospedagem em curso?
+              // Nesse caso a linha precisa ser mais alta: a barra da hospedagem ocupa a metade de
+              // cima e a barra da reserva a metade de baixo, e cada metade precisa de altura
+              // suficiente para mostrar nome + datas + botão de FNRH (senão o card fica espremido
+              // e as informações somem — foi o que aconteceu no quarto 306).
+              const roomReservationsForHeight = reservations.filter(
+                (r) =>
+                  (r.roomId === room.id || r.roomId === room.number) &&
+                  r.status !== "CANCELLED" &&
+                  r.status !== "CHECKED_OUT" &&
+                  !isReservationExpired(
+                    {
+                      checkInDate: r.checkInDate,
+                      checkInTime: r.checkInTime,
+                      defaultCheckInTime: defaultCheckInTime || "14:00",
+                      toleranceHours: reservationToleranceHours,
+                      status: r.status,
+                    },
+                    now
+                  )
+              );
+              const roomHasOverlapConflict = roomReservationsForHeight.some((res) => {
+                if (res.status === "CHECKED_IN") return false;
+                const rEnd = res.mapEndDate || res.checkOutDate;
+                return roomReservationsForHeight.some((h) => {
+                  if (h.status !== "CHECKED_IN") return false;
+                  const hEnd = h.mapEndDate || h.checkOutDate;
+                  return h.checkInDate <= rEnd && hEnd >= res.checkInDate;
+                });
+              });
+
+              return (
+              <div key={room.id} className={`flex relative group transition-colors ${roomHasOverlapConflict ? "min-h-[150px]" : "min-h-[70px]"} ${theme.isDark ? "hover:bg-slate-900/30" : "hover:bg-slate-50"}`}>
                 {/* Left Column: Room Number */}
                 <div className={`w-28 shrink-0 p-3 border-r-2 border-r-slate-700/80 flex flex-col items-center justify-center sticky left-0 z-20 shadow-[4px_0_10px_rgba(0,0,0,0.4)] ${
                   theme.isDark ? "bg-[#0F172A] text-white" : "bg-white text-slate-900"
@@ -1745,6 +1777,16 @@ export default function ReservationGridMap({
                       }, now)) return false;
                       return true;
                     })
+                    // Ordem de pintura: hospedagem em curso (CHECKED_IN) primeiro = ATRÁS; reservas
+                    // CONFIRMED/PRE depois = NA FRENTE. Sem isso, uma hospedagem em overstay (barra
+                    // larga que vai até hoje) cobria por completo uma reserva nova de 1-2 diárias no
+                    // mesmo quarto — a reserva existia no banco mas ficava invisível no mapa.
+                    .slice()
+                    .sort((a, b) => {
+                      const aH = a.status === "CHECKED_IN" ? 0 : 1;
+                      const bH = b.status === "CHECKED_IN" ? 0 : 1;
+                      return aH - bH;
+                    })
                     .map((res) => {
                       // Calculate horizontal position matching column indices
                       const startIndex = monthDays.findIndex((d) => d.dateStr === res.checkInDate);
@@ -1764,6 +1806,19 @@ export default function ReservationGridMap({
 
                       const isHospedagem = res.status === "CHECKED_IN";
                       const isSelected = selectedReservationId === res.id;
+
+                      // Reserva que se sobrepõe a uma hospedagem em curso no mesmo quarto (ex.:
+                      // hóspede atual ainda não fez check-out e já há reserva para o período).
+                      // Precisa ficar visível POR CIMA da barra da hospedagem, com destaque, para o
+                      // operador resolver — nunca sumir atrás dela.
+                      const overlapsHospedagem =
+                        !isHospedagem &&
+                        reservations.some((h) => {
+                          if (h.status !== "CHECKED_IN" || h.roomId !== res.roomId) return false;
+                          const hEnd = h.mapEndDate || h.checkOutDate;
+                          const rEnd = res.mapEndDate || res.checkOutDate;
+                          return h.checkInDate <= rEnd && hEnd >= res.checkInDate;
+                        });
 
                       return (
                         <div
@@ -1800,8 +1855,16 @@ export default function ReservationGridMap({
                           style={{
                             left: `${leftPercent}%`,
                             width: `${widthPercent}%`,
-                            top: "4px",
-                            bottom: "4px",
+                            // Quarto com conflito (hospedagem em curso + reserva no mesmo período):
+                            // a linha é mais alta e cada barra ocupa uma metade — hospedagem em
+                            // cima, reserva embaixo — para as duas ficarem visíveis por inteiro e o
+                            // operador enxergar o conflito. Sem conflito, a barra ocupa a linha toda.
+                            top: overlapsHospedagem
+                              ? "50%"
+                              : "4px",
+                            bottom: isHospedagem && roomHasOverlapConflict
+                              ? "50%"
+                              : "4px",
                           }}
                           className={`absolute z-10 rounded-lg p-2 flex flex-col justify-between shadow-lg border transition-all ${
                             isHospedagem
@@ -1810,6 +1873,8 @@ export default function ReservationGridMap({
                                 : "bg-[#FEF08A] hover:bg-[#FDE047] border-amber-400 text-slate-950 cursor-default shadow-md font-medium"
                               : isSelected
                               ? "bg-[#334155] border-[#38BDF8] ring-2 ring-[#38BDF8]/60 shadow-[#38BDF8]/20 z-30 cursor-grab active:cursor-grabbing text-slate-100"
+                              : overlapsHospedagem
+                              ? "bg-[#334155] border-rose-400 ring-2 ring-rose-400/70 shadow-rose-500/30 z-20 cursor-grab active:cursor-grabbing text-slate-100"
                               : "bg-[#334155]/95 hover:bg-[#475569] border-slate-600 text-slate-100 cursor-grab active:cursor-grabbing"
                           }`}
                           title={
@@ -1919,7 +1984,8 @@ export default function ReservationGridMap({
 
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
