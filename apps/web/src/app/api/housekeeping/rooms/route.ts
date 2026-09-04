@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getHousekeeperSession } from "@/lib/housekeeperAuth";
 import { prisma } from "@/lib/prisma";
 import { ensureDailyArrumacaoTasks } from "@/lib/housekeeping";
+import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 // Ordena andar e número de quarto numericamente quando possível ("2" antes de "10"), com
 // fallback alfabético para valores não numéricos (ex.: andar "Térreo").
@@ -43,6 +44,15 @@ export async function GET(req: NextRequest) {
     const setting = await prisma.housekeepingSetting.findUnique({ where: { tenantId: session.tenantId } });
     const assignmentMode = setting?.assignmentMode || "RECEPTION";
 
+    // Arrumação diária (OCCUPIED, serviceDate preenchido) só vale para o dia em que foi gerada — na
+    // virada ela perde o sentido. Sem esse filtro, uma arrumação de um dia anterior que nunca foi
+    // concluída (ex.: hóspede saiu no meio do dia e a limpeza de rotina do tenant não rodou a tempo
+    // de apagá-la) ficava "presa" como a tarefa ativa do quarto para sempre, mascarando o check-out
+    // real (ver histórico do bug: quarto 306 preso em "Arrumação c/ hóspede" com tarefas de dias
+    // 26–28/08 ainda PENDING). serviceDate null = atribuição manual da recepção ou limpeza pós
+    // check-out, sempre relevante.
+    const todayServiceDate = dateOnlyBrasilia(new Date());
+
     const rooms = await prisma.room.findMany({
       where: { tenantId: session.tenantId, active: true },
       select: {
@@ -52,7 +62,10 @@ export async function GET(req: NextRequest) {
         status: true,
         category: { select: { name: true } },
         housekeepingTasks: {
-          where: { status: { in: ["PENDING", "IN_PROGRESS"] } },
+          where: {
+            status: { in: ["PENDING", "IN_PROGRESS"] },
+            OR: [{ serviceDate: null }, { serviceDate: todayServiceDate }],
+          },
           orderBy: { createdAt: "desc" },
           select: {
             id: true,
@@ -105,7 +118,11 @@ export async function GET(req: NextRequest) {
     const pending: PendingRoom[] = [];
 
     for (const room of rooms) {
-      const active = room.housekeepingTasks[0] || null;
+      // Quarto já vago e sujo é limpeza pós check-out: uma tarefa OCCUPIED remanescente (arrumação
+      // do próprio dia, gerada de manhã com o hóspede ainda lá) perdeu o sentido assim que o
+      // check-out saiu — ignora para não mascarar o check-out real nem roubar a prioridade dele.
+      const active =
+        room.housekeepingTasks.find((t) => !(room.status === "VACANT_DIRTY" && t.type === "OCCUPIED")) || null;
 
       const base = {
         id: room.id,

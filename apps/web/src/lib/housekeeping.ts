@@ -67,15 +67,21 @@ export async function ensureDailyArrumacaoTasks(tenantId: string): Promise<void>
     });
   }
 
-  // Arrumações do dia que perderam o sentido: o quarto deixou de estar ocupado (check-out no meio
-  // do dia) e a limpeza ainda não começou. Preserva IN_PROGRESS / DONE / SKIPPED (histórico).
+  // Arrumações que perderam o sentido, em dois casos — preserva sempre IN_PROGRESS / DONE / SKIPPED
+  // (histórico), só mexe em PENDING sem dono:
+  //  1. Do dia de hoje, mas o quarto deixou de estar ocupado (check-out no meio do dia).
+  //  2. De um dia anterior que nunca foi assumida — a fila daquele dia já morreu na virada; deixar
+  //     "presa" fazia o quarto ficar preso em "Arrumação c/ hóspede" indefinidamente (inclusive
+  //     depois de um check-out real, mascarando a limpeza pós check-out — ver bug do quarto 306).
   await prisma.housekeepingTask.deleteMany({
     where: {
       tenantId,
       type: "OCCUPIED",
-      serviceDate: today,
       status: "PENDING",
-      room: { status: { not: "OCCUPIED" } },
+      OR: [
+        { serviceDate: today, room: { status: { not: "OCCUPIED" } } },
+        { serviceDate: { lt: today } },
+      ],
     },
   });
 }
