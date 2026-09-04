@@ -10,12 +10,13 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
-// Botão "Instalar app" para o app de contagem. No Android/Chrome usa o evento
-// `beforeinstallprompt`; no iOS (que não expõe esse evento) mostra as instruções do Safari.
-// Some quando o app já está instalado (rodando em tela cheia).
-export default function PwaInstallButton() {
+// Botão "Instalar app" compartilhado pelos apps satélite mobile (Contagem de Estoque,
+// Governança). No Android/Chrome usa o evento `beforeinstallprompt`; no iOS (que não expõe esse
+// evento) mostra as instruções do Safari. Some quando o app já está instalado (rodando em tela
+// cheia). `accent` segue a cor de destaque do app chamador (ver lib/satelliteAppUI.ts).
+export default function PwaInstallButton({ accent = "emerald" }: { accent?: "emerald" | "rose" }) {
   const { theme } = useTheme();
-  const ui = satelliteAppUI(theme.isDark);
+  const ui = satelliteAppUI(theme.isDark, accent);
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
@@ -60,13 +61,16 @@ export default function PwaInstallButton() {
     setShowIosHelp(true);
   };
 
+  const accentBtn =
+    accent === "rose"
+      ? `border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/20 ${theme.isDark ? "text-rose-300" : "text-rose-700"}`
+      : `border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 ${theme.isDark ? "text-emerald-300" : "text-emerald-700"}`;
+
   return (
     <>
       <button
         onClick={handleClick}
-        className={`w-full py-3 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 text-sm font-semibold flex items-center justify-center gap-2 transition hover:bg-emerald-500/20 ${
-          theme.isDark ? "text-emerald-300" : "text-emerald-700"
-        }`}
+        className={`w-full py-3 rounded-2xl border text-sm font-semibold flex items-center justify-center gap-2 transition ${accentBtn}`}
       >
         <Download className="w-4 h-4" /> Instalar app na tela inicial
       </button>

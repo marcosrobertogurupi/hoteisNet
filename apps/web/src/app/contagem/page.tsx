@@ -17,7 +17,7 @@ import {
   X,
   ClipboardList,
 } from "lucide-react";
-import PwaInstallButton from "@/components/contagem/PwaInstallButton";
+import PwaInstallButton from "@/components/PwaInstallButton";
 import { useTheme } from "@/context/ThemeContext";
 import { satelliteAppUI } from "@/lib/satelliteAppUI";
 

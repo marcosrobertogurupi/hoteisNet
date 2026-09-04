@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { usePolling } from "@/lib/usePolling";
 import { useTheme } from "@/context/ThemeContext";
 import { satelliteAppUI } from "@/lib/satelliteAppUI";
+import PwaInstallButton from "@/components/PwaInstallButton";
 import {
   Sparkles,
   Phone,
@@ -231,6 +232,8 @@ export default function HousekeepingAppPage() {
               {loggingIn ? "Entrando..." : "Entrar"}
             </button>
           </form>
+
+          <PwaInstallButton accent="rose" />
         </div>
       </div>
     );
@@ -268,6 +271,8 @@ export default function HousekeepingAppPage() {
       </div>
 
       <div className="px-4 py-4 space-y-6">
+        <PwaInstallButton accent="rose" />
+
         <div className="flex items-center justify-between">
           <span className={`text-xs font-mono ${theme.textMuted}`}>
             {totalPending} quarto{totalPending !== 1 ? "s" : ""} a limpar
