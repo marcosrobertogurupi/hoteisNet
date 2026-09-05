@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import PwaRegister from "@/components/PwaRegister";
 import SatelliteThemeShell from "@/components/SatelliteThemeShell";
+import AppVersionGate from "@/components/AppVersionGate";
 
 export const metadata: Metadata = {
   title: "Contagem de Estoque | HoteisNet",
@@ -28,6 +29,7 @@ export default function ContagemLayout({ children }: { children: React.ReactNode
   return (
     <SatelliteThemeShell>
       <PwaRegister src="/sw-contagem.js" scope="/contagem" />
+      <AppVersionGate variant="satellite" />
       {children}
     </SatelliteThemeShell>
   );

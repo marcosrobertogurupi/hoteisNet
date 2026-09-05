@@ -12,6 +12,9 @@ const ADMIN_ONLY_PREFIXES = ["/app/settings", "/app/cadastros/usuarios", "/app/f
 // segredo de webhook, token de caixa) ou são o próprio endpoint de login. Ver CLAUDE.md, regra 1.
 const PUBLIC_API_PREFIXES = [
   "/api/auth/login",
+  // Só devolve o build id da versão publicada e se ela é obrigatória — nenhum dado de tenant.
+  // Consumida por abas ainda logadas e pela tela de login (aviso de versão desatualizada).
+  "/api/version",
   "/api/housekeeping/login",
   "/api/housekeeping/logout",
   "/api/stock-count/login",

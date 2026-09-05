@@ -98,6 +98,56 @@ export default function SuperAdminDashboardPage() {
   const [aiQuotaOverrideDrafts, setAiQuotaOverrideDrafts] = useState<Record<string, string>>({});
   const [savingAiSettingsId, setSavingAiSettingsId] = useState<string | null>(null);
 
+  // Controle de atualização crítica do sistema (força a tela bloqueante em todos os terminais que
+  // ainda estão numa versão antiga). Dados reais de GET /api/admin/release-control.
+  const [releaseControl, setReleaseControl] = useState<{
+    buildId: string;
+    forceActive: boolean;
+    forceMatchesCurrent: boolean;
+    criticalMessage: string;
+    updatedByName: string | null;
+    updatedAt: string | null;
+  } | null>(null);
+  const [releaseMsgDraft, setReleaseMsgDraft] = useState("");
+  const [savingRelease, setSavingRelease] = useState(false);
+
+  const loadReleaseControl = () => {
+    fetch("/api/admin/release-control")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success) return;
+        setReleaseControl(data);
+        setReleaseMsgDraft(data.criticalMessage || "");
+      })
+      .catch((err) => console.error("Erro ao carregar controle de atualização", err));
+  };
+
+  const handleReleaseAction = async (action: "force" | "clear") => {
+    setSavingRelease(true);
+    try {
+      const res = await fetch("/api/admin/release-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, message: releaseMsgDraft }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(action === "force" ? "Atualização crítica ativada para todos os terminais." : "Obrigatoriedade de atualização cancelada.");
+        loadReleaseControl();
+      } else {
+        toast.error(data.error || "Falha ao aplicar.");
+      }
+    } catch {
+      toast.error("Falha de rede ao aplicar.");
+    } finally {
+      setSavingRelease(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "SYSTEM_SETTINGS") loadReleaseControl();
+  }, [activeTab]);
+
   const loadTenantQuotas = () => {
     setIsLoadingTenantQuotas(true);
     fetch("/api/admin/tenants")
@@ -1122,6 +1172,90 @@ export default function SuperAdminDashboardPage() {
                     defaultValue="Olá {HOSPEDE}, seja bem-vindo ao {HOTEL}! Seu quarto é o {QUARTO}. Desejamos uma excelente estadia!"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white"
                   />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION: ATUALIZAÇÃO DO SISTEMA (dados reais) */}
+          <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden shadow-lg">
+            <button
+              onClick={() => setOpenSection(openSection === "APP_UPDATE" ? "" : "APP_UPDATE")}
+              className="w-full px-6 py-4 bg-[#0284C7]/15 hover:bg-[#0284C7]/25 text-[#38BDF8] font-bold text-sm tracking-wide uppercase flex items-center justify-between transition-colors border-b border-slate-800"
+            >
+              <span className="flex items-center gap-2">
+                <RotateCw className="w-4 h-4" /> Atualização do Sistema
+              </span>
+              {openSection === "APP_UPDATE" ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+
+            {openSection === "APP_UPDATE" && (
+              <div className="p-6 space-y-4 text-xs">
+                <p className="text-slate-400">
+                  Quando uma versão já publicada precisa ser adotada por <b>todos</b> os terminais imediatamente
+                  (correção grave, mudança de regra), force a atualização crítica aqui. Os terminais que ainda
+                  estiverem numa versão antiga mostram o aviso em vermelho e, após 2 minutos sem uso, uma tela
+                  bloqueante que só deixa recarregar. Terminais já na versão atual não são afetados.
+                </p>
+
+                <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-300 font-semibold">Versão no ar</span>
+                    <span className="font-mono text-slate-100">{releaseControl?.buildId ?? "—"}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-300 font-semibold">Atualização crítica</span>
+                    {releaseControl?.forceMatchesCurrent ? (
+                      <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-mono text-[10px] font-bold">
+                        ATIVA — forçando todos
+                      </span>
+                    ) : releaseControl?.forceActive ? (
+                      <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono text-[10px] font-bold">
+                        Ativa para uma versão anterior
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded bg-slate-700/40 text-slate-300 font-mono text-[10px] font-bold">
+                        Inativa
+                      </span>
+                    )}
+                  </div>
+                  {releaseControl?.updatedByName && releaseControl?.updatedAt && (
+                    <div className="text-slate-500 text-[11px]">
+                      Alterado por {releaseControl.updatedByName} em{" "}
+                      {new Date(releaseControl.updatedAt).toLocaleString("pt-BR")}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-semibold block mb-1">
+                    Mensagem exibida ao operador (opcional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={releaseMsgDraft}
+                    onChange={(e) => setReleaseMsgDraft(e.target.value)}
+                    maxLength={300}
+                    placeholder="Ex.: Correção importante no fechamento de caixa. Atualize agora."
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-white"
+                  />
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleReleaseAction("force")}
+                    disabled={savingRelease}
+                    className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-semibold text-xs flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <ShieldAlert className="w-4 h-4" /> Forçar atualização crítica agora
+                  </button>
+                  <button
+                    onClick={() => handleReleaseAction("clear")}
+                    disabled={savingRelease || !releaseControl?.forceActive}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 disabled:opacity-40"
+                  >
+                    <X className="w-4 h-4" /> Cancelar obrigatoriedade
+                  </button>
                 </div>
               </div>
             )}

@@ -1,0 +1,5 @@
+{
+  "_comentario": "Controle de release lido por GET /api/version. Ao publicar um deploy que TODOS precisam adotar imediatamente (correção grave, mudança de regra de negócio), troque \"critical\" para true e escreva um \"criticalMessage\" curto. No próximo deploy normal, volte para false. O admin master também pode forçar 'crítico' pelo painel, sem alterar este arquivo.",
+  "critical": false,
+  "criticalMessage": ""
+}

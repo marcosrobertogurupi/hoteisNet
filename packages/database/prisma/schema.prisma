@@ -45,6 +45,23 @@ model Municipality {
   @@map("municipalities")
 }
 
+// Controle global de release do SaaS (linha única, id fixo "singleton") — não é isolado por
+// tenant porque diz respeito à versão do app inteiro. Usado pelo endpoint GET /api/version para
+// decidir se uma atualização já publicada deve ser tratada como CRÍTICA (tela bloqueante nos
+// terminais após inatividade) mesmo sem um novo deploy: o admin master aciona isso pelo painel
+// quando percebe que a versão no ar precisa ser forçada em todos. forceCriticalBuildId guarda o
+// build id que todos devem alcançar; enquanto o cliente estiver numa versão diferente dessa, o
+// aviso vira crítico. null = sem obrigatoriedade (só o aviso normal, ou o que o release.json disser).
+model AppReleaseControl {
+  id                   String   @id @default("singleton")
+  forceCriticalBuildId String?
+  criticalMessage      String?
+  updatedByName        String?
+  updatedAt            DateTime @updatedAt
+
+  @@map("app_release_control")
+}
+
 model Tenant {
   id                         String                  @id @default(uuid())
   name                       String
