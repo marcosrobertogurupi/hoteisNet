@@ -105,6 +105,12 @@ Toda alteração que reduz o acesso de um usuário (`active: false`, mudança de
 
 Qualquer campo preenchido por hóspede/usuário (nome, observações, mensagens) que for renderizado depois dentro de um template HTML (e-mail, PDF gerado via HTML, etc.) precisa passar por `escapeHtml` (`apps/web/src/lib/htmlEscape.ts`) antes de entrar no template.
 
+### 11. Toda tabela nova no schema Prisma precisa de RLS habilitado numa migration Supabase
+
+A disciplina de segurança **não para na rota de API** — vale para o schema do banco. A `NEXT_PUBLIC_SUPABASE_ANON_KEY` vai embutida no bundle do frontend e o PostgREST do Supabase expõe automaticamente `/rest/v1/<tabela>` para **qualquer tabela sem RLS habilitado**. Uma tabela nova sem RLS é leitura E escrita direta, de fora, por qualquer um com a anon key — ignorando `getSessionUser`, o isolamento por tenant e tudo mais. Em 05/09/2026 o Supabase Advisor sinalizou 16 tabelas (fiscais/PDV, comandas, contagem de estoque, memórias de conversa) criadas depois das migrations de RLS e esquecidas — ver `supabase/migrations/20260905000000_enable_rls_fiscal_pdv_comanda_tables.sql`.
+
+**Ao adicionar qualquer `model` novo em `packages/database/prisma/schema.prisma`, crie no mesmo passo uma migration em `supabase/migrations/` com `ALTER TABLE public.<nome_do_@@map> ENABLE ROW LEVEL SECURITY;` — sem nenhuma policy (RLS ligado + zero policies = negação total para anon/authenticated; o Prisma usa o papel dono e não é afetado).** Modelo a seguir: `20260823220000_enable_rls_all_tables.sql`. Ao revisar um PR que mexe no schema, sinalize toda tabela nova que não ganhou RLS na mesma leva.
+
 ---
 
 ## ⚡ Performance — regras obrigatórias para toda busca de dados
@@ -172,6 +178,7 @@ Endpoint consultado em loop (mapas, telas que atualizam sozinhas) **nunca** baix
 - [ ] Texto livre de usuário é escapado antes de virar HTML?
 - [ ] Toda leitura usa `select` explícito (sem `findMany()` pelado, sem `include`, sem spread do registro na resposta), traz só os campos usados e `_count` no lugar de arrays só para contar? (ver seção ⚡ Performance)
 - [ ] Se o endpoint é consultado em polling, filtra pela janela operacional e não baixa histórico/dataset completo?
+- [ ] Se o PR adiciona um `model` novo no schema Prisma, tem migration `ENABLE ROW LEVEL SECURITY` para a tabela nova (ver Segurança §11)?
 
 Se qualquer resposta for "não", a rota não está pronta.
 
