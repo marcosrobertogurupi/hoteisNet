@@ -54,9 +54,22 @@ export interface NfcePayload {
     valorDesconto: number;
     valorTotal: number;
     origem: string;
+    // Tributos atuais — durante a transição da Reforma seguem no XML em paralelo ao grupo UB.
     icms: { cst: string | null; csosn: string | null; aliquota: number; reducaoBase: number };
     pis: { cst: string; aliquota: number };
     cofins: { cst: string; aliquota: number };
+    // Grupo UB do XML (NT 2025.002): IBS + CBS. As alíquotas efetivas de IBS (UF/Município) e
+    // CBS e o escalonamento da transição são calculados pelo agente/ACBr na emissão a partir da
+    // classificação abaixo.
+    ibsCbs: {
+      cst: string;
+      cClassTrib: string;
+      pRedAliq: number;
+      cCredPres: string | null;
+      pCredPres: number;
+    };
+    // Imposto Seletivo — null quando não incide sobre o item.
+    is: { cst: string | null; cClassTrib: string | null; aliquota: number } | null;
   }>;
   totais: { produtos: number; desconto: number; total: number };
   pagamentos: Array<{ tPag: string; valor: number }>;
@@ -163,6 +176,16 @@ export async function buildNfcePayload(params: {
       icms: { cst: fs.cstIcms, csosn: fs.csosn, aliquota: fs.aliqIcms, reducaoBase: fs.redBaseIcms },
       pis: { cst: fs.cstPis, aliquota: fs.aliqPis },
       cofins: { cst: fs.cstCofins, aliquota: fs.aliqCofins },
+      ibsCbs: {
+        cst: fs.cstIbsCbs ?? "000",
+        cClassTrib: fs.cClassTrib ?? "000001",
+        pRedAliq: fs.pRedAliqIbsCbs ?? 0,
+        cCredPres: fs.cCredPres ?? null,
+        pCredPres: fs.pCredPres ?? 0,
+      },
+      is: fs.isIncideIs
+        ? { cst: fs.cstIs ?? null, cClassTrib: fs.cClassTribIs ?? null, aliquota: fs.pIs ?? 0 }
+        : null,
     };
   });
 

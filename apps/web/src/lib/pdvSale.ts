@@ -3,6 +3,9 @@ import type { Prisma } from "@prisma/client";
 // Helpers do PDV do restaurante (Fase 1): resolução de item vendável do catálogo e recálculo
 // dos totais de um atendimento (ComandaSession).
 
+// Snapshot fiscal do item na venda. Durante a transição da Reforma Tributária, carrega os dois
+// blocos: os tributos atuais (ICMS/PIS/COFINS) e o novo IBS/CBS/IS (grupo UB da NT 2025.002).
+// Guarda a classificação; as alíquotas efetivas de IBS/CBS são resolvidas na emissão.
 export type FiscalSnapshot = {
   fiscalProfileId: string;
   name: string;
@@ -10,6 +13,7 @@ export type FiscalSnapshot = {
   cfop: string;
   cest: string | null;
   origem: string;
+  // Tributos atuais (transição)
   cstIcms: string | null;
   aliqIcms: number;
   redBaseIcms: number;
@@ -18,6 +22,17 @@ export type FiscalSnapshot = {
   aliqPis: number;
   cstCofins: string;
   aliqCofins: number;
+  // IBS / CBS
+  cstIbsCbs: string;
+  cClassTrib: string;
+  pRedAliqIbsCbs: number;
+  cCredPres: string | null;
+  pCredPres: number;
+  // Imposto Seletivo
+  isIncideIs: boolean;
+  cstIs: string | null;
+  cClassTribIs: string | null;
+  pIs: number;
 };
 
 export function fiscalSnapshotFromProfile(p: {
@@ -35,6 +50,15 @@ export function fiscalSnapshotFromProfile(p: {
   aliqPis: Prisma.Decimal | number;
   cstCofins: string;
   aliqCofins: Prisma.Decimal | number;
+  cstIbsCbs: string;
+  cClassTrib: string;
+  pRedAliqIbsCbs: Prisma.Decimal | number;
+  cCredPres: string | null;
+  pCredPres: Prisma.Decimal | number;
+  isIncideIs: boolean;
+  cstIs: string | null;
+  cClassTribIs: string | null;
+  pIs: Prisma.Decimal | number;
 }): FiscalSnapshot {
   return {
     fiscalProfileId: p.id,
@@ -51,6 +75,15 @@ export function fiscalSnapshotFromProfile(p: {
     aliqPis: Number(p.aliqPis),
     cstCofins: p.cstCofins,
     aliqCofins: Number(p.aliqCofins),
+    cstIbsCbs: p.cstIbsCbs,
+    cClassTrib: p.cClassTrib,
+    pRedAliqIbsCbs: Number(p.pRedAliqIbsCbs),
+    cCredPres: p.cCredPres,
+    pCredPres: Number(p.pCredPres),
+    isIncideIs: p.isIncideIs,
+    cstIs: p.cstIs,
+    cClassTribIs: p.cClassTribIs,
+    pIs: Number(p.pIs),
   };
 }
 
@@ -86,6 +119,15 @@ export async function resolveSellableItem(
     aliqPis: true,
     cstCofins: true,
     aliqCofins: true,
+    cstIbsCbs: true,
+    cClassTrib: true,
+    pRedAliqIbsCbs: true,
+    cCredPres: true,
+    pCredPres: true,
+    isIncideIs: true,
+    cstIs: true,
+    cClassTribIs: true,
+    pIs: true,
   } as const;
 
   if (ref.dishId) {

@@ -1813,35 +1813,49 @@ model FiscalSequence {
   @@map("fiscal_sequences")
 }
 
-// Perfil tributário reutilizável, aplicado a pratos (Dish) e produtos (Product). Para o hotel
-// atual (Lucro Presumido / regime normal) usa-se CST; os campos CSOSN existem para futuros
-// tenants no Simples Nacional. Preenchido com orientação do contador.
+// Perfil tributário reutilizável, aplicado a pratos (Dish) e produtos (Product). Durante a
+// transição da Reforma Tributária do Consumo (EC 132/2023, LC 214/2025, LC 227/2026), o XML da
+// NFC-e/NF-e carrega EM PARALELO os grupos antigos (ICMS/PIS/COFINS) e o grupo novo IBS/CBS/IS
+// (grupo UB da NT 2025.002) — por isso os dois blocos coexistem aqui. Guarda a *classificação*
+// tributária do item; as alíquotas efetivas de IBS/CBS e o escalonamento 2026→2033 são
+// resolvidos na emissão. Preenchido com orientação do contador.
 model FiscalProfile {
-  id          String    @id @default(uuid())
-  tenantId    String
-  name        String
-  ncm         String
-  cfop        String
-  cest        String?
+  id             String    @id @default(uuid())
+  tenantId       String
+  name           String
+  ncm            String
+  cfop           String
+  cest           String?
   // Origem da mercadoria (0–8, tabela da NF-e).
-  origem      String    @default("0")
-  // ICMS — regime normal.
-  cstIcms     String?
-  aliqIcms    Decimal   @default(0) @db.Decimal(5, 2)
-  redBaseIcms Decimal   @default(0) @db.Decimal(5, 2)
-  // ICMS — Simples Nacional (uso futuro).
-  csosn       String?
-  // PIS / COFINS.
-  cstPis      String    @default("07")
-  aliqPis     Decimal   @default(0) @db.Decimal(7, 4)
-  cstCofins   String    @default("07")
-  aliqCofins  Decimal   @default(0) @db.Decimal(7, 4)
-  active      Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  dishes      Dish[]
-  products    Product[]
+  origem         String    @default("0")
+  // ── Tributos atuais (transição) — ICMS regime normal ──
+  cstIcms        String?
+  aliqIcms       Decimal   @default(0) @db.Decimal(5, 2)
+  redBaseIcms    Decimal   @default(0) @db.Decimal(5, 2)
+  // ── ICMS — Simples Nacional (uso futuro) ──
+  csosn          String?
+  // ── Tributos atuais (transição) — PIS / COFINS ──
+  cstPis         String    @default("07")
+  aliqPis        Decimal   @default(0) @db.Decimal(7, 4)
+  cstCofins      String    @default("07")
+  aliqCofins     Decimal   @default(0) @db.Decimal(7, 4)
+  // ── Reforma Tributária — IBS / CBS (NT 2025.002, grupo UB) ──
+  cstIbsCbs      String    @default("000") // CST IBS/CBS (3 díg. — tabela da NT 2025.002)
+  cClassTrib     String    @default("000001") // Código de Classificação Tributária (6 díg.)
+  pRedAliqIbsCbs Decimal   @default(0) @db.Decimal(5, 2) // % de redução de alíquota (derivado do cClassTrib; editável p/ conferência)
+  cCredPres      String? // código de classificação do crédito presumido (opcional)
+  pCredPres      Decimal   @default(0) @db.Decimal(5, 2) // % do crédito presumido (opcional)
+  // ── Imposto Seletivo (IS) — bebidas alcoólicas/açucaradas, fumo, etc. ──
+  isIncideIs     Boolean   @default(false)
+  cstIs          String?
+  cClassTribIs   String?
+  pIs            Decimal   @default(0) @db.Decimal(7, 4) // alíquota ad valorem do IS (%)
+  active         Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dishes         Dish[]
+  products       Product[]
 
   @@map("fiscal_profiles")
 }

@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
+import { CST_IBSCBS_CODES, classTribMatchesCst } from "@/lib/fiscal/reformaTributaria";
 
 // Cadastro de perfis tributários (FiscalProfile) reutilizados por pratos e produtos na emissão
-// de NFC-e / NF-e. Para este hotel (Lucro Presumido / regime normal) preenche-se o bloco CST;
-// os campos CSOSN existem para tenants futuros no Simples Nacional. Deve ser preenchido com
-// orientação do contador.
+// de NFC-e / NF-e. Durante a transição da Reforma Tributária, guarda os dois blocos em paralelo:
+// tributos atuais (ICMS/PIS/COFINS) e o novo IBS + CBS + Imposto Seletivo (NT 2025.002). O
+// cadastro guarda a *classificação*; as alíquotas efetivas de IBS/CBS e a transição 2026→2033
+// são resolvidas na emissão. Preencher com o contador.
 
 const PROFILE_SELECT = {
   id: true,
@@ -22,17 +24,35 @@ const PROFILE_SELECT = {
   aliqPis: true,
   cstCofins: true,
   aliqCofins: true,
+  cstIbsCbs: true,
+  cClassTrib: true,
+  pRedAliqIbsCbs: true,
+  cCredPres: true,
+  pCredPres: true,
+  isIncideIs: true,
+  cstIs: true,
+  cClassTribIs: true,
+  pIs: true,
   active: true,
   _count: { select: { dishes: true, products: true } },
 } as const;
 
+const clampPct = (v: any) => Math.min(100, Math.max(0, Number(v) || 0));
+const digits = (v: any, len: number) => {
+  const s = String(v ?? "").replace(/\D/g, "");
+  return s.length === len ? s : "";
+};
+
 function parseBody(body: any) {
+  const isIncideIs = body.isIncideIs === true || body.isIncideIs === "true";
+  const cstIbsCbs = digits(body.cstIbsCbs, 3) || "000";
   return {
     name: String(body.nome || "").trim(),
     ncm: String(body.ncm || "").replace(/\D/g, ""),
     cfop: String(body.cfop || "").replace(/\D/g, ""),
     cest: body.cest ? String(body.cest).replace(/\D/g, "") : null,
     origem: /^[0-8]$/.test(String(body.origem)) ? String(body.origem) : "0",
+    // ── Tributos atuais (transição) — ICMS / PIS / COFINS ──
     cstIcms: body.cstIcms ? String(body.cstIcms).trim() : null,
     aliqIcms: Math.max(0, Number(body.aliqIcms) || 0),
     redBaseIcms: Math.max(0, Number(body.redBaseIcms) || 0),
@@ -41,8 +61,31 @@ function parseBody(body: any) {
     aliqPis: Math.max(0, Number(body.aliqPis) || 0),
     cstCofins: body.cstCofins ? String(body.cstCofins).trim() : "07",
     aliqCofins: Math.max(0, Number(body.aliqCofins) || 0),
+    // ── IBS / CBS ──
+    cstIbsCbs,
+    cClassTrib: digits(body.cClassTrib, 6) || "000001",
+    pRedAliqIbsCbs: clampPct(body.pRedAliqIbsCbs),
+    cCredPres: body.cCredPres ? String(body.cCredPres).replace(/\D/g, "").slice(0, 2) || null : null,
+    pCredPres: clampPct(body.pCredPres),
+    // ── Imposto Seletivo ──
+    isIncideIs,
+    cstIs: isIncideIs && body.cstIs ? digits(body.cstIs, 3) || null : null,
+    cClassTribIs: isIncideIs && body.cClassTribIs ? digits(body.cClassTribIs, 6) || null : null,
+    pIs: isIncideIs ? clampPct(body.pIs) : 0,
     active: body.ativo !== false,
   };
+}
+
+// Validações comuns a POST e PUT. Devolve a mensagem de erro ou null.
+function validateProfile(data: ReturnType<typeof parseBody>): string | null {
+  if (!data.name) return "Informe um nome para o perfil fiscal.";
+  if (data.ncm.length !== 8) return "O NCM deve ter 8 dígitos.";
+  if (data.cfop.length !== 4) return "O CFOP deve ter 4 dígitos.";
+  if (!CST_IBSCBS_CODES.has(data.cstIbsCbs)) return "CST de IBS/CBS inválido.";
+  if (data.cClassTrib.length !== 6) return "O código de classificação tributária (cClassTrib) deve ter 6 dígitos.";
+  if (!classTribMatchesCst(data.cClassTrib, data.cstIbsCbs))
+    return "O cClassTrib informado não pertence ao CST de IBS/CBS selecionado.";
+  return null;
 }
 
 export async function GET(req: NextRequest) {
@@ -72,14 +115,9 @@ export async function POST(req: NextRequest) {
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const data = parseBody(await req.json());
-    if (!data.name) {
-      return NextResponse.json({ success: false, error: "Informe um nome para o perfil fiscal." }, { status: 400 });
-    }
-    if (data.ncm.length !== 8) {
-      return NextResponse.json({ success: false, error: "O NCM deve ter 8 dígitos." }, { status: 400 });
-    }
-    if (data.cfop.length !== 4) {
-      return NextResponse.json({ success: false, error: "O CFOP deve ter 4 dígitos." }, { status: 400 });
+    const invalid = validateProfile(data);
+    if (invalid) {
+      return NextResponse.json({ success: false, error: invalid }, { status: 400 });
     }
 
     const perfil = await prisma.fiscalProfile.create({
@@ -105,14 +143,9 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: "ID do perfil fiscal é obrigatório." }, { status: 400 });
     }
     const data = parseBody(body);
-    if (!data.name) {
-      return NextResponse.json({ success: false, error: "Informe um nome para o perfil fiscal." }, { status: 400 });
-    }
-    if (data.ncm.length !== 8) {
-      return NextResponse.json({ success: false, error: "O NCM deve ter 8 dígitos." }, { status: 400 });
-    }
-    if (data.cfop.length !== 4) {
-      return NextResponse.json({ success: false, error: "O CFOP deve ter 4 dígitos." }, { status: 400 });
+    const invalid = validateProfile(data);
+    if (invalid) {
+      return NextResponse.json({ success: false, error: invalid }, { status: 400 });
     }
 
     const updated = await prisma.fiscalProfile.updateMany({
