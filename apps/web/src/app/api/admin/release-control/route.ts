@@ -18,8 +18,10 @@ export const dynamic = "force-dynamic";
 
 const SINGLETON_ID = "singleton";
 
+const DEV_BUILD_ID = `dev-${Date.now()}`;
+
 function currentBuildId(): string {
-  return (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12) || process.env.NEXT_PUBLIC_BUILD_ID || "dev";
+  return (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12) || DEV_BUILD_ID;
 }
 
 async function requireSuperAdmin(req: NextRequest) {

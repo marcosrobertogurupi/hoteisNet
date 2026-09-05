@@ -1,14 +1,5 @@
-// Identificador da versão publicada. Derivado do commit do deploy (Vercel expõe
-// VERCEL_GIT_COMMIT_SHA no build); em dev local cai para um carimbo de tempo estável durante a
-// vida do processo. Fica "assado" no bundle do cliente via `env` abaixo (NEXT_PUBLIC_BUILD_ID) e é
-// comparado, pelo componente AppVersionGate, com o que GET /api/version responde em tempo real —
-// quando divergem, há uma nova versão no ar e a aba atual está desatualizada.
-const BUILD_ID = (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12) || `dev-${Date.now()}`;
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
-  generateBuildId: () => BUILD_ID,
   async headers() {
     const baseSecurityHeaders = [
       { key: "X-Frame-Options", value: "DENY" },

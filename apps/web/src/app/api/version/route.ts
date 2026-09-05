@@ -6,9 +6,12 @@ import releaseConfig from "@/release.json";
 //
 // Só devolve o identificador da versão publicada e se essa versão deve ser adotada de forma
 // obrigatória. Não expõe nada sensível e é consultada tanto por abas ainda logadas quanto pela
-// tela de login. O componente AppVersionGate (apps/web) compara o `buildId` daqui com o
-// NEXT_PUBLIC_BUILD_ID "assado" no bundle da aba: se diferirem, a aba está rodando uma versão
-// antiga e precisa recarregar.
+// tela de login. `buildId` vem de VERCEL_GIT_COMMIT_SHA lido em TEMPO DE EXECUÇÃO — reflete o
+// deploy que efetivamente está servindo esta função. O cliente (lib/useAppVersion) não tem um
+// build id "assado" no bundle: ele guarda o `buildId` da PRIMEIRA resposta que recebeu ao
+// carregar a página e compara os polls seguintes com esse valor. Assim a detecção não depende de
+// inlining de env nem sofre com o cache de build da Vercel (que pode reaproveitar o bundle antigo
+// num deploy novo, fazendo uma constante de build divergir para sempre do runtime).
 //
 // `critical` combina duas fontes (ver CLAUDE.md / PRD.md):
 //  - release.json.critical  → decidido no commit do deploy;
@@ -46,10 +49,12 @@ async function getReleaseControl() {
   return value;
 }
 
-// Mesmo cálculo do next.config.mjs, porém em tempo de execução: reflete o deploy que está
-// efetivamente servindo esta função.
+// Estável durante a vida do processo em dev local (sem VERCEL_GIT_COMMIT_SHA); em produção o
+// valor abaixo nem é usado — currentBuildId() lê a env do deploy a cada chamada.
+const DEV_BUILD_ID = `dev-${Date.now()}`;
+
 function currentBuildId(): string {
-  return (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12) || process.env.NEXT_PUBLIC_BUILD_ID || "dev";
+  return (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12) || DEV_BUILD_ID;
 }
 
 export async function GET() {
