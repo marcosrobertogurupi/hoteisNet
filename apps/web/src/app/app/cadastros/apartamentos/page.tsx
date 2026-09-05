@@ -28,6 +28,7 @@ export default function ApartamentosPage() {
   const [apartamentos, setApartamentos] = useState<ApartamentoFormData[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("TODOS");
+  const [floorFilter, setFloorFilter] = useState("TODOS");
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingApto, setEditingApto] = useState<ApartamentoFormData | null>(null);
@@ -105,6 +106,16 @@ export default function ApartamentosPage() {
   // aparecem na hora). 30 s de frescor basta; antes eram 3 s. Pausa com a aba em segundo plano.
   usePolling(syncApartamentosFromDatabase, 30000);
 
+  // Lista de andares distintos existentes no cadastro, em ordem natural (1º, 2º, 10º...)
+  const andaresDisponiveis = Array.from(
+    new Set(apartamentos.map((a) => (a.andar || "").trim()).filter(Boolean))
+  ).sort((x, y) => {
+    const nx = parseInt(x, 10);
+    const ny = parseInt(y, 10);
+    if (!Number.isNaN(nx) && !Number.isNaN(ny)) return nx - ny;
+    return x.localeCompare(y, "pt-BR");
+  });
+
   const filteredAptos = apartamentos.filter((a) => {
     const matchesSearch =
       a.numero.includes(searchQuery) ||
@@ -113,7 +124,9 @@ export default function ApartamentosPage() {
 
     const matchesStatus = statusFilter === "TODOS" || a.status === statusFilter;
 
-    return matchesSearch && matchesStatus;
+    const matchesFloor = floorFilter === "TODOS" || (a.andar || "").trim() === floorFilter;
+
+    return matchesSearch && matchesStatus && matchesFloor;
   });
 
   const handleOpenAdd = () => {
@@ -289,7 +302,7 @@ export default function ApartamentosPage() {
           </button>
         </div>
 
-        <div className={`grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-2xl border ${
+        <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 p-4 rounded-2xl border ${
           isDark ? "bg-slate-900/50 border-slate-800" : "bg-white border-slate-200 shadow-sm"
         }`}>
           <div className="relative">
@@ -318,6 +331,23 @@ export default function ApartamentosPage() {
               <option value="OCUPADO">Ocupado</option>
               <option value="LIMPEZA">Em Limpeza</option>
               <option value="MANUTENCAO">Em Manutenção</option>
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={floorFilter}
+              onChange={(e) => setFloorFilter(e.target.value)}
+              className={`w-full px-3 py-2 rounded-xl text-xs focus:outline-none transition ${
+                isDark ? "bg-slate-950 border border-slate-800 text-white" : "bg-slate-50 border border-slate-300 text-slate-900"
+              }`}
+            >
+              <option value="TODOS">Todos os Andares</option>
+              {andaresDisponiveis.map((andar) => (
+                <option key={andar} value={andar}>
+                  {andar}
+                </option>
+              ))}
             </select>
           </div>
 
