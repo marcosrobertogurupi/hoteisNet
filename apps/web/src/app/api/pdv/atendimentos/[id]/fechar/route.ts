@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { loadSession, serializeSession } from "@/lib/pdvSession";
 import { round2 } from "@/lib/pdvSale";
-import { normalizePagamentos, pagamentosInvalid, ensureOpenCaixa, postComandaPaymentEvent } from "@/lib/pdvPayment";
+import {
+  normalizePagamentos,
+  resolvePagamentos,
+  ensureOpenCaixa,
+  postComandaPaymentEvent,
+  type ResolvedPdvPayment,
+} from "@/lib/pdvPayment";
 
 // POST /api/pdv/atendimentos/[id]/fechar — fecha o atendimento e o deixa AGUARDANDO_FISCAL (a
 // emissão da NFC-e/NF-e é fase posterior). Considera pagamentos parciais já recebidos
@@ -35,13 +42,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const saldo = round2(total - jaPago);
     const isHospede = current.customerType === "HOSPEDE";
 
-    const pagamentos = normalizePagamentos(body.pagamentos).filter((p) => p.forma !== "CONTA_QUARTO");
-    const somaPag = round2(pagamentos.reduce((a, p) => a + p.valor, 0));
-
-    if (pagamentos.length > 0) {
-      const invalid = pagamentosInvalid(pagamentos);
-      if (invalid) return NextResponse.json({ success: false, error: invalid }, { status: 400 });
+    // Fechamento de hóspede pode não ter pagamento nenhum (o saldo todo vai para o quarto), então
+    // só resolve o cadastro quando há linhas informadas.
+    const rawPagamentos = normalizePagamentos(body.pagamentos);
+    let pagamentos: ResolvedPdvPayment[] = [];
+    if (rawPagamentos.length > 0) {
+      const r = await resolvePagamentos(prisma, session.tenantId, rawPagamentos, { isHospede });
+      if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: 400 });
+      pagamentos = r.pagamentos;
     }
+    const somaPag = round2(pagamentos.reduce((a, p) => a + p.valor, 0));
 
     let troco = 0;
     let roomAmount = 0;
@@ -67,7 +77,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           );
         }
         troco = round2(somaPag - saldo);
-        if (troco > 0 && !pagamentos.some((p) => p.forma === "DINHEIRO")) {
+        if (troco > 0 && !pagamentos.some((p) => p.isCash)) {
           return NextResponse.json({ success: false, error: "Só há troco em pagamento com dinheiro." }, { status: 400 });
         }
       } else if (pagamentos.length > 0) {
@@ -129,6 +139,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       let collectedNow = 0;
       if (cashRegisterId && pagamentos.length > 0) {
         collectedNow = await postComandaPaymentEvent(tx, {
+          tenantId: session.tenantId!,
           sessionId: id,
           comandaNumber: fresh.comanda.number,
           customerName: fresh.customerName || current.stayCheckin?.primaryGuest?.fullName || null,
@@ -138,6 +149,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           troco,
           operatorId: session.userId,
           operatorName: session.name,
+          hospede: isHospede && fresh.stayCheckinId ? { stayCheckinId: fresh.stayCheckinId } : null,
         });
       }
 

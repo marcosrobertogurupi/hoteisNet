@@ -14,6 +14,7 @@ const TPAG: Record<string, string> = {
   DEBITO: "04",
   PIX: "17",
   CONTA_QUARTO: "99", // "outros" — o valor foi lançado na conta da hospedagem
+  OUTRO: "99", // forma cadastrada sem natureza específica (voucher, cortesia, cheque…)
 };
 
 export interface NfcePayload {

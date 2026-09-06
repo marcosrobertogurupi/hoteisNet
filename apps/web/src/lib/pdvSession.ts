@@ -48,7 +48,18 @@ export const SESSION_SELECT = {
   },
   payments: {
     orderBy: { createdAt: "asc" },
-    select: { id: true, kind: true, method: true, amount: true, change: true, cardBrand: true, cardNsu: true, createdAt: true },
+    select: {
+      id: true,
+      kind: true,
+      method: true,
+      methodLabel: true,
+      paymentMethodId: true,
+      amount: true,
+      change: true,
+      cardBrand: true,
+      cardNsu: true,
+      createdAt: true,
+    },
   },
   fiscalDocuments: {
     orderBy: { createdAt: "desc" },
@@ -100,7 +111,9 @@ export function serializeSession(s: RawSession) {
     pagamentos: s.payments.map((p) => ({
       id: p.id,
       tipo: p.kind, // ADVANCE (parcial) | SETTLEMENT (fechamento)
-      forma: p.method,
+      forma: p.method, // categoria coarse (DINHEIRO/DEBITO/CREDITO/PIX/CONTA_QUARTO/OUTRO)
+      formaLabel: p.methodLabel, // descrição da forma cadastrada usada no lançamento (pode ser null nos antigos)
+      formaId: p.paymentMethodId,
       valor: Number(p.amount),
       troco: Number(p.change),
       bandeira: p.cardBrand,

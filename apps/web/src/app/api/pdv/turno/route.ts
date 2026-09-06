@@ -9,6 +9,7 @@ const FORMA_LABEL: Record<string, string> = {
   CREDITO: "Cartão crédito",
   PIX: "PIX",
   CONTA_QUARTO: "Conta do quarto",
+  OUTRO: "Outro",
 };
 
 // GET /api/pdv/turno — resumo de vendas do PDV do operador logado no dia (ou ?data=YYYY-MM-DD):
@@ -51,15 +52,18 @@ export async function GET(req: NextRequest) {
           comandaSession: baseWhere,
           createdAt: { gte: inicio, lt: fim },
         },
-        select: { method: true, kind: true, amount: true, change: true },
+        select: { method: true, methodLabel: true, kind: true, amount: true, change: true },
       }),
     ]);
 
+    // Agrupa pela descrição da forma cadastrada quando existe (lançamentos novos); os antigos, sem
+    // methodLabel, caem no rótulo da categoria coarse.
     const porForma: Record<string, number> = {};
     let adiantamentos = 0;
     for (const p of pagamentos) {
       const liquido = round2(Number(p.amount) - Number(p.change));
-      porForma[p.method] = round2((porForma[p.method] || 0) + liquido);
+      const rotulo = p.methodLabel || FORMA_LABEL[p.method] || p.method;
+      porForma[rotulo] = round2((porForma[rotulo] || 0) + liquido);
       if (p.kind === "ADVANCE") adiantamentos = round2(adiantamentos + liquido);
     }
 
@@ -86,9 +90,9 @@ export async function GET(req: NextRequest) {
         totalFechado,
         naContaQuarto,
         adiantamentosRecebidos: adiantamentos,
-        porFormaPagamento: Object.entries(porForma).map(([forma, valor]) => ({
-          forma,
-          rotulo: FORMA_LABEL[forma] || forma,
+        porFormaPagamento: Object.entries(porForma).map(([rotulo, valor]) => ({
+          forma: rotulo,
+          rotulo,
           valor,
         })),
         porPontoVenda: Object.entries(porPonto).map(([nome, v]) => ({ nome, ...v })),

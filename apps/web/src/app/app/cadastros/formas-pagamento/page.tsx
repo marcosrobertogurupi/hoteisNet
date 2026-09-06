@@ -14,9 +14,27 @@ interface FormaPagto {
   debitGuestBalance: boolean;
   transferDebit: boolean;
   sumsToCashRegister: boolean;
+  pdvCategory: string;
 }
 
 const TENANT_ID = "tenant-hoteisnet-demo";
+
+// Natureza da forma para o PDV do restaurante: define o rótulo no caixa, se o campo Bandeira/NSU
+// aparece (cartões) e em qual forma cabe troco (só Dinheiro).
+const PDV_CATEGORIES: Array<{ value: string; label: string }> = [
+  { value: "DINHEIRO", label: "Dinheiro (aceita troco)" },
+  { value: "CARTAO_DEBITO", label: "Cartão de débito (pede bandeira/NSU)" },
+  { value: "CARTAO_CREDITO", label: "Cartão de crédito (pede bandeira/NSU)" },
+  { value: "PIX", label: "PIX" },
+  { value: "OUTRO", label: "Outro (voucher, cortesia, cheque…)" },
+];
+const PDV_CATEGORY_LABEL: Record<string, string> = {
+  DINHEIRO: "Dinheiro",
+  CARTAO_DEBITO: "Débito",
+  CARTAO_CREDITO: "Crédito",
+  PIX: "PIX",
+  OUTRO: "Outro",
+};
 
 const EMPTY_FORM = {
   description: "",
@@ -24,6 +42,7 @@ const EMPTY_FORM = {
   debitGuestBalance: false,
   transferDebit: false,
   sumsToCashRegister: true,
+  pdvCategory: "OUTRO",
 };
 
 export default function FormasPagamentoPage() {
@@ -50,6 +69,7 @@ export default function FormasPagamentoPage() {
           debitGuestBalance: !!f.debitGuestBalance,
           transferDebit: !!f.transferDebit,
           sumsToCashRegister: !!f.sumsToCashRegister,
+          pdvCategory: f.pdvCategory || "OUTRO",
         }))
       );
     } catch (err) {
@@ -76,6 +96,7 @@ export default function FormasPagamentoPage() {
       debitGuestBalance: f.debitGuestBalance,
       transferDebit: f.transferDebit,
       sumsToCashRegister: f.sumsToCashRegister,
+      pdvCategory: f.pdvCategory || "OUTRO",
     });
   };
 
@@ -96,6 +117,7 @@ export default function FormasPagamentoPage() {
           debitGuestBalance: form.debitGuestBalance,
           transferDebit: form.transferDebit,
           sumsToCashRegister: form.sumsToCashRegister,
+          pdvCategory: form.pdvCategory,
         }),
       });
       const result = await res.json();
@@ -211,6 +233,9 @@ export default function FormasPagamentoPage() {
                       <td className="px-5 py-4">
                         <span className={`font-bold block ${isDark ? "text-white" : "text-slate-900"}`}>{f.description}</span>
                         <div className="flex flex-wrap gap-1 mt-1">
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${isDark ? "bg-slate-700/40 text-slate-300 border-slate-600/40" : "bg-slate-100 text-slate-600 border-slate-300"}`}>
+                            PDV: {PDV_CATEGORY_LABEL[f.pdvCategory] || "Outro"}
+                          </span>
                           {f.installment && (
                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${isDark ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
                               Parcelamento
@@ -318,6 +343,25 @@ export default function FormasPagamentoPage() {
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   className={inputClass}
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className={`text-sm font-bold ${isDark ? "text-white" : "text-slate-900"}`}>Categoria no PDV do Restaurante</label>
+                <select
+                  value={form.pdvCategory}
+                  onChange={(e) => setForm({ ...form, pdvCategory: e.target.value })}
+                  className={inputClass}
+                >
+                  {PDV_CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+                <p className={`text-[11px] ${isDark ? "text-slate-400" : "text-slate-500"}`}>
+                  Define o rótulo no caixa, se pede bandeira/NSU e onde cabe troco quando esta forma é
+                  usada numa comanda do PDV.
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-3">

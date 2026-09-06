@@ -733,7 +733,7 @@ export default function PdvPage() {
                     {selected.pagamentos.map((p) => (
                       <div key={p.id} className={`flex justify-between ${isDark ? "text-slate-400" : "text-slate-500"}`}>
                         <span>
-                          {p.tipo === "ADVANCE" ? "Parcial" : "Acerto"} · {FORMA_LABEL[p.forma] || p.forma}
+                          {p.tipo === "ADVANCE" ? "Parcial" : "Acerto"} · {p.formaLabel || FORMA_LABEL[p.forma] || p.forma}
                           {p.troco > 0 ? ` (troco ${money(p.troco)})` : ""}
                         </span>
                         <span className="font-mono">{money(p.valor)}</span>
