@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Store, Plus, RefreshCw, Search, Trash2, Minus, Settings2, Banknote, ArrowRightLeft, XCircle, Receipt,
@@ -57,6 +57,7 @@ export default function PdvPage() {
   const [comandaScan, setComandaScan] = useState("");
   const [cartoes, setCartoes] = useState<Array<{ id: string; number: string; active: boolean }>>([]);
   const [preAbrirComandaId, setPreAbrirComandaId] = useState<string | null>(null);
+  const comandaScanRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     try {
@@ -95,6 +96,12 @@ export default function PdvPage() {
   useEffect(() => {
     if (terminalId) sync();
   }, [terminalId, sync]);
+
+  // Ao entrar no PDV (e sempre que fecha um modal), o cursor já fica no campo de leitura da
+  // comanda — o operador bipa o cartão sem precisar clicar em nada.
+  useEffect(() => {
+    if (terminalId && !modal) comandaScanRef.current?.focus();
+  }, [terminalId, modal]);
 
   const pickTerminal = (id: string) => {
     try {
@@ -138,6 +145,7 @@ export default function PdvPage() {
     if (scanMatch.kind === "open") {
       setSelectedId(scanMatch.id);
       setComandaScan("");
+      comandaScanRef.current?.focus();
     } else if (scanMatch.kind === "card") {
       if (!scanMatch.card.active) {
         toast.warning(`A comanda ${scanMatch.card.number} está inativa.`);
@@ -458,6 +466,8 @@ export default function PdvPage() {
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
               <input
+                ref={comandaScanRef}
+                autoFocus
                 value={comandaScan}
                 onChange={(e) => setComandaScan(e.target.value)}
                 onKeyDown={(e) => {
