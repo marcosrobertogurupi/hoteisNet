@@ -13,10 +13,12 @@ interface Opt {
 
 export default function AbrirComandaModal({
   terminalId,
+  preselectComandaId,
   onClose,
   onDone,
 }: {
   terminalId: string;
+  preselectComandaId?: string | null;
   onClose: () => void;
   onDone: (a: Atendimento) => void;
 }) {
@@ -31,7 +33,7 @@ export default function AbrirComandaModal({
   const [saving, setSaving] = useState(false);
 
   const [form, setForm] = useState({
-    comandaId: "",
+    comandaId: preselectComandaId || "",
     posLocationId: "",
     tableId: "",
     tipoCliente: "PASSANTE" as "PASSANTE" | "HOSPEDE",
@@ -56,14 +58,19 @@ export default function AbrirComandaModal({
       );
       if (cadastro?.success) {
         const items = cadastro.items || [];
+        const livres = items.filter((x: any) => x.type === "COMANDA_AVULSA" && x.active && !emUso.has(x.id));
         setComandas(
-          items
-            .filter((x: any) => x.type === "COMANDA_AVULSA" && x.active && !emUso.has(x.id))
-            .map((x: any) => ({
-              id: x.id,
-              label: `Comanda ${x.number}${x.description && x.description !== x.number ? ` — ${x.description}` : ""}`,
-            }))
+          livres.map((x: any) => ({
+            id: x.id,
+            label: `Comanda ${x.number}${x.description && x.description !== x.number ? ` — ${x.description}` : ""}`,
+          }))
         );
+        // Se a comanda pré-selecionada (veio da leitura do código de barras) não está mais livre,
+        // limpa a escolha para o operador não abrir um cartão já em uso sem perceber.
+        if (preselectComandaId && !livres.some((x: any) => x.id === preselectComandaId)) {
+          setForm((f) => ({ ...f, comandaId: "" }));
+          toast.warning("Essa comanda não está mais livre. Escolha outra.");
+        }
         setMesas(items.filter((x: any) => x.type === "MESA").map((x: any) => ({ id: x.id, label: `Mesa ${x.number}` })));
       }
       if (sp?.success) setPontos((sp.posLocations || []).filter((x: any) => x.active).map((x: any) => ({ id: x.id, label: x.name })));

@@ -52,6 +52,11 @@ export default function PdvPage() {
   // produtos fica desabilitada e o item aparece na comanda marcado como "lançando…". Sem isso o
   // operador tocava várias vezes achando que travou, e lançava o mesmo item repetido.
   const [savingItem, setSavingItem] = useState(false);
+  // Busca/leitura de comanda pelo número (código de barras do cartão físico): já aberta → seleciona;
+  // cartão cadastrado mas livre → abre o modal "Abrir comanda" já com o cartão escolhido.
+  const [comandaScan, setComandaScan] = useState("");
+  const [cartoes, setCartoes] = useState<Array<{ id: string; number: string; active: boolean }>>([]);
+  const [preAbrirComandaId, setPreAbrirComandaId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -64,6 +69,16 @@ export default function PdvPage() {
     fetch("/api/pdv/catalogo-venda")
       .then((r) => r.json())
       .then((d) => d?.success && setCatalogo(d.itens));
+    fetch("/api/cadastros/comandas")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d?.success) return;
+        setCartoes(
+          (d.items || [])
+            .filter((x: any) => x.type === "COMANDA_AVULSA")
+            .map((x: any) => ({ id: x.id, number: String(x.number), active: !!x.active }))
+        );
+      });
   }, []);
 
   const sync = useCallback(async () => {
@@ -97,6 +112,44 @@ export default function PdvPage() {
     [atendimentos]
   );
   const selected = atendimentos.find((a) => a.id === selectedId) || null;
+
+  // Compara números de comanda ignorando espaços, caixa e zeros à esquerda ("007" == "7").
+  const normNum = (s: string) => s.trim().toLowerCase().replace(/^0+(?=.)/, "");
+
+  const abertasView = useMemo(() => {
+    const q = comandaScan.trim();
+    if (!q) return abertas;
+    const nq = normNum(q);
+    return abertas.filter((a) => normNum(a.comanda.number).includes(nq));
+  }, [abertas, comandaScan]);
+
+  const scanMatch = useMemo(() => {
+    const q = comandaScan.trim();
+    if (!q) return { kind: "empty" as const };
+    const nq = normNum(q);
+    const open = abertas.find((a) => normNum(a.comanda.number) === nq);
+    if (open) return { kind: "open" as const, id: open.id };
+    const card = cartoes.find((c) => normNum(c.number) === nq);
+    if (card) return { kind: "card" as const, card };
+    return { kind: "none" as const };
+  }, [comandaScan, abertas, cartoes]);
+
+  const resolveComandaScan = () => {
+    if (scanMatch.kind === "open") {
+      setSelectedId(scanMatch.id);
+      setComandaScan("");
+    } else if (scanMatch.kind === "card") {
+      if (!scanMatch.card.active) {
+        toast.warning(`A comanda ${scanMatch.card.number} está inativa.`);
+        return;
+      }
+      setPreAbrirComandaId(scanMatch.card.id);
+      setModal("abrir");
+      setComandaScan("");
+    } else if (scanMatch.kind === "none") {
+      toast.warning(`Comanda "${comandaScan.trim()}" não encontrada.`);
+    }
+  };
 
   const turno = useMemo(() => {
     const fechadas = atendimentos.filter((a) => a.fechadaEm && a.status !== "CANCELADA");
@@ -401,11 +454,39 @@ export default function PdvPage() {
             <button onClick={() => setModal("abrir")} className={`${primaryBtn} w-full`}>
               <Plus className="w-4 h-4" /> Abrir comanda
             </button>
+
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                value={comandaScan}
+                onChange={(e) => setComandaScan(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    resolveComandaScan();
+                  }
+                }}
+                placeholder="Bipar ou digitar nº da comanda…"
+                inputMode="numeric"
+                autoComplete="off"
+                className={`${inputCls(isDark)} pl-9`}
+              />
+            </div>
+            {scanMatch.kind === "card" && (
+              <button onClick={resolveComandaScan} className={`${primaryBtn} w-full`}>
+                <Plus className="w-4 h-4" /> Abrir comanda {scanMatch.card.number}
+              </button>
+            )}
+
             <div className={`${cardCls(isDark)} divide-y ${isDark ? "divide-slate-800" : "divide-slate-200"} overflow-hidden`}>
-              {abertas.length === 0 && (
+              {abertas.length === 0 ? (
                 <p className={`p-4 text-xs text-center ${isDark ? "text-slate-500" : "text-slate-400"}`}>Nenhuma comanda aberta.</p>
-              )}
-              {abertas.map((a) => (
+              ) : abertasView.length === 0 ? (
+                <p className={`p-4 text-xs text-center ${isDark ? "text-slate-500" : "text-slate-400"}`}>
+                  Nenhuma comanda aberta com esse número.
+                </p>
+              ) : null}
+              {abertasView.map((a) => (
                 <button
                   key={a.id}
                   onClick={() => setSelectedId(a.id)}
@@ -731,10 +812,15 @@ export default function PdvPage() {
       {modal === "abrir" && (
         <AbrirComandaModal
           terminalId={terminalId}
-          onClose={() => setModal(null)}
+          preselectComandaId={preAbrirComandaId}
+          onClose={() => {
+            setModal(null);
+            setPreAbrirComandaId(null);
+          }}
           onDone={(a) => {
             upsert(a);
             setModal(null);
+            setPreAbrirComandaId(null);
           }}
         />
       )}
