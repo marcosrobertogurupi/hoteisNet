@@ -2,6 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
 
+// Natureza da forma para o PDV do restaurante (PaymentMethod.pdvCategory). Define o rótulo no
+// caixa, se mostra Bandeira/NSU e onde cabe troco. Ver enum PdvPaymentCategory no schema.
+const PDV_CATEGORIES = ["DINHEIRO", "CARTAO_DEBITO", "CARTAO_CREDITO", "PIX", "OUTRO"] as const;
+type PdvCategory = (typeof PDV_CATEGORIES)[number];
+
+function normalizePdvCategory(raw: unknown): PdvCategory | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const v = String(raw).toUpperCase();
+  return (PDV_CATEGORIES as readonly string[]).includes(v) ? (v as PdvCategory) : null;
+}
+
 // GET /api/cadastros/formas-pagamento — lista as formas de pagamento do tenant da sessão
 export async function GET(req: NextRequest) {
   try {
@@ -35,6 +46,9 @@ export async function POST(req: NextRequest) {
     if (!description || !String(description).trim()) {
       return NextResponse.json({ success: false, error: "A descrição da forma de pagamento é obrigatória." }, { status: 400 });
     }
+    if (body.pdvCategory !== undefined && normalizePdvCategory(body.pdvCategory) === null) {
+      return NextResponse.json({ success: false, error: "Categoria no PDV inválida." }, { status: 400 });
+    }
 
     const existing = await prisma.paymentMethod.findFirst({
       where: { tenantId: session!.tenantId!, description: { equals: String(description).trim(), mode: "insensitive" } },
@@ -51,6 +65,7 @@ export async function POST(req: NextRequest) {
         debitGuestBalance: !!debitGuestBalance,
         transferDebit: !!transferDebit,
         sumsToCashRegister: sumsToCashRegister === undefined ? true : !!sumsToCashRegister,
+        pdvCategory: normalizePdvCategory(body.pdvCategory) ?? "OUTRO",
       },
     });
 
@@ -87,6 +102,13 @@ export async function PATCH(req: NextRequest) {
     if (transferDebit !== undefined) data.transferDebit = !!transferDebit;
     if (sumsToCashRegister !== undefined) data.sumsToCashRegister = !!sumsToCashRegister;
     if (active !== undefined) data.active = !!active;
+    if (body.pdvCategory !== undefined) {
+      const cat = normalizePdvCategory(body.pdvCategory);
+      if (cat === null) {
+        return NextResponse.json({ success: false, error: "Categoria no PDV inválida." }, { status: 400 });
+      }
+      data.pdvCategory = cat;
+    }
 
     const updated = await prisma.paymentMethod.updateMany({ where: { id, tenantId: session!.tenantId! }, data });
     if (updated.count === 0) {
