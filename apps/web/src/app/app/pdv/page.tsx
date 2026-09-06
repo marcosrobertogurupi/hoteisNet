@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Store, Plus, RefreshCw, Search, Trash2, Minus, Settings2, Banknote, ArrowRightLeft, XCircle, Receipt,
-  MessageSquare, Printer, RotateCcw, BarChart3, Wallet,
+  MessageSquare, Printer, RotateCcw, BarChart3, Wallet, Loader2,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
@@ -48,6 +48,10 @@ export default function PdvPage() {
   const [itemQuery, setItemQuery] = useState("");
   const [modal, setModal] = useState<null | "abrir" | "parcial" | "fechar" | "transferir" | "pendentes" | "turno" | "caixa">(null);
   const [categoria, setCategoria] = useState<string | null>(null);
+  // Trava e feedback do lançamento de item: enquanto um item está sendo gravado, a lista de
+  // produtos fica desabilitada e o item aparece na comanda marcado como "lançando…". Sem isso o
+  // operador tocava várias vezes achando que travou, e lançava o mesmo item repetido.
+  const [savingItem, setSavingItem] = useState(false);
 
   useEffect(() => {
     try {
@@ -107,17 +111,53 @@ export default function PdvPage() {
     setSelectedId(a.id);
   };
 
-  const addItem = async (ref: { dishId?: string; productId?: string; codigoBarras?: string }) => {
-    if (!selected) return;
-    const res = await fetch(`/api/pdv/atendimentos/${selected.id}/itens`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...ref, quantidade: 1 }),
-    });
-    const data = await res.json();
-    if (!data.success) return toast.error(data.error || "Não foi possível adicionar o item.");
-    upsert(data.atendimento);
+  const addItem = async (c: CatItem) => {
+    if (!selected || savingItem) return;
+    setSavingItem(true);
+    const alvoId = selected.id;
+    const ref = c.tipo === "PRATO" ? { dishId: c.id } : { productId: c.id };
+    const tempId = `tmp-${Date.now()}`;
+    // Atualização otimista: o item aparece na comanda na hora, marcado como "lançando…".
+    setAtendimentos((prev) =>
+      prev.map((a) =>
+        a.id === alvoId
+          ? {
+              ...a,
+              itens: [
+                ...a.itens,
+                {
+                  id: tempId, dishId: null, productId: null, nome: c.nome, observacao: null,
+                  precoUnitario: c.preco, quantidade: 1, desconto: 0, total: c.preco,
+                  cancelado: false, motivoCancelamento: null, canceladoPor: null, _pending: true,
+                },
+              ],
+            }
+          : a
+      )
+    );
     setItemQuery("");
+    const dropTemp = () =>
+      setAtendimentos((prev) =>
+        prev.map((a) => (a.id === alvoId ? { ...a, itens: a.itens.filter((i) => i.id !== tempId) } : a))
+      );
+    try {
+      const res = await fetch(`/api/pdv/atendimentos/${alvoId}/itens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...ref, quantidade: 1 }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        dropTemp();
+        return toast.error(data.error || "Não foi possível adicionar o item.");
+      }
+      upsert(data.atendimento);
+    } catch {
+      dropTemp();
+      toast.error("Sem conexão — o item não foi lançado. Tente de novo.");
+    } finally {
+      setSavingItem(false);
+    }
   };
 
   const changeQty = async (itemId: string, delta: number, atual: number) => {
@@ -467,17 +507,23 @@ export default function PdvPage() {
                         ))}
                       </div>
                     )}
+                    {savingItem && (
+                      <p className="text-[11px] text-sky-500 flex items-center gap-1.5 px-1">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Lançando o item na comanda…
+                      </p>
+                    )}
                     {catFiltered.length > 0 && (
                       <div
                         className={`rounded-xl border overflow-hidden ${
                           categoria && !itemQuery ? "max-h-64 overflow-y-auto" : ""
-                        } ${isDark ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"}`}
+                        } ${savingItem ? "opacity-50 pointer-events-none" : ""} ${isDark ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"}`}
                       >
                         {catFiltered.map((c) => (
                           <button
                             key={`${c.tipo}-${c.id}`}
-                            onClick={() => addItem(c.tipo === "PRATO" ? { dishId: c.id } : { productId: c.id })}
-                            className={`w-full flex items-center justify-between px-3 py-2 text-xs transition border-b last:border-b-0 ${
+                            onClick={() => addItem(c)}
+                            disabled={savingItem}
+                            className={`w-full flex items-center justify-between px-3 py-2 text-xs transition border-b last:border-b-0 disabled:cursor-not-allowed ${
                               isDark ? "hover:bg-slate-800 border-slate-800" : "hover:bg-slate-50 border-slate-100"
                             }`}
                           >
@@ -500,9 +546,14 @@ export default function PdvPage() {
                   <table className="w-full text-xs">
                     <tbody className={`divide-y ${isDark ? "divide-slate-800" : "divide-slate-200"}`}>
                       {selected.itens.map((it) => (
-                        <tr key={it.id} className={it.cancelado ? "opacity-45" : ""}>
+                        <tr key={it.id} className={it.cancelado || it._pending ? "opacity-45" : ""}>
                           <td className="px-3 py-2">
                             <span className={it.cancelado ? "line-through" : ""}>{it.nome}</span>
+                            {it._pending && (
+                              <span className="ml-1.5 text-[10px] text-sky-500 inline-flex items-center gap-1">
+                                <Loader2 className="w-3 h-3 animate-spin" /> lançando…
+                              </span>
+                            )}
                             {it.observacao && <div className="text-[10px] text-sky-500">» {it.observacao}</div>}
                             {it.cancelado && (
                               <div className="text-[10px] text-rose-500">
@@ -511,7 +562,7 @@ export default function PdvPage() {
                             )}
                           </td>
                           <td className="px-3 py-2 w-28">
-                            {selected.status === "ABERTA" && !it.cancelado ? (
+                            {selected.status === "ABERTA" && !it.cancelado && !it._pending ? (
                               <div className="flex items-center gap-1.5">
                                 <button onClick={() => changeQty(it.id, -1, it.quantidade)} className="p-1 rounded bg-slate-500/15">
                                   <Minus className="w-3 h-3" />
@@ -528,7 +579,7 @@ export default function PdvPage() {
                           <td className={`px-3 py-2 text-right font-mono ${it.cancelado ? "line-through" : ""}`}>{money(it.total)}</td>
                           {selected.status === "ABERTA" && (
                             <td className="px-2 py-2 w-14">
-                              {!it.cancelado && (
+                              {!it.cancelado && !it._pending && (
                                 <div className="flex items-center gap-1">
                                   <button onClick={() => setItemNote(it.id, it.observacao)} className="p-1 text-slate-400" title="Observação">
                                     <MessageSquare className="w-3.5 h-3.5" />

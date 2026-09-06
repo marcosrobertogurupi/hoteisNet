@@ -116,6 +116,8 @@ export interface Atendimento {
     cancelado: boolean;
     motivoCancelamento: string | null;
     canceladoPor: string | null;
+    /** Só no cliente: item recém-tocado, ainda sendo gravado no servidor (atualização otimista). */
+    _pending?: boolean;
   }>;
   pagamentos: Array<{
     id: string;
