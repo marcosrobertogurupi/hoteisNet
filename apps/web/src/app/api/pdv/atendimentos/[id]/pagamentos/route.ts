@@ -25,10 +25,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ success: false, error: "Só é possível pagar parcialmente uma comanda aberta." }, { status: 409 });
     }
 
+    const isHospede = current.customerType === "HOSPEDE";
     const { pagamentos, error: pagError } = await resolvePagamentos(
       prisma,
       session.tenantId,
-      normalizePagamentos(body.pagamentos)
+      normalizePagamentos(body.pagamentos),
+      { isHospede }
     );
     if (pagError) return NextResponse.json({ success: false, error: pagError }, { status: 400 });
 
@@ -59,6 +61,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         operatorName: session.name,
       });
       const lancado = await postComandaPaymentEvent(tx, {
+        tenantId: session.tenantId!,
         sessionId: id,
         comandaNumber: fresh.comanda.number,
         customerName: current.customerName || current.stayCheckin?.primaryGuest?.fullName || null,
@@ -68,6 +71,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         troco: 0,
         operatorId: session.userId,
         operatorName: session.name,
+        hospede: isHospede && current.stayCheckinId ? { stayCheckinId: current.stayCheckinId } : null,
       });
       await tx.comandaSession.update({ where: { id }, data: { paidAmount: { increment: lancado } } });
     });

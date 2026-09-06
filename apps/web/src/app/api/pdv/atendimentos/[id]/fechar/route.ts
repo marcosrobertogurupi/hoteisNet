@@ -47,7 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const rawPagamentos = normalizePagamentos(body.pagamentos);
     let pagamentos: ResolvedPdvPayment[] = [];
     if (rawPagamentos.length > 0) {
-      const r = await resolvePagamentos(prisma, session.tenantId, rawPagamentos);
+      const r = await resolvePagamentos(prisma, session.tenantId, rawPagamentos, { isHospede });
       if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: 400 });
       pagamentos = r.pagamentos;
     }
@@ -139,6 +139,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       let collectedNow = 0;
       if (cashRegisterId && pagamentos.length > 0) {
         collectedNow = await postComandaPaymentEvent(tx, {
+          tenantId: session.tenantId!,
           sessionId: id,
           comandaNumber: fresh.comanda.number,
           customerName: fresh.customerName || current.stayCheckin?.primaryGuest?.fullName || null,
@@ -148,6 +149,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           troco,
           operatorId: session.userId,
           operatorName: session.name,
+          hospede: isHospede && fresh.stayCheckinId ? { stayCheckinId: fresh.stayCheckinId } : null,
         });
       }
 

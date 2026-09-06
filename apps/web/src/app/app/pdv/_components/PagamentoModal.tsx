@@ -32,9 +32,9 @@ export default function PagamentoModal({
   const isHospede = atendimento.tipoCliente === "HOSPEDE";
   const saldo = atendimento.saldo;
 
-  // Formas de pagamento vêm do cadastro (Cadastros → Formas de Pagamento). Fase A: só as formas
-  // "simples" (sem parcelamento, sem débito de saldo do hóspede, sempre soma no caixa) — as
-  // demais ainda não são executadas pelo PDV.
+  // Formas de pagamento vêm do cadastro (Cadastros → Formas de Pagamento). Exclui "Transf.Débito"
+  // (fluxo próprio) sempre; parcelamento e débito de saldo do hóspede só aparecem em comanda de
+  // hóspede (é lá que fazem sentido).
   const [formas, setFormas] = useState<FormaPagamento[]>([]);
   const [formasLoaded, setFormasLoaded] = useState(false);
   const [linhas, setLinhas] = useState<Linha[]>([]);
@@ -46,10 +46,8 @@ export default function PagamentoModal({
         const res = await fetch("/api/cadastros/formas-pagamento");
         const data = await res.json();
         const lista: FormaPagamento[] = (data?.paymentMethods || [])
-          .filter(
-            (f: any) =>
-              f.active !== false && !f.transferDebit && !f.installment && !f.debitGuestBalance && f.sumsToCashRegister !== false
-          )
+          .filter((f: any) => f.active !== false && !f.transferDebit)
+          .filter((f: any) => isHospede || (!f.installment && !f.debitGuestBalance))
           .map((f: any) => ({ id: f.id, description: f.description, pdvCategory: f.pdvCategory || "OUTRO" }));
         setFormas(lista);
         const primeira = lista.find((f) => f.pdvCategory === "DINHEIRO")?.id || lista[0]?.id || "";
@@ -152,8 +150,8 @@ export default function PagamentoModal({
 
       {semFormas ? (
         <p className="text-xs text-amber-500">
-          Nenhuma forma de pagamento disponível. Cadastre em Cadastros → Formas de Pagamento (a forma precisa somar no
-          caixa e não ser de parcelamento/saldo do hóspede/transferência).
+          Nenhuma forma de pagamento disponível. Cadastre em Cadastros → Formas de Pagamento (formas de "Transferência de
+          Débito" não entram aqui).
         </p>
       ) : (
         <div className="space-y-2">
