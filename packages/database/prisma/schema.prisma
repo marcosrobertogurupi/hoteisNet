@@ -479,8 +479,13 @@ model PaymentMethod {
   // true = Soma Caixa (lança e soma nos totais do caixa); false = Conta Corrente
   // (apenas informa o lançamento, sem somar nos totais). Mutuamente exclusivos por natureza.
   sumsToCashRegister Boolean @default(true)
+  // Natureza da forma para o PDV do restaurante: define o rótulo no caixa (CashTransaction.paymentMethod),
+  // se o campo Bandeira/NSU aparece (cartões) e em qual forma cabe troco (só DINHEIRO). OUTRO = formas
+  // sem natureza específica (voucher, cortesia, etc.) — entram na comanda sem troco nem bandeira.
+  pdvCategory        PdvPaymentCategory @default(OUTRO)
   active             Boolean @default(true)
   tenant             Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  comandaPayments    ComandaPayment[]
 
   @@map("payment_methods")
 }
@@ -1976,7 +1981,15 @@ model ComandaPayment {
   // ADVANCE = pagamento parcial numa comanda ainda aberta (o cliente segue consumindo);
   // SETTLEMENT = pagamento no fechamento da comanda.
   kind             ComandaPaymentKind   @default(SETTLEMENT)
+  // Natureza da forma (DINHEIRO/DEBITO/CREDITO/PIX/CONTA_QUARTO/OUTRO) — derivada do
+  // PaymentMethod.pdvCategory escolhido. É a categoria coarse; a forma real (com nome e flags)
+  // fica em paymentMethodId + methodLabel.
   method           ComandaPaymentMethod
+  // Forma de pagamento cadastrada (Cadastros → Formas de Pagamento) usada neste lançamento.
+  // Opcional para os lançamentos antigos, anteriores à ligação com o cadastro.
+  paymentMethodId  String?
+  // Snapshot da descrição da forma no momento do lançamento — sobrevive a renome/exclusão do cadastro.
+  methodLabel      String?
   amount           Decimal              @db.Decimal(10, 2)
   change           Decimal              @default(0) @db.Decimal(10, 2)
   // Registro manual da maquininha (sem TEF ainda) — bandeira e NSU digitados pelo operador.
@@ -1988,6 +2001,7 @@ model ComandaPayment {
   operatorName     String?
   createdAt        DateTime             @default(now())
   comandaSession   ComandaSession       @relation(fields: [comandaSessionId], references: [id], onDelete: Cascade)
+  paymentMethod    PaymentMethod?       @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
 
   @@map("comanda_payments")
 }
@@ -2101,6 +2115,18 @@ enum ComandaPaymentMethod {
   CREDITO
   PIX
   CONTA_QUARTO
+  // Forma cadastrada sem natureza específica (voucher, cortesia, cheque, etc.). O nome real
+  // fica em ComandaPayment.methodLabel / paymentMethodId.
+  OUTRO
+}
+
+// Natureza de uma forma de pagamento para o PDV do restaurante (ver PaymentMethod.pdvCategory).
+enum PdvPaymentCategory {
+  DINHEIRO
+  CARTAO_DEBITO
+  CARTAO_CREDITO
+  PIX
+  OUTRO
 }
 
 enum ComandaPaymentKind {
