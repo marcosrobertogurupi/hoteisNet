@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
@@ -9,13 +10,19 @@ import { resolveSellableItem, itemTotal, round2 } from "@/lib/pdvSale";
 // PATCH: quantidade/desconto/observação de um item. DELETE: cancela o item (não apaga).
 // Só enquanto ABERTA.
 
+// Checagem enxuta: valida sessão + tenant e confirma que a comanda existe e está ABERTA, trazendo
+// só a coluna `status` (não o payload inteiro do atendimento). O payload completo é montado uma
+// única vez, no fim de cada handler, com o `loadSession` — trazer duas vezes só dobrava a latência.
 async function guard(req: NextRequest, id: string) {
   const session = await getSessionUser(req);
   if (!session?.tenantId) return { err: NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 }) };
-  const current = await loadSession(id, session.tenantId);
+  const current = await prisma.comandaSession.findFirst({
+    where: { id, tenantId: session.tenantId },
+    select: { status: true },
+  });
   if (!current) return { err: NextResponse.json({ success: false, error: "Atendimento não encontrado." }, { status: 404 }) };
   if (current.status !== "ABERTA") return { err: NextResponse.json({ success: false, error: "O atendimento já foi fechado." }, { status: 409 }) };
-  return { session, current };
+  return { session };
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -29,16 +36,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const quantity = Math.max(0.001, Number(body.quantidade) || 1);
     const discount = round2(Math.max(0, Number(body.desconto) || 0));
 
-    await txWithRetry(async (tx) => {
-      const item = await resolveSellableItem(tx, session!.tenantId!, {
-        dishId: body.dishId ?? null,
-        productId: body.productId ?? null,
-        barcode: body.codigoBarras ? String(body.codigoBarras).trim() : null,
-      });
-      if (!item) throw new Error("Item não encontrado no catálogo.");
-      // O perfil fiscal NÃO é exigido para vender — só para emitir a NFC-e depois. Um item sem
-      // perfil entra na comanda normalmente; a emissão do cupom é que vai cobrar a tributação.
+    // Resolução do item do catálogo é leitura pura — fica FORA da transação para não segurar a
+    // conexão do pool durante um round trip que não precisa de isolamento transacional.
+    const item = await resolveSellableItem(prisma, session!.tenantId!, {
+      dishId: body.dishId ?? null,
+      productId: body.productId ?? null,
+      barcode: body.codigoBarras ? String(body.codigoBarras).trim() : null,
+    });
+    if (!item) return NextResponse.json({ success: false, error: "Item não encontrado no catálogo." }, { status: 400 });
+    // O perfil fiscal NÃO é exigido para vender — só para emitir a NFC-e depois. Um item sem
+    // perfil entra na comanda normalmente; a emissão do cupom é que vai cobrar a tributação.
 
+    await txWithRetry(async (tx) => {
       await tx.comandaItem.create({
         data: {
           comandaSessionId: id,
