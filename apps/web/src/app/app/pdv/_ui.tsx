@@ -123,6 +123,8 @@ export interface Atendimento {
     id: string;
     tipo: "ADVANCE" | "SETTLEMENT";
     forma: string;
+    formaLabel: string | null;
+    formaId: string | null;
     valor: number;
     troco: number;
     bandeira: string | null;
@@ -138,4 +140,5 @@ export const FORMA_LABEL: Record<string, string> = {
   CREDITO: "Cartão crédito",
   PIX: "PIX",
   CONTA_QUARTO: "Conta do quarto",
+  OUTRO: "Outro",
 };

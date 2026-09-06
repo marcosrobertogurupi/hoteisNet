@@ -1,14 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, Check, Banknote } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
-import { Modal, inputCls, labelCls, primaryBtn, successBtn, ghostBtn, money, FORMA_LABEL, type Atendimento } from "../_ui";
+import { Modal, inputCls, labelCls, primaryBtn, successBtn, ghostBtn, money, type Atendimento } from "../_ui";
 
-type Linha = { forma: string; valor: string; bandeira: string; nsu: string };
+type Linha = { paymentMethodId: string; valor: string; bandeira: string; nsu: string };
 
-const FORMAS_PARCIAL = ["DINHEIRO", "DEBITO", "CREDITO", "PIX"];
+interface FormaPagamento {
+  id: string;
+  description: string;
+  pdvCategory: "DINHEIRO" | "CARTAO_DEBITO" | "CARTAO_CREDITO" | "PIX" | "OUTRO";
+}
 
 export default function PagamentoModal({
   atendimento,
@@ -27,10 +31,42 @@ export default function PagamentoModal({
 
   const isHospede = atendimento.tipoCliente === "HOSPEDE";
   const saldo = atendimento.saldo;
-  const [linhas, setLinhas] = useState<Linha[]>(
-    modo === "PARCIAL" || !isHospede ? [{ forma: "DINHEIRO", valor: saldo > 0 ? saldo.toFixed(2) : "", bandeira: "", nsu: "" }] : []
-  );
+
+  // Formas de pagamento vêm do cadastro (Cadastros → Formas de Pagamento). Fase A: só as formas
+  // "simples" (sem parcelamento, sem débito de saldo do hóspede, sempre soma no caixa) — as
+  // demais ainda não são executadas pelo PDV.
+  const [formas, setFormas] = useState<FormaPagamento[]>([]);
+  const [formasLoaded, setFormasLoaded] = useState(false);
+  const [linhas, setLinhas] = useState<Linha[]>([]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/cadastros/formas-pagamento");
+        const data = await res.json();
+        const lista: FormaPagamento[] = (data?.paymentMethods || [])
+          .filter(
+            (f: any) =>
+              f.active !== false && !f.transferDebit && !f.installment && !f.debitGuestBalance && f.sumsToCashRegister !== false
+          )
+          .map((f: any) => ({ id: f.id, description: f.description, pdvCategory: f.pdvCategory || "OUTRO" }));
+        setFormas(lista);
+        const primeira = lista.find((f) => f.pdvCategory === "DINHEIRO")?.id || lista[0]?.id || "";
+        if (primeira && (modo === "PARCIAL" || !isHospede)) {
+          setLinhas([{ paymentMethodId: primeira, valor: saldo > 0 ? saldo.toFixed(2) : "", bandeira: "", nsu: "" }]);
+        }
+      } catch {
+        toast.error("Não foi possível carregar as formas de pagamento.");
+      } finally {
+        setFormasLoaded(true);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const catOf = (id: string) => formas.find((f) => f.id === id)?.pdvCategory;
+  const primeiraForma = formas.find((f) => f.pdvCategory === "DINHEIRO")?.id || formas[0]?.id || "";
 
   const somaPag = useMemo(() => linhas.reduce((a, l) => a + (Number(l.valor) || 0), 0), [linhas]);
   const troco = modo === "FECHAR" && !isHospede ? Math.max(0, somaPag - saldo) : 0;
@@ -41,11 +77,16 @@ export default function PagamentoModal({
 
   const submit = async () => {
     const pagamentos = linhas
-      .filter((l) => Number(l.valor) > 0)
-      .map((l) => ({ forma: l.forma, valor: Number(l.valor), bandeira: l.bandeira || undefined, nsu: l.nsu || undefined }));
+      .filter((l) => Number(l.valor) > 0 && l.paymentMethodId)
+      .map((l) => ({
+        paymentMethodId: l.paymentMethodId,
+        valor: Number(l.valor),
+        bandeira: l.bandeira || undefined,
+        nsu: l.nsu || undefined,
+      }));
 
     if (modo === "PARCIAL") {
-      if (pagamentos.length === 0) return toast.warning("Informe o valor do pagamento.");
+      if (pagamentos.length === 0) return toast.warning("Informe a forma e o valor do pagamento.");
       if (somaPag - 0.005 > saldo) return toast.warning(`O pagamento parcial não pode passar do saldo (${money(saldo)}).`);
     }
     if (modo === "FECHAR" && !isHospede && somaPag + 0.005 < saldo) {
@@ -81,6 +122,8 @@ export default function PagamentoModal({
       ? `Pagamento parcial — Comanda ${atendimento.comanda.number}`
       : `Fechar comanda ${atendimento.comanda.number}`;
 
+  const semFormas = formasLoaded && formas.length === 0;
+
   return (
     <Modal isDark={isDark} title={title} onClose={onClose}>
       <div className={`rounded-xl p-3 text-xs ${isDark ? "bg-slate-950/60" : "bg-slate-50"}`}>
@@ -107,57 +150,76 @@ export default function PagamentoModal({
         </p>
       )}
 
-      <div className="space-y-2">
-        {linhas.map((l, i) => (
-          <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={labelCls(isDark)}>Forma</label>
-                <select value={l.forma} onChange={(e) => setLinha(i, { forma: e.target.value })} className={inputCls(isDark)}>
-                  {FORMAS_PARCIAL.map((f) => (
-                    <option key={f} value={f}>
-                      {FORMA_LABEL[f]}
-                    </option>
-                  ))}
-                </select>
+      {semFormas ? (
+        <p className="text-xs text-amber-500">
+          Nenhuma forma de pagamento disponível. Cadastre em Cadastros → Formas de Pagamento (a forma precisa somar no
+          caixa e não ser de parcelamento/saldo do hóspede/transferência).
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {linhas.map((l, i) => {
+            const cat = catOf(l.paymentMethodId);
+            const pedeBandeira = cat === "CARTAO_DEBITO" || cat === "CARTAO_CREDITO";
+            return (
+              <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className={labelCls(isDark)}>Forma</label>
+                    <select
+                      value={l.paymentMethodId}
+                      onChange={(e) => setLinha(i, { paymentMethodId: e.target.value })}
+                      className={inputCls(isDark)}
+                    >
+                      {formas.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.description}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls(isDark)}>Valor</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={l.valor}
+                      onChange={(e) => setLinha(i, { valor: e.target.value })}
+                      className={`${inputCls(isDark)} font-mono`}
+                    />
+                  </div>
+                </div>
+                {pedeBandeira && (
+                  <input
+                    placeholder="Bandeira/NSU"
+                    value={l.bandeira}
+                    onChange={(e) => setLinha(i, { bandeira: e.target.value })}
+                    className={`${inputCls(isDark)} w-28`}
+                  />
+                )}
+                {linhas.length > 1 && (
+                  <button
+                    onClick={() => setLinhas((prev) => prev.filter((_, idx) => idx !== i))}
+                    className={`p-2 rounded-lg ${isDark ? "text-rose-400 hover:bg-slate-800" : "text-rose-600 hover:bg-slate-100"}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
               </div>
-              <div>
-                <label className={labelCls(isDark)}>Valor</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={l.valor}
-                  onChange={(e) => setLinha(i, { valor: e.target.value })}
-                  className={`${inputCls(isDark)} font-mono`}
-                />
-              </div>
-            </div>
-            {(l.forma === "DEBITO" || l.forma === "CREDITO") && (
-              <input
-                placeholder="Bandeira/NSU"
-                value={l.bandeira}
-                onChange={(e) => setLinha(i, { bandeira: e.target.value })}
-                className={`${inputCls(isDark)} w-28`}
-              />
-            )}
-            {linhas.length > 1 && (
-              <button
-                onClick={() => setLinhas((prev) => prev.filter((_, idx) => idx !== i))}
-                className={`p-2 rounded-lg ${isDark ? "text-rose-400 hover:bg-slate-800" : "text-rose-600 hover:bg-slate-100"}`}
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        ))}
-        <button
-          onClick={() => setLinhas((prev) => [...prev, { forma: "DINHEIRO", valor: "", bandeira: "", nsu: "" }])}
-          className={`text-xs font-semibold inline-flex items-center gap-1 ${isDark ? "text-sky-400" : "text-sky-600"}`}
-        >
-          <Plus className="w-3.5 h-3.5" /> Outra forma
-        </button>
-      </div>
+            );
+          })}
+          {primeiraForma && (
+            <button
+              onClick={() =>
+                setLinhas((prev) => [...prev, { paymentMethodId: primeiraForma, valor: "", bandeira: "", nsu: "" }])
+              }
+              className={`text-xs font-semibold inline-flex items-center gap-1 ${isDark ? "text-sky-400" : "text-sky-600"}`}
+            >
+              <Plus className="w-3.5 h-3.5" /> Outra forma
+            </button>
+          )}
+        </div>
+      )}
 
       <div className={`rounded-xl p-3 text-xs space-y-1 ${isDark ? "bg-slate-950/60" : "bg-slate-50"}`}>
         <div className="flex justify-between">
@@ -184,7 +246,7 @@ export default function PagamentoModal({
         <button onClick={onClose} className={ghostBtn(isDark)}>
           Cancelar
         </button>
-        <button onClick={submit} disabled={saving} className={modo === "FECHAR" ? successBtn : primaryBtn}>
+        <button onClick={submit} disabled={saving || semFormas} className={modo === "FECHAR" ? successBtn : primaryBtn}>
           <Check className="w-4 h-4" /> {modo === "PARCIAL" ? "Registrar pagamento" : "Fechar comanda"}
         </button>
       </div>

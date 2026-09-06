@@ -101,7 +101,7 @@ export default function ConferenciaPage({ params }: { params: Promise<{ id: stri
             <hr className="my-2 border-black border-dashed" />
             {a.pagamentos.map((p) => (
               <div key={p.id} className="flex justify-between">
-                <span>{p.tipo === "ADVANCE" ? "Parcial" : "Pago"} {FORMA_LABEL[p.forma] || p.forma}</span>
+                <span>{p.tipo === "ADVANCE" ? "Parcial" : "Pago"} {p.formaLabel || FORMA_LABEL[p.forma] || p.forma}</span>
                 <span>{money(p.valor)}</span>
               </div>
             ))}

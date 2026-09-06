@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { loadSession, serializeSession } from "@/lib/pdvSession";
 import { round2 } from "@/lib/pdvSale";
-import { normalizePagamentos, pagamentosInvalid, ensureOpenCaixa, postComandaPaymentEvent } from "@/lib/pdvPayment";
+import { normalizePagamentos, resolvePagamentos, ensureOpenCaixa, postComandaPaymentEvent } from "@/lib/pdvPayment";
 
 // POST /api/pdv/atendimentos/[id]/pagamentos — pagamento PARCIAL de uma comanda ainda aberta:
 // o cliente (hóspede ou passante) quita parte da conta e segue consumindo. O dinheiro entra no
@@ -24,15 +25,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ success: false, error: "Só é possível pagar parcialmente uma comanda aberta." }, { status: 409 });
     }
 
-    const pagamentos = normalizePagamentos(body.pagamentos);
-    const invalid = pagamentosInvalid(pagamentos);
-    if (invalid) return NextResponse.json({ success: false, error: invalid }, { status: 400 });
-    if (pagamentos.some((p) => p.forma === "CONTA_QUARTO")) {
-      return NextResponse.json(
-        { success: false, error: "Pagamento parcial é dinheiro/cartão/PIX. A conta do quarto é acertada no fechamento." },
-        { status: 400 }
-      );
-    }
+    const { pagamentos, error: pagError } = await resolvePagamentos(
+      prisma,
+      session.tenantId,
+      normalizePagamentos(body.pagamentos)
+    );
+    if (pagError) return NextResponse.json({ success: false, error: pagError }, { status: 400 });
 
     const saldoAtual = round2(Number(current.total) - Number(current.paidAmount));
     const soma = round2(pagamentos.reduce((a, p) => a + p.valor, 0));
