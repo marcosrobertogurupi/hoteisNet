@@ -123,7 +123,16 @@ export interface ReservasMultiplasModalProps {
   existingReservations?: any[];
 }
 
-const PAYMENT_METHODS = ["DINHEIRO", "CARTÃO", "PIX", "FATURA", "SALDO DE CLIENTE", "TRANSF.DÉBITO"];
+// Forma de pagamento do adiantamento — vem sempre do cadastro (Central de Cadastros → Formas de
+// Pagamento), nunca de uma lista fixa no código (ver CLAUDE.md e a Fase 26 do PRD.md).
+interface PaymentMethodOption {
+  id: string;
+  description: string;
+  installment: boolean;
+  debitGuestBalance: boolean;
+  transferDebit: boolean;
+  sumsToCashRegister: boolean;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function ReservasMultiplasModal({
@@ -175,7 +184,8 @@ export default function ReservasMultiplasModal({
 
   // ── Adiantamento do rascunho atual ─────────────────────────────────────────
   const [draftAdiant, setDraftAdiant] = useState("0,00");
-  const [draftAdiantMethod, setDraftAdiantMethod] = useState("DINHEIRO");
+  const [draftAdiantMethod, setDraftAdiantMethod] = useState("");
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
 
   // ── Lote de reservas incluídas (equivalente a Table_Reservas do WinDev) ────
   const [pendingReservations, setPendingReservations] = useState<PendingReservationRow[]>([]);
@@ -231,6 +241,36 @@ export default function ReservasMultiplasModal({
       })
       .catch(() => {});
   }, [isOpen, tenantId]);
+
+  // Formas de pagamento do adiantamento — carregadas do cadastro (Central de Cadastros → Formas
+  // de Pagamento). Formas de "Transf.Débito" ficam de fora (fluxo dedicado, nunca um sinal).
+  useEffect(() => {
+    if (!isOpen) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/cadastros/formas-pagamento");
+        const data = await res.json();
+        if (!data?.success || !Array.isArray(data.paymentMethods)) return;
+        const options: PaymentMethodOption[] = data.paymentMethods
+          .filter((f: any) => f.active !== false && !f.transferDebit)
+          .map((f: any) => ({
+            id: f.id,
+            description: f.description,
+            installment: !!f.installment,
+            debitGuestBalance: !!f.debitGuestBalance,
+            transferDebit: !!f.transferDebit,
+            sumsToCashRegister: !!f.sumsToCashRegister,
+          }));
+        setPaymentMethods(options);
+        setDraftAdiantMethod((prev) =>
+          prev && options.some((o) => o.description === prev) ? prev : options[0]?.description || ""
+        );
+      } catch (err) {
+        console.warn("[ReservasMultiplasModal] Erro ao buscar formas de pagamento:", err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Reset completo ao abrir a tela
   useEffect(() => {
@@ -396,7 +436,7 @@ export default function ReservasMultiplasModal({
     setHasWhatsapp(false);
     setWppStatus("idle");
     setDraftAdiant("0,00");
-    setDraftAdiantMethod("DINHEIRO");
+    setDraftAdiantMethod(paymentMethods[0]?.description || "");
     setDateError(null);
     const inDate = getTodayDateStr();
     setDtChegadaLocal(`${inDate}T${defaultCheckInTime || "14:00"}`);
@@ -455,6 +495,11 @@ export default function ReservasMultiplasModal({
 
     const conflictReason = findConflict(selectedRoom.id, selectedRoom.number, checkInISO, checkOutISO);
     if (conflictReason) { toast.error(conflictReason); return; }
+
+    if (draftAdiantAmount > 0 && !draftAdiantMethod) {
+      toast.error("Cadastre uma forma de pagamento em Central de Cadastros → Formas de Pagamento para lançar o adiantamento.");
+      return;
+    }
 
     const newRow: PendingReservationRow = {
       localId: crypto.randomUUID(),
@@ -800,7 +845,8 @@ export default function ReservasMultiplasModal({
               <div className="sm:col-span-3">
                 <label className={lbl}>Forma Pgto Adiant.</label>
                 <select value={draftAdiantMethod} onChange={e => setDraftAdiantMethod(e.target.value)} className={inp}>
-                  {PAYMENT_METHODS.map(m => <option key={m}>{m}</option>)}
+                  {paymentMethods.length === 0 && <option value="">Nenhuma forma cadastrada</option>}
+                  {paymentMethods.map(m => <option key={m.id} value={m.description}>{m.description}</option>)}
                 </select>
               </div>
             </div>

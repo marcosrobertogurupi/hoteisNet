@@ -37,7 +37,18 @@ export interface RoomOption {
   room_categories?: { name?: string; description?: string };
 }
 
-const PAYMENT_METHODS = ["DINHEIRO", "CARTÃO", "PIX", "FATURA", "SALDO DE CLIENTE", "TRANSF.DÉBITO"];
+// Forma de pagamento do adiantamento — vem sempre do cadastro (Central de Cadastros → Formas de
+// Pagamento), nunca de uma lista fixa no código (ver CLAUDE.md e a Fase 26 do PRD.md). As flags
+// são carregadas para permitir que o backend honre as regras da forma escolhida no lançamento
+// do sinal (parcelamento, débito de saldo do hóspede, soma caixa x conta corrente).
+interface PaymentMethodOption {
+  id: string;
+  description: string;
+  installment: boolean;
+  debitGuestBalance: boolean;
+  transferDebit: boolean;
+  sumsToCashRegister: boolean;
+}
 
 export const DEFAULT_ROOM_OPTIONS: RoomOption[] = [
   { id: "101", number: "101", floor: "1º ANDAR", status: "VACANT_CLEAN", room_categories: { name: "SUÍTE LUXO MAR", description: "Suíte Luxo Mar" } },
@@ -240,7 +251,8 @@ export default function LancarReservaModal({
   // ── Pagamentos ──────────────────────────────────────────────────────────────
   const [payments, setPayments] = useState<ReservaPaymentItem[]>([]);
   const [newPmtAmount, setNewPmtAmount] = useState("0,00");
-  const [newPmtMethod, setNewPmtMethod] = useState("PIX");
+  const [newPmtMethod, setNewPmtMethod] = useState("");
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [newPmtDate, setNewPmtDate] = useState(nowBrDisplay);
   const [discount, setDiscount] = useState(0);
   const [discountPct, setDiscountPct] = useState(0);
@@ -393,7 +405,7 @@ export default function LancarReservaModal({
           id: "pmt-initial",
           date: nowBrDisplay(),
           amount: editReservationData.depositPaid,
-          paymentMethod: "DINHEIRO"
+          paymentMethod: editReservationData.depositMethod || newPmtMethod || ""
         }]);
       } else {
         setPayments([]);
@@ -450,6 +462,37 @@ export default function LancarReservaModal({
       })
       .catch(() => {});
   }, [isOpen, tenantId]);
+
+  // Formas de pagamento do adiantamento — carregadas do cadastro (Central de Cadastros → Formas
+  // de Pagamento). Formas marcadas como "Transf.Débito" ficam de fora: têm fluxo dedicado
+  // (transferência de débito entre quartos) e nunca representam um sinal de reserva.
+  useEffect(() => {
+    if (!isOpen) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/cadastros/formas-pagamento");
+        const data = await res.json();
+        if (!data?.success || !Array.isArray(data.paymentMethods)) return;
+        const options: PaymentMethodOption[] = data.paymentMethods
+          .filter((f: any) => f.active !== false && !f.transferDebit)
+          .map((f: any) => ({
+            id: f.id,
+            description: f.description,
+            installment: !!f.installment,
+            debitGuestBalance: !!f.debitGuestBalance,
+            transferDebit: !!f.transferDebit,
+            sumsToCashRegister: !!f.sumsToCashRegister,
+          }));
+        setPaymentMethods(options);
+        setNewPmtMethod((prev) =>
+          prev && options.some((o) => o.description === prev) ? prev : options[0]?.description || ""
+        );
+      } catch (err) {
+        console.warn("[LancarReservaModal] Erro ao buscar formas de pagamento:", err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Recalculate nights
   useEffect(() => {
@@ -660,6 +703,7 @@ export default function LancarReservaModal({
   const handleAddPayment = () => {
     const amt = parseFloat(newPmtAmount.replace(",", ".").replace(/[^\d.]/g, ""));
     if (!amt || amt <= 0) { toast.error("Informe um valor de pagamento válido."); return; }
+    if (!newPmtMethod) { toast.error("Cadastre uma forma de pagamento em Central de Cadastros → Formas de Pagamento."); return; }
     setPayments(prev => [...prev, {
       id: crypto.randomUUID(),
       date: newPmtDate || nowBrDisplay(),
@@ -1184,7 +1228,8 @@ export default function LancarReservaModal({
                 <div className="col-span-1">
                   <label className={lbl}>Forma Pagamento</label>
                   <select value={newPmtMethod} onChange={e => setNewPmtMethod(e.target.value)} className={inp}>
-                    {PAYMENT_METHODS.map(m => <option key={m}>{m}</option>)}
+                    {paymentMethods.length === 0 && <option value="">Nenhuma forma cadastrada</option>}
+                    {paymentMethods.map(m => <option key={m.id} value={m.description}>{m.description}</option>)}
                   </select>
                 </div>
                 <button onClick={handleAddPayment}
