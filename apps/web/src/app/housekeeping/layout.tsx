@@ -28,6 +28,15 @@ export const viewport: Viewport = {
 export default function HousekeepingLayout({ children }: { children: React.ReactNode }) {
   return (
     <SatelliteThemeShell>
+      {/* Captura o beforeinstallprompt antes do React hidratar — senão o evento se perde e o
+          botão "Instalar app" nunca aparece no Android. Lido em PwaInstallButton via window.__bipEvent. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html:
+            "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__bipEvent=e;});" +
+            "window.addEventListener('appinstalled',function(){window.__bipEvent=null;});",
+        }}
+      />
       <PwaRegister src="/sw-housekeeping.js" scope="/housekeeping" />
       <AppVersionGate variant="satellite" />
       {children}
