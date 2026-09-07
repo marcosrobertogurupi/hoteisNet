@@ -46,6 +46,7 @@ import {
   Percent,
   FileSignature,
   BookOpen,
+  Refrigerator,
 } from "lucide-react";
 
 export default function SubscriberSettingsPage() {
@@ -158,6 +159,14 @@ export default function SubscriberSettingsPage() {
   // Aceitar estoque negativo — permite baixar o estoque do PDV no lançamento de consumo mesmo
   // quando o saldo disponível é insuficiente, em vez de bloquear o lançamento.
   const [allowNegativeStockInput, setAllowNegativeStockInput] = useState(false);
+
+  // Quarto abastecido / Frigobar — quando ligado, quartos cuja categoria tem kit cadastrado exigem
+  // conferência do frigobar na arrumação com hóspede e no check-out. stockedRoomPosInput é o PDV de
+  // onde o estoque dos itens vendidos é baixado.
+  const [stockedRoomEnabledInput, setStockedRoomEnabledInput] = useState(false);
+  const [stockedRoomPosInput, setStockedRoomPosInput] = useState("");
+  const [posLocationOptions, setPosLocationOptions] = useState<{ id: string; name: string }[]>([]);
+
   const [breakfastHoursInput, setBreakfastHoursInput] = useState("");
   // Horário do café da manhã aos domingos e feriados, quando difere do padrão (seg-sáb). Opcional:
   // vazio = o agente usa o horário padrão para todos os dias. Ver get_hotel_info no agente de atendimento.
@@ -440,6 +449,12 @@ export default function SubscriberSettingsPage() {
         if (data.success && typeof data.settings?.allowNegativeStock === "boolean") {
           setAllowNegativeStockInput(data.settings.allowNegativeStock);
         }
+        if (data.success && typeof data.settings?.stockedRoomEnabled === "boolean") {
+          setStockedRoomEnabledInput(data.settings.stockedRoomEnabled);
+        }
+        if (data.success) {
+          setStockedRoomPosInput(data.settings?.stockedRoomPosLocationId || "");
+        }
         if (data.success) {
           setBreakfastHoursInput(data.settings?.breakfastHours || "");
           setBreakfastHoursHolidayInput(data.settings?.breakfastHoursHoliday || "");
@@ -566,7 +581,20 @@ export default function SubscriberSettingsPage() {
       })
       .catch(() => {});
 
-    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages, loadSnrhosSettings, loadAiAgentSettings, loadHousekeepingSettings]).finally(() =>
+    const loadPosLocations = fetch("/api/cadastros/pdv")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setPosLocationOptions(
+            (data.posLocations || [])
+              .filter((p: any) => p.active !== false)
+              .map((p: any) => ({ id: p.id, name: p.name }))
+          );
+        }
+      })
+      .catch(() => {});
+
+    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages, loadSnrhosSettings, loadAiAgentSettings, loadHousekeepingSettings, loadPosLocations]).finally(() =>
       setIsLoadingSettings(false)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -639,6 +667,8 @@ export default function SubscriberSettingsPage() {
           // Operacionais
           dailyRolloverTime: dailyRolloverTimeInput,
           allowNegativeStock: allowNegativeStockInput,
+          stockedRoomEnabled: stockedRoomEnabledInput,
+          stockedRoomPosLocationId: stockedRoomPosInput || null,
           breakfastHours: breakfastHoursInput,
           breakfastHoursHoliday: breakfastHoursHolidayInput,
           maxDiscountPercent: maxDiscountPercentInput,
@@ -1826,6 +1856,74 @@ export default function SubscriberSettingsPage() {
 
         {housekeepingSaveError && (
           <p className="text-[11px] text-red-400">{housekeepingSaveError}</p>
+        )}
+      </div>
+
+      {/* SECTION 3.8: Quarto Abastecido / Frigobar */}
+      <div className={`rounded-2xl border p-6 space-y-5 shadow-lg ${theme.bgCard}`}>
+        <div className={`flex items-center gap-3 border-b pb-4 ${theme.borderColor}`}>
+          <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-500">
+            <Refrigerator className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">Quarto Abastecido / Frigobar</h2>
+            <p className={`text-xs ${theme.textMuted}`}>
+              Para hotéis cujo quarto/frigobar já vem abastecido. Com o recurso ligado, a conferência do frigobar passa a
+              ser feita a cada arrumação com hóspede (no app da governanta) e no check-out.
+            </p>
+          </div>
+        </div>
+
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={stockedRoomEnabledInput}
+            onChange={(e) => setStockedRoomEnabledInput(e.target.checked)}
+            className="w-4 h-4 mt-0.5 rounded text-teal-600 focus:ring-teal-500"
+          />
+          <div>
+            <span className="text-sm font-bold block">Usar quarto abastecido</span>
+            <span className={`text-xs ${theme.textMuted}`}>
+              {stockedRoomEnabledInput
+                ? "Ativado: quartos cuja categoria tem um kit cadastrado exigem conferência do frigobar na arrumação com hóspede e no check-out. O consumo apurado entra no débito do quarto e baixa o estoque do PDV do frigobar."
+                : "Desativado: nenhuma conferência de frigobar é solicitada nem obrigatória."}
+            </span>
+          </div>
+        </label>
+
+        {stockedRoomEnabledInput && (
+          <div className={`space-y-4 rounded-xl border p-4 ${theme.isDark ? "border-slate-800 bg-slate-900/40" : "border-slate-200 bg-slate-50"}`}>
+            <div>
+              <label className="text-xs font-semibold block mb-1.5">PDV do frigobar (baixa de estoque)</label>
+              <select
+                value={stockedRoomPosInput}
+                onChange={(e) => setStockedRoomPosInput(e.target.value)}
+                className={`w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500 ${
+                  theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
+                }`}
+              >
+                <option value="">— Selecione um ponto de venda —</option>
+                {posLocationOptions.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <p className={`text-[11px] mt-1.5 ${theme.textMuted}`}>
+                Os itens vendidos apurados na conferência são baixados do estoque deste PDV. O cadastro de pontos de venda
+                fica em Cadastros → Pontos de Venda (PDV).
+              </p>
+            </div>
+
+            <div className={`text-xs flex items-start gap-2 ${theme.textMuted}`}>
+              <Info className="w-4 h-4 shrink-0 mt-0.5 text-teal-500" />
+              <span>
+                O kit de cada categoria (produtos e quantidades que ficam no quarto) é cadastrado em{" "}
+                <Link href="/app/cadastros/categorias-apartamento" className="font-semibold text-teal-500 hover:underline">
+                  Cadastros → Categorias de Apartamento
+                </Link>
+                , pelo botão do frigobar em cada categoria. Categoria sem kit não entra na conferência.
+              </span>
+            </div>
+          </div>
         )}
       </div>
 

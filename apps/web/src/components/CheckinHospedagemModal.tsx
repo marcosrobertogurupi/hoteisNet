@@ -607,6 +607,8 @@ export default function CheckinHospedagemModal({
     if (!isOpen) return;
     setDiscountAuthorized(false);
     setDiscountAuthorizedBy(null);
+    setDiscountAuthEmail(null);
+    setDiscountAuthPassword(null);
     fetch("/api/tenant/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -934,6 +936,10 @@ export default function CheckinHospedagemModal({
   const [maxDiscountPercent, setMaxDiscountPercent] = useState<number>(20);
   const [discountAuthorized, setDiscountAuthorized] = useState<boolean>(false);
   const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
+  // Credenciais usadas na autorização, repassadas no payload para o backend revalidar (via
+  // verifyAdminStepUp) dentro de POST /api/stay/checkin — nunca confiar só no booleano acima.
+  const [discountAuthEmail, setDiscountAuthEmail] = useState<string | null>(null);
+  const [discountAuthPassword, setDiscountAuthPassword] = useState<string | null>(null);
 
   const [adults, setAdults] = useState<number>(reservationData?.adults || 1);
   const [children, setChildren] = useState<number>(reservationData?.children || 0);
@@ -1130,7 +1136,7 @@ export default function CheckinHospedagemModal({
     setTelephonesList(manualForm.phone ? [manualForm.phone] : []);
     setHubGuestSaved(true);
     setShowGuestData(false);
-    setHubMessage(`✓ Hóspede '${uppercaseName}' cadastrado no banco de dados com sucesso!`);
+    setHubMessage(`✓ Hóspede '${uppercaseName}' cadastrado com sucesso!`);
     setShowManualGuestModal(false);
     
     // Enviar dados para persistência assíncrona no backend
@@ -1288,7 +1294,7 @@ export default function CheckinHospedagemModal({
             setFullAddress(addressParts.join(", "));
             setEmail(matchedGuest.email || "");
             setHubGuestSaved(true);
-            setHubMessage(`✓ Hóspede '${matchedGuest.fullName}' localizado no cadastro local. Consulta à API não é necessária.`);
+            setHubMessage(`✓ Hóspede '${matchedGuest.fullName}' localizado.`);
             setHubLoading(false);
             return;
           }
@@ -1360,9 +1366,9 @@ export default function CheckinHospedagemModal({
           }).catch((err) => console.warn("[Check-in] Falha ao gravar hóspede consultado no Hub:", err));
         }
 
-        setHubMessage(`✓ Hóspede '${d.nome}' localizado e cadastrado no banco de dados.`);
+        setHubMessage(`✓ Hóspede '${d.nome}' localizado.`);
       } else {
-        setHubMessage(`⚠️ ${data.message || "CPF não localizado na API."}`);
+        setHubMessage(`⚠️ ${data.message || "CPF não localizado."}`);
       }
     } catch {
       setHubMessage("⚠️ Não foi possível realizar a consulta do CPF no momento. Por favor, preencha os dados manualmente.");
@@ -1581,6 +1587,10 @@ export default function CheckinHospedagemModal({
           }
         : null,
       discount,
+      // Reenviadas para o servidor revalidar a autorização (via verifyAdminStepUp) na própria
+      // rota que cria a hospedagem — nunca confiar só no booleano local desta tela.
+      adminEmail: discountAuthorized ? discountAuthEmail : undefined,
+      adminPassword: discountAuthorized ? discountAuthPassword : undefined,
       totalAdvance: totalAdiantamento,
       balance: saldoAPagar,
       operatorId: activeOperatorId,
@@ -3311,7 +3321,7 @@ export default function CheckinHospedagemModal({
               ? `aplicar um desconto de ${discountPercent.toFixed(1)}%, acima do limite de ${maxDiscountPercent}% sem autorização`
               : "conceder cortesia (isenção de cobrança) na noite anterior a uma chegada de madrugada"
           }
-          onAuthorized={(admin) => {
+          onAuthorized={(admin, credentials) => {
             if (adminAuthPurpose === "LOW_FIXED_FEE") {
               setEarlyArrivalAuthorizedBy(admin.name);
               setEarlyArrivalFixedFeeAuthorized(true);
@@ -3319,6 +3329,8 @@ export default function CheckinHospedagemModal({
             } else if (adminAuthPurpose === "HIGH_DISCOUNT") {
               setDiscountAuthorized(true);
               setDiscountAuthorizedBy(admin.name);
+              setDiscountAuthEmail(credentials.email);
+              setDiscountAuthPassword(credentials.password);
               toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
             } else {
               setEarlyArrivalAuthorizedBy(admin.name);

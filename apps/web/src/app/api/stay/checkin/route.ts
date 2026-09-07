@@ -8,6 +8,7 @@ import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 import { processPaymentLine } from "@/lib/paymentProcessing";
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { verifyAdminStepUp } from "@/lib/adminAuth";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -279,6 +280,47 @@ export async function POST(req: NextRequest) {
     }
     if (dailyRate !== undefined && Number(dailyRate) <= 0 && Number(totalAmount || 0) <= 0) {
       return NextResponse.json({ success: false, error: "O valor da diária/hospedagem deve ser maior que zero." }, { status: 400 });
+    }
+
+    // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
+    // administrador — checagem AUTORITATIVA no servidor, antes de abrir a transação (nunca confiar
+    // só no que a tela de check-in já validou, que pode ter sido burlada). Mesmo padrão de
+    // /api/caixa/pagamento-lote e /api/pdv/atendimentos/[id] (verifyAdminStepUp). A base do
+    // percentual replica o totalDiariasBruto calculado no CheckinHospedagemModal (nights * diária +
+    // chegada antecipada), usando só dados do próprio body — a hospedagem ainda não existe.
+    const discountValue = Math.max(0, Number(discount) || 0);
+    if (discountValue > 0) {
+      const dailyRateNumPre = Number(dailyRate) || 0;
+      const nightsPre = Math.max(
+        1,
+        Math.round(
+          (dateOnlyBrasilia(new Date(checkOutDate)).getTime() - dateOnlyBrasilia(new Date(checkInDate)).getTime()) / 86_400_000
+        )
+      );
+      let earlyChargePre = 0;
+      const eaChoicePre: string | null = earlyArrival?.choice || null;
+      if (eaChoicePre === "EXTRA_NIGHT") earlyChargePre = dailyRateNumPre;
+      else if (eaChoicePre === "HALF_NIGHT") earlyChargePre = dailyRateNumPre / 2;
+      else if (eaChoicePre === "FIXED_FEE") earlyChargePre = Number(earlyArrival?.fixedFeeAmount) || 0;
+
+      const subtotalPre = Math.max(Number(totalAmount || dailyRateNumPre || 0), nightsPre * dailyRateNumPre + earlyChargePre);
+      const discountPercent = subtotalPre > 0 ? (discountValue / subtotalPre) * 100 : 100;
+
+      const tenantForDiscount = await prisma.tenant.findUnique({
+        where: { id: session.tenantId },
+        select: { maxDiscountPercent: true },
+      });
+      const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
+
+      if (discountPercent > limite + 0.001) {
+        const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+        if (!auth.ok) {
+          return NextResponse.json(
+            { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
+            { status: auth.status }
+          );
+        }
+      }
     }
 
     const result = await txWithRetry(async (tx) => {
@@ -833,6 +875,37 @@ export async function PATCH(req: NextRequest) {
       }
       if (stayBeforeClose.isClosed) {
         throw new Error("Esta hospedagem já foi encerrada anteriormente.");
+      }
+
+      // Quarto abastecido: se o recurso está ligado e a categoria do quarto tem kit de frigobar,
+      // o check-out só é permitido depois que a conferência do frigobar for registrada para esta
+      // hospedagem (POST /api/stay/minibar-check, source CHECKOUT). A tela força isso antes do
+      // pagamento; esta trava garante que nenhuma chamada direta pule a etapa.
+      const tenantStocked = await tx.tenant.findUnique({
+        where: { id: session.tenantId! },
+        select: { stockedRoomEnabled: true },
+      });
+      if (tenantStocked?.stockedRoomEnabled) {
+        const room = await tx.room.findUnique({
+          where: { id: stayBeforeClose.roomId },
+          select: { categoryId: true, number: true },
+        });
+        const kitCount = room
+          ? await tx.stockedRoomKitItem.count({
+              where: { tenantId: session.tenantId!, roomCategoryId: room.categoryId },
+            })
+          : 0;
+        if (kitCount > 0) {
+          const minibarCheck = await tx.roomMinibarCheck.findFirst({
+            where: { tenantId: session.tenantId!, stayCheckinId, source: "CHECKOUT" },
+            select: { id: true },
+          });
+          if (!minibarCheck) {
+            throw new Error(
+              `Check-out não permitido: faça a conferência do frigobar do quarto ${room?.number || ""} antes de encerrar a hospedagem.`
+            );
+          }
+        }
       }
 
       const [chargesAgg, paymentsAgg, paymentsCount] = await Promise.all([

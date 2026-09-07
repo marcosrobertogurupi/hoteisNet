@@ -4,6 +4,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
+import { verifyAdminStepUp } from "@/lib/adminAuth";
 
 // POST /api/caixa/pagamento-lote — grava, em uma única transação, todos os lançamentos de
 // crédito/pagamento pendentes da hospedagem no caixa do operador ativo. Espelha o comportamento
@@ -44,6 +45,35 @@ export async function POST(req: NextRequest) {
           where: { roomId: room.id, isClosed: false },
           orderBy: { checkInDate: "desc" },
         });
+      }
+    }
+
+    // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
+    // administrador — checagem AUTORITATIVA no servidor, nunca confiar no que a tela já validou
+    // (a UI pode ter sido burlada). Mesmo padrão de /api/pdv/atendimentos/[id] (verifyAdminStepUp).
+    const discountValue = hasDiscountUpdate ? Math.max(0, Number(discount) || 0) : 0;
+    if (hasDiscountUpdate && discountValue > 0 && stay) {
+      const chargesAgg = await prisma.stayCharge.aggregate({
+        where: { stayCheckinId: stay.id },
+        _sum: { amount: true },
+      });
+      const subtotal = Number(chargesAgg._sum.amount || 0) + Number(stay.totalConsumption) + Number(stay.otherDebits);
+      const discountPercent = subtotal > 0 ? (discountValue / subtotal) * 100 : 100;
+
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: session.tenantId },
+        select: { maxDiscountPercent: true },
+      });
+      const limite = Number(tenant?.maxDiscountPercent ?? 20);
+
+      if (discountPercent > limite + 0.001) {
+        const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+        if (!auth.ok) {
+          return NextResponse.json(
+            { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
+            { status: auth.status }
+          );
+        }
       }
     }
 
@@ -101,7 +131,7 @@ export async function POST(req: NextRequest) {
       if (hasDiscountUpdate && stay) {
         await tx.stayCheckin.update({
           where: { id: stay.id },
-          data: { discount: Math.max(0, Number(discount) || 0) },
+          data: { discount: discountValue },
         });
       }
 

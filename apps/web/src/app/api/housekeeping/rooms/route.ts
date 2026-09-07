@@ -133,11 +133,13 @@ export async function GET(req: NextRequest) {
 
       if (active) {
         const isMine = active.housekeeperId === mine;
-        // Uma tarefa OCCUPIED PENDING no modo QUEUE é assumível por qualquer governanta; qualquer
-        // outra combinação só aparece para a dona da tarefa.
+        // Qualquer tarefa PENDING (ainda não iniciada) no modo QUEUE é assumível por qualquer
+        // governanta, mesmo pré-atribuída pela recepção — só uma limpeza já IN_PROGRESS fica
+        // visível só para quem a iniciou. Sem isso, uma tarefa CHECKOUT atribuída a uma governanta
+        // específica ficava invisível para todas as outras mesmo em modo fila (ver quarto 307).
         const visible =
           isMine ||
-          (assignmentMode === "QUEUE" && active.type === "OCCUPIED" && active.status === "PENDING");
+          (assignmentMode === "QUEUE" && active.status === "PENDING");
         if (visible) {
           pending.push({
             ...base,

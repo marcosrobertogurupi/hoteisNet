@@ -18,7 +18,8 @@ import {
   ChevronDown,
   Mail,
   Loader2,
-  LogOut
+  LogOut,
+  ShieldCheck
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
@@ -27,6 +28,7 @@ import { useConfirm } from "@/context/ConfirmContext";
 import { usePrompt } from "@/context/PromptContext";
 import { generateReciboPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
 import CadastroHospedeModal, { HospedeFormData } from "@/components/CadastroHospedeModal";
+import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
 
 
 export interface PaymentCreditItem {
@@ -163,6 +165,31 @@ export default function LancarPagamentoHospedagemModal({
   useEffect(() => {
     setDesconto(stayData.desconto || 0.0);
   }, [stayData.desconto]);
+
+  // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
+  // administrador — mesmo padrão usado no check-in (CheckinHospedagemModal) e no PDV. 20 é só o
+  // valor inicial até a busca em /api/tenant/settings responder.
+  const [maxDiscountPercent, setMaxDiscountPercent] = useState<number>(20);
+  const [discountAuthorized, setDiscountAuthorized] = useState<boolean>(false);
+  const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
+  const [discountAuthEmail, setDiscountAuthEmail] = useState<string | null>(null);
+  const [discountAuthPassword, setDiscountAuthPassword] = useState<string | null>(null);
+  const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
+  useEffect(() => {
+    if (!isOpen) return;
+    setDiscountAuthorized(false);
+    setDiscountAuthorizedBy(null);
+    setDiscountAuthEmail(null);
+    setDiscountAuthPassword(null);
+    fetch("/api/tenant/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && typeof data.settings?.maxDiscountPercent === "number") {
+          setMaxDiscountPercent(data.settings.maxDiscountPercent);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen, stayData.idHospedagem]);
 
   // Payments State
   const [payments, setPayments] = useState<PaymentCreditItem[]>(
@@ -577,6 +604,8 @@ export default function LancarPagamentoHospedagemModal({
   const totalDespesas = totalDiarias + totalConsumo + outrosDebitos;
   const saldoBruto = totalDespesas - totalPagamentos - desconto;
   const saldoAPagar = Math.max(0, saldoBruto);
+  const discountPercent = totalDespesas > 0 ? (desconto / totalDespesas) * 100 : desconto > 0 ? 100 : 0;
+  const discountNeedsAuth = desconto > 0 && discountPercent > maxDiscountPercent && !discountAuthorized;
   // Pagamentos além do débito nunca são devolvidos ao hóspede no check-out — viram saldo de
   // crédito na ficha dele (Guest.balance, via processPaymentLine) para usar em hospedagens
   // futuras. Isso precisa ficar explícito para o operador, tanto na tela quanto no aviso final.
@@ -798,6 +827,14 @@ export default function LancarPagamentoHospedagemModal({
       if (!balanceOk) return false;
     }
 
+    if (discountNeedsAuth) {
+      toast.error(
+        `O desconto informado (${discountPercent.toFixed(1)}%) é maior que o limite de ${maxDiscountPercent}% permitido sem autorização, definido em Configurações.\n\nPeça a um administrador para autorizar (ícone de escudo ao lado do campo de desconto).`,
+        "Desconto Acima do Limite"
+      );
+      return false;
+    }
+
     const pendingPayments = payments.filter((p) => !p.caixaMovimentoId);
     const discountChanged = desconto !== (stayData.desconto ?? 0.0);
 
@@ -851,6 +888,10 @@ export default function LancarPagamentoHospedagemModal({
             stayCheckinId: stayData.idHospedagem,
             guestName: stayData.primaryGuestName,
             discount: desconto,
+            // Reenviadas para o servidor revalidar a autorização (via verifyAdminStepUp) na
+            // própria rota que grava o desconto — nunca confiar só no booleano local abaixo.
+            adminEmail: discountAuthorized ? discountAuthEmail : undefined,
+            adminPassword: discountAuthorized ? discountAuthPassword : undefined,
             payments: pendingPayments.map((p) => ({
               clientId: p.id,
               valor: p.amount,
@@ -861,6 +902,14 @@ export default function LancarPagamentoHospedagemModal({
         });
         const data = await res.json();
         if (!data.success) {
+          if (data.precisaAutorizacao) {
+            // Autorização recusada/expirada no servidor (credenciais erradas, admin desativado
+            // desde que autorizou nesta tela, etc.) — força pedir de novo antes de tentar salvar.
+            setDiscountAuthorized(false);
+            setDiscountAuthorizedBy(null);
+            setDiscountAuthEmail(null);
+            setDiscountAuthPassword(null);
+          }
           throw new Error(data.error || "Falha ao gravar lançamentos no caixa.");
         }
 
@@ -1183,14 +1232,33 @@ export default function LancarPagamentoHospedagemModal({
                 {/* Desconto */}
                 <div>
                   <label className="block text-[10px] font-bold text-sky-600 dark:text-sky-400 uppercase">Desconto (R$)</label>
-                  <input
-                    type="number"
-                    value={desconto}
-                    onChange={(e) => setDesconto(parseFloat(e.target.value) || 0)}
-                    className={`w-full font-mono font-bold text-right p-1 rounded border outline-none ${
-                      theme.isDark ? "bg-slate-800 border-slate-700 text-white focus:border-sky-400" : "bg-white border-slate-300 text-slate-900 focus:border-sky-500"
-                    }`}
-                  />
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      value={desconto}
+                      onChange={(e) => setDesconto(parseFloat(e.target.value) || 0)}
+                      className={`w-full font-mono font-bold text-right p-1 rounded border outline-none ${
+                        discountNeedsAuth
+                          ? "border-red-500"
+                          : theme.isDark ? "bg-slate-800 border-slate-700 text-white focus:border-sky-400" : "bg-white border-slate-300 text-slate-900 focus:border-sky-500"
+                      }`}
+                    />
+                    {discountNeedsAuth && (
+                      <button
+                        type="button"
+                        title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — exige autorização`}
+                        onClick={() => setShowAdminAuthModal(true)}
+                        className="shrink-0 p-1 rounded bg-red-500/15 border border-red-500/40 text-red-500 hover:bg-red-500/25 transition-colors"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {discountAuthorized && discountAuthorizedBy && (
+                    <span className={`text-[9px] flex items-center gap-1 mt-0.5 ${theme.isDark ? "text-emerald-400" : "text-emerald-600"}`}>
+                      <ShieldCheck className="w-2.5 h-2.5" /> Autorizado por {discountAuthorizedBy}
+                    </span>
+                  )}
                 </div>
 
                 {/* Total Adiant. */}
@@ -1684,6 +1752,21 @@ export default function LancarPagamentoHospedagemModal({
         initialData={cadastroHospedeData}
         initialTab={cadastroHospedeTab}
         readOnly={cadastroHospedeReadOnly}
+      />
+
+      {/* AUTORIZAÇÃO ADMIN: DESCONTO ACIMA DO LIMITE */}
+      <AdminAuthorizationModal
+        isOpen={showAdminAuthModal}
+        onClose={() => setShowAdminAuthModal(false)}
+        reason={`aplicar um desconto de ${discountPercent.toFixed(1)}%, acima do limite de ${maxDiscountPercent}% sem autorização`}
+        onAuthorized={(admin, credentials) => {
+          setDiscountAuthorized(true);
+          setDiscountAuthorizedBy(admin.name);
+          setDiscountAuthEmail(credentials.email);
+          setDiscountAuthPassword(credentials.password);
+          setShowAdminAuthModal(false);
+          toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
+        }}
       />
 
     </div>

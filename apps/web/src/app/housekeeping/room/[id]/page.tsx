@@ -16,7 +16,18 @@ import {
   BedDouble,
   DoorClosed,
   CalendarClock,
+  Refrigerator,
 } from "lucide-react";
+
+interface MinibarKitItem {
+  productId: string;
+  productName: string;
+  parQuantity: number;
+  unitPrice: number;
+}
+
+const money = (v: number) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
 
 interface RoomView {
   id: string;
@@ -50,6 +61,13 @@ export default function HousekeepingRoomPage() {
   const [starting, setStarting] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Conferência do frigobar (quarto abastecido) — só em arrumação com hóspede. A governanta informa
+  // quantas unidades AINDA tem de cada item do kit; found[productId] guarda esse valor.
+  const [minibarEnabled, setMinibarEnabled] = useState(false);
+  const [minibarKit, setMinibarKit] = useState<MinibarKitItem[]>([]);
+  const [minibarFound, setMinibarFound] = useState<Record<string, number>>({});
+  const minibarLoadedRef = useRef(false);
 
   // "Não perturbe": painel de confirmação inline + observação opcional.
   const [dndOpen, setDndOpen] = useState(false);
@@ -101,6 +119,27 @@ export default function HousekeepingRoomPage() {
   useEffect(() => {
     loadRoom();
   }, [loadRoom]);
+
+  // Carrega o kit do frigobar uma única vez, quando a tela abre numa arrumação com hóspede de um
+  // quarto abastecido. Fora do polling da lista para não inflar o tráfego.
+  useEffect(() => {
+    const occupied = room?.type === "OCCUPIED" || room?.roomStatus === "OCCUPIED";
+    if (!room || !occupied || minibarLoadedRef.current) return;
+    minibarLoadedRef.current = true;
+    fetch(`/api/housekeeping/rooms/${roomId}/minibar-kit`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success && data.enabled) {
+          setMinibarEnabled(true);
+          setMinibarKit(data.items || []);
+          // Começa com o kit cheio (nada consumido) — a governanta ajusta só o que faltar.
+          const initial: Record<string, number> = {};
+          for (const it of data.items || []) initial[it.productId] = it.parQuantity;
+          setMinibarFound(initial);
+        }
+      })
+      .catch(() => {});
+  }, [room, roomId]);
 
   // Atualização automática e transparente pelo banco a cada 10 s (antes 4 s) — pega, por exemplo,
   // um cancelamento feito pela recepção sem recarregar a página nem interromper a digitação da
@@ -183,7 +222,15 @@ export default function HousekeepingRoomPage() {
       const res = await fetch(`/api/housekeeping/tasks/${room.taskId}/finish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes }),
+        body: JSON.stringify({
+          notes,
+          minibarFound: minibarEnabled
+            ? minibarKit.map((it) => ({
+                productId: it.productId,
+                foundQty: Math.max(0, Math.min(it.parQuantity, Number(minibarFound[it.productId] ?? it.parQuantity))),
+              }))
+            : undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -356,6 +403,85 @@ export default function HousekeepingRoomPage() {
                 )}
               </p>
             </div>
+
+            {minibarEnabled && minibarKit.length > 0 && (
+              <div className="space-y-3 p-4 rounded-2xl bg-teal-500/10 border border-teal-500/25">
+                <div className="flex items-center gap-2">
+                  <Refrigerator className={`w-4 h-4 ${theme.isDark ? "text-teal-300" : "text-teal-700"}`} />
+                  <p className={`text-xs font-bold ${theme.isDark ? "text-teal-200" : "text-teal-800"}`}>
+                    Conferência do frigobar
+                  </p>
+                </div>
+                <p className={`text-[11px] ${theme.textMuted}`}>
+                  Informe quantas unidades <strong>ainda tem</strong> no frigobar de cada item. O que faltar é lançado
+                  como consumo do quarto.
+                </p>
+                <div className="space-y-2">
+                  {minibarKit.map((it) => {
+                    const found = Number(minibarFound[it.productId] ?? it.parQuantity);
+                    const sold = Math.max(0, it.parQuantity - found);
+                    return (
+                      <div key={it.productId} className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs font-semibold truncate ${theme.textMain}`}>{it.productName}</p>
+                          <p className={`text-[10px] ${theme.textMuted}`}>
+                            kit: {it.parQuantity} • {money(it.unitPrice)}
+                            {sold > 0 ? ` • vendidos: ${sold}` : ""}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMinibarFound((p) => ({ ...p, [it.productId]: Math.max(0, found - 1) }))
+                            }
+                            className={`w-8 h-8 rounded-lg border font-bold ${ui.iconBtn}`}
+                          >
+                            −
+                          </button>
+                          <input
+                            type="number"
+                            min={0}
+                            max={it.parQuantity}
+                            value={found}
+                            onChange={(e) =>
+                              setMinibarFound((p) => ({
+                                ...p,
+                                [it.productId]: Math.max(0, Math.min(it.parQuantity, Number(e.target.value) || 0)),
+                              }))
+                            }
+                            className={`w-12 h-8 text-center rounded-lg border text-sm font-mono ${ui.field}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMinibarFound((p) => ({
+                                ...p,
+                                [it.productId]: Math.min(it.parQuantity, found + 1),
+                              }))
+                            }
+                            className={`w-8 h-8 rounded-lg border font-bold ${ui.iconBtn}`}
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {(() => {
+                  const total = minibarKit.reduce((acc, it) => {
+                    const found = Number(minibarFound[it.productId] ?? it.parQuantity);
+                    return acc + Math.max(0, it.parQuantity - found) * it.unitPrice;
+                  }, 0);
+                  return (
+                    <p className={`text-xs font-bold text-right ${total > 0 ? (theme.isDark ? "text-teal-300" : "text-teal-700") : theme.textMuted}`}>
+                      Consumo a lançar: {money(total)}
+                    </p>
+                  );
+                })()}
+              </div>
+            )}
 
             {actionError && <p className="text-sm text-rose-500 font-medium">{actionError}</p>}
 

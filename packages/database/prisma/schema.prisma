@@ -141,6 +141,12 @@ model Tenant {
   // Texto informativo da política de chegada antecipada exibido ao hóspede (voucher/pré-check-in) —
   // a Portaria MTur 28/2025 exige que qualquer cobrança de early check-in seja informada previamente.
   earlyCheckinPolicyText       String?
+  // Quarto abastecido (frigobar / kit do quarto): quando ligado, todo quarto cuja categoria tem um
+  // kit cadastrado (StockedRoomKitItem) passa a exigir conferência do frigobar na arrumação com
+  // hóspede (app da governanta) e no check-out (recepção). Desligado, nada disso é obrigatório.
+  // stockedRoomPosLocationId aponta o PDV de onde o estoque dos itens vendidos é baixado.
+  stockedRoomEnabled           Boolean               @default(false)
+  stockedRoomPosLocationId     String?
   accountPlans               AccountPlan[]
   aiAgentSettings            AIAgentSetting?
   aiUsageLogs                AIUsageLog[]
@@ -167,6 +173,8 @@ model Tenant {
   reservations               Reservation[]           @relation("TenantReservations")
   roomCategories             RoomCategory[]
   rooms                      Room[]
+  stockedRoomKitItems        StockedRoomKitItem[]
+  roomMinibarChecks          RoomMinibarCheck[]
   occupancySnapshots         RoomOccupancySnapshot[]
   subscriptions              SaASSubscription[]
   preCheckinLinks            PreCheckinLink[]
@@ -440,6 +448,7 @@ model RoomCategory {
   kind        RoomCategoryKind @default(LODGING)
   tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rooms       Room[]
+  minibarKitItems StockedRoomKitItem[]
 
   @@map("room_categories")
 }
@@ -634,6 +643,7 @@ model Room {
   tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   checkins          StayCheckin[]
   housekeepingTasks HousekeepingTask[]
+  minibarChecks     RoomMinibarCheck[]
 
   @@map("rooms")
 }
@@ -1015,6 +1025,7 @@ model StayCheckin {
   accountsReceivable        AccountsReceivable[]
   guestBalanceEntries       GuestBalanceEntry[]
   comandaSessions           ComandaSession[]
+  minibarChecks             RoomMinibarCheck[]
 
   @@map("stay_checkins")
 }
@@ -1165,6 +1176,8 @@ model Product {
   fiscalProfile FiscalProfile?   @relation(fields: [fiscalProfileId], references: [id])
   comandaItems  ComandaItem[]
   stockCountItems StockCountItem[]
+  minibarKitItems StockedRoomKitItem[]
+  minibarCheckItems RoomMinibarCheckItem[]
 
   @@index([tenantId])
   @@map("products")
@@ -1264,6 +1277,74 @@ model StockCountItem {
   @@unique([countId, productId])
   @@index([countId])
   @@map("stock_count_items")
+}
+
+// Kit do "quarto abastecido" (frigobar): quais produtos e em que quantidade um quarto de uma dada
+// categoria deve conter. É o pré-cadastro que alimenta a conferência do frigobar na arrumação com
+// hóspede (app da governanta) e no check-out. Só vale quando Tenant.stockedRoomEnabled = true.
+model StockedRoomKitItem {
+  id             String       @id @default(uuid())
+  tenantId       String
+  roomCategoryId String
+  productId      String
+  parQuantity    Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roomCategory   RoomCategory @relation(fields: [roomCategoryId], references: [id], onDelete: Cascade)
+  product        Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([roomCategoryId, productId])
+  @@index([tenantId])
+  @@map("stocked_room_kit_items")
+}
+
+// Registro de uma conferência do frigobar de um quarto abastecido — feita pela governanta ao
+// concluir a arrumação com hóspede (source CLEANING) ou pela recepção no check-out (source
+// CHECKOUT). Guarda quem conferiu (id + nome, memória record-operator-by-id-not-just-name) e o que
+// foi apurado, mesmo quando nada foi vendido (prova de que a conferência aconteceu).
+model RoomMinibarCheck {
+  id                 String                 @id @default(uuid())
+  tenantId           String
+  roomId             String
+  stayCheckinId      String?
+  housekeepingTaskId String?
+  // CLEANING (arrumação com hóspede) | CHECKOUT (encerramento da hospedagem).
+  source             String
+  // HOUSEKEEPER (app da governanta) | USER (operador logado na recepção).
+  performedByType    String
+  performedById      String?
+  performedByName    String?
+  totalSold          Decimal                @default(0) @db.Decimal(10, 2)
+  createdAt          DateTime               @default(now())
+  tenant             Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room               Room                   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  stayCheckin        StayCheckin?           @relation(fields: [stayCheckinId], references: [id])
+  items              RoomMinibarCheckItem[]
+
+  @@index([tenantId, roomId])
+  @@index([stayCheckinId])
+  @@map("room_minibar_checks")
+}
+
+model RoomMinibarCheckItem {
+  id                String           @id @default(uuid())
+  checkId           String
+  productId         String?
+  productName       String
+  parQuantity       Int
+  // Quantidade encontrada no frigobar durante a conferência; vendido = par - encontrado.
+  foundQuantity     Int
+  soldQuantity      Int
+  unitPrice         Decimal          @db.Decimal(10, 2)
+  totalPrice        Decimal          @db.Decimal(10, 2)
+  // Preenchido quando soldQuantity > 0 gerou um lançamento em StayConsumption.
+  stayConsumptionId String?
+  check             RoomMinibarCheck @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  product           Product?         @relation(fields: [productId], references: [id])
+
+  @@index([checkId])
+  @@map("room_minibar_check_items")
 }
 
 model CashRegister {

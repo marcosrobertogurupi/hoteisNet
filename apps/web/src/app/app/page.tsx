@@ -52,6 +52,7 @@ import { MensagensWhatsAppModal } from "@/components/MensagensWhatsAppModal";
 import { playWhatsappNotificationSound } from "@/utils/notificationSound";
 import LancarConsumoQuartoModal from "@/components/LancarConsumoQuartoModal";
 import LancarPagamentoHospedagemModal from "@/components/LancarPagamentoHospedagemModal";
+import ConferenciaFrigobarModal from "@/components/ConferenciaFrigobarModal";
 import LancarReservaModal from "@/components/LancarReservaModal";
 import TransferenciaDebitoModal from "@/components/TransferenciaDebitoModal";
 import HistoricoLimpezaModal from "@/components/HistoricoLimpezaModal";
@@ -185,6 +186,8 @@ export default function TenantDashboardPage() {
   const [showAlterarTarifaModal, setShowAlterarTarifaModal] = useState(false);
   const [showCadastroTarifasModal, setShowCadastroTarifasModal] = useState(false);
   const [showLancarPagamentoModal, setShowLancarPagamentoModal] = useState(false);
+  // Conferência do frigobar (quarto abastecido) antes do pagamento no check-out.
+  const [showMinibarCheckModal, setShowMinibarCheckModal] = useState(false);
   // "payment": lança pagamentos/adiantamentos na hospedagem sem nunca fechar a conta (botão fixo
   // em "Salvar Crédito"). "checkout": única forma de efetivamente encerrar a hospedagem — exige
   // débito zerado (ou quitado no ato) e libera o quarto. Nunca misturar os dois no mesmo botão.
@@ -442,6 +445,7 @@ export default function TenantDashboardPage() {
     showAlterarTarifaModal ||
     showCadastroTarifasModal ||
     showLancarPagamentoModal ||
+    showMinibarCheckModal ||
     showTransferDebitoModal ||
     showLancarReservaModal ||
     showSelecaoReservaModal;
@@ -511,7 +515,7 @@ export default function TenantDashboardPage() {
 
   // Busca a hospedagem ativa real do quarto ao abrir Extrato/Resumo/Pagamento/Alterar Tarifa/Alterar Período/Consumo — evita usar dados de amostra
   useEffect(() => {
-    if ((showExtratoModal || showResumoModal || showLancarPagamentoModal || showAlterarTarifaModal || showAlterarPeriodoModal || showConsumptionModal || showTransferDebitoModal || showWppModal) && activeRoom) {
+    if ((showExtratoModal || showResumoModal || showLancarPagamentoModal || showMinibarCheckModal || showAlterarTarifaModal || showAlterarPeriodoModal || showConsumptionModal || showTransferDebitoModal || showWppModal) && activeRoom) {
       // Não zera activeStayDetail/activeStayPayments quando é o MESMO quarto já carregado (ex.: Consumo
       // aberto por cima do modal de Pagamento) — zerar desmontaria o modal em edição. Mas ao TROCAR de
       // quarto (ex.: fechar Extrato do 217 e abrir do 220) é preciso zerar antes de buscar: senão o
@@ -549,6 +553,7 @@ export default function TenantDashboardPage() {
             setShowExtratoModal(false);
             setShowResumoModal(false);
             setShowLancarPagamentoModal(false);
+            setShowMinibarCheckModal(false);
             setShowAlterarTarifaModal(false);
             setShowAlterarPeriodoModal(false);
             setShowConsumptionModal(false);
@@ -560,7 +565,7 @@ export default function TenantDashboardPage() {
           // Busca os pagamentos já lançados ANTES de liberar o modal — evita que ele monte
           // com a lista de pagamentos ainda vazia (o estado interno do modal só lê o valor inicial uma vez).
           let payments: typeof activeStayPayments = [];
-          if (showLancarPagamentoModal || showAlterarTarifaModal || showConsumptionModal || showExtratoModal || showResumoModal) {
+          if (showLancarPagamentoModal || showMinibarCheckModal || showAlterarTarifaModal || showConsumptionModal || showExtratoModal || showResumoModal) {
             try {
               const contaRes = await fetch(`/api/caixa/conta-quarto?stayCheckinId=${data.stay.id}`);
               const contaData = await contaRes.json();
@@ -607,6 +612,7 @@ export default function TenantDashboardPage() {
           setShowExtratoModal(false);
           setShowResumoModal(false);
           setShowLancarPagamentoModal(false);
+          setShowMinibarCheckModal(false);
           setShowAlterarTarifaModal(false);
           setShowAlterarPeriodoModal(false);
           setShowConsumptionModal(false);
@@ -617,7 +623,7 @@ export default function TenantDashboardPage() {
         }
       })();
     }
-  }, [showExtratoModal, showResumoModal, showLancarPagamentoModal, showAlterarTarifaModal, showAlterarPeriodoModal, showConsumptionModal, showTransferDebitoModal, showWppModal, activeRoom]);
+  }, [showExtratoModal, showResumoModal, showLancarPagamentoModal, showMinibarCheckModal, showAlterarTarifaModal, showAlterarPeriodoModal, showConsumptionModal, showTransferDebitoModal, showWppModal, activeRoom]);
 
   const handleOpenContextMenu = (e: React.MouseEvent, room: RoomItem) => {
     e.preventDefault();
@@ -1118,7 +1124,7 @@ export default function TenantDashboardPage() {
                     // "Encerrar Hospedagem" do menu de contexto) — por isso sempre abre em modo "checkout".
                     setActiveRoom(room);
                     setLancarPagamentoMode("checkout");
-                    setShowLancarPagamentoModal(true);
+                    setShowMinibarCheckModal(true);
                   } else if (isVacantClean) {
                     // Quarto livre: abre a tela de check-in com os dados do quarto
                     if (hasTodayReservation) {
@@ -1713,7 +1719,7 @@ export default function TenantDashboardPage() {
                   if (contextMenu.room) {
                     setActiveRoom(contextMenu.room);
                     setLancarPagamentoMode("checkout");
-                    setShowLancarPagamentoModal(true);
+                    setShowMinibarCheckModal(true);
                   }
                 }}
                 className={`w-full px-3.5 py-2 text-left hover:bg-red-600 hover:text-white flex items-center gap-2.5 transition-colors font-semibold ${
@@ -1902,6 +1908,8 @@ export default function TenantDashboardPage() {
                   operatorName: checkinData.operatorName,
                   initialPayments: checkinData.initialPayments,
                   discount: checkinData.discount,
+                  adminEmail: checkinData.adminEmail,
+                  adminPassword: checkinData.adminPassword,
                   secondaryGuests: checkinData.secondaryGuests,
                   adults: checkinData.adults,
                   children: checkinData.children,
@@ -2510,6 +2518,24 @@ export default function TenantDashboardPage() {
       )}
 
       {/* LANÇAR PAGAMENTO NA HOSPEDAGEM MODAL (WINDEV WIN_PAGAMENTOHOSPEDAGEM) */}
+      {/* CONFERÊNCIA DO FRIGOBAR (quarto abastecido) — abre antes do pagamento no check-out.
+          Se o recurso não se aplica ou já foi conferido, o modal segue direto para o pagamento. */}
+      {showMinibarCheckModal && activeRoom && activeStayDetail && (
+        <ConferenciaFrigobarModal
+          isOpen={showMinibarCheckModal}
+          stayCheckinId={activeStayDetail.id}
+          roomNumber={activeRoom.number}
+          operatorId={activeOperatorId}
+          operatorName={activeOperatorName}
+          onClose={() => setShowMinibarCheckModal(false)}
+          onProceed={() => {
+            setShowMinibarCheckModal(false);
+            setLancarPagamentoMode("checkout");
+            setShowLancarPagamentoModal(true);
+          }}
+        />
+      )}
+
       {showLancarPagamentoModal && activeRoom && activeStayDetail && realStayBilling && (
         <LancarPagamentoHospedagemModal
           isOpen={showLancarPagamentoModal}

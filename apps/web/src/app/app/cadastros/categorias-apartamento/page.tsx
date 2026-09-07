@@ -2,21 +2,23 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Tags, Plus, Search, Edit3, Trash2, ArrowLeft, Check, X } from "lucide-react";
+import { Tags, Plus, Search, Edit3, Trash2, ArrowLeft, Check, X, Refrigerator } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useToast } from "@/context/ToastContext";
+import KitFrigobarModal from "@/components/KitFrigobarModal";
 
 interface Categoria {
   id: string;
   name: string;
   description: string;
   kind: "LODGING" | "EVENT_SPACE";
+  capacity: number;
 }
 
 const TENANT_ID = "tenant-hoteisnet-demo";
 
-const EMPTY_FORM = { name: "", description: "", kind: "LODGING" as "LODGING" | "EVENT_SPACE" };
+const EMPTY_FORM = { name: "", description: "", kind: "LODGING" as "LODGING" | "EVENT_SPACE", capacity: 2 };
 
 export default function CategoriasApartamentoPage() {
   const { theme } = useTheme();
@@ -29,6 +31,9 @@ export default function CategoriasApartamentoPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  // Categoria cujo kit do frigobar está sendo editado (recurso "quarto abastecido").
+  const [kitCategory, setKitCategory] = useState<{ id: string; name: string } | null>(null);
+  const [stockedRoomEnabled, setStockedRoomEnabled] = useState(false);
 
   const syncCategorias = useCallback(async () => {
     try {
@@ -41,6 +46,7 @@ export default function CategoriasApartamentoPage() {
           name: c.name,
           description: c.description || "",
           kind: c.kind === "EVENT_SPACE" ? "EVENT_SPACE" : "LODGING",
+          capacity: typeof c.capacity === "number" ? c.capacity : 2,
         }))
       );
     } catch (err) {
@@ -51,6 +57,17 @@ export default function CategoriasApartamentoPage() {
   useEffect(() => {
     syncCategorias();
   }, [syncCategorias]);
+
+  // Só mostra o atalho do kit do frigobar quando o recurso "quarto abastecido" está ligado nas
+  // Configurações (Tenant.stockedRoomEnabled).
+  useEffect(() => {
+    fetch("/api/tenant/settings")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setStockedRoomEnabled(!!d.settings?.stockedRoomEnabled);
+      })
+      .catch(() => {});
+  }, []);
 
   const filtered = categorias.filter((c) => c.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
@@ -66,6 +83,7 @@ export default function CategoriasApartamentoPage() {
       name: c.name,
       description: c.description,
       kind: c.kind,
+      capacity: c.capacity,
     });
     setIsFormOpen(true);
   };
@@ -73,6 +91,10 @@ export default function CategoriasApartamentoPage() {
   const handleSave = async () => {
     if (!form.name.trim()) {
       toast.warning("Informe o nome da categoria.");
+      return;
+    }
+    if (!Number.isInteger(form.capacity) || form.capacity < 1) {
+      toast.warning("Informe uma capacidade de hóspedes válida (mínimo 1).");
       return;
     }
     try {
@@ -85,6 +107,7 @@ export default function CategoriasApartamentoPage() {
           name: form.name,
           description: form.description,
           kind: form.kind,
+          capacity: form.capacity,
         }),
       });
       const result = await res.json();
@@ -201,6 +224,21 @@ export default function CategoriasApartamentoPage() {
               />
             </div>
             <div className="space-y-1.5">
+              <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Capacidade de hóspedes</label>
+              <input
+                type="number"
+                min={1}
+                value={form.capacity}
+                onChange={(e) => setForm({ ...form, capacity: Number(e.target.value) })}
+                className={inputClass}
+              />
+              <p className={`text-[10px] ${isDark ? "text-slate-500" : "text-slate-400"}`}>
+                Apenas informativo para a recepção (quantas pessoas cabem no quarto, incluindo crianças). Não
+                interfere na tarifa nem limita a quantidade de adultos no check-in — isso continua sendo definido
+                pela tarifa escolhida.
+              </p>
+            </div>
+            <div className="space-y-1.5">
               <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Finalidade</label>
               <select
                 value={form.kind}
@@ -255,6 +293,7 @@ export default function CategoriasApartamentoPage() {
             }`}>
               <tr>
                 <th className="px-5 py-3.5">Categoria</th>
+                <th className="px-5 py-3.5">Capacidade</th>
                 <th className="px-5 py-3.5 text-right">Ações</th>
               </tr>
             </thead>
@@ -278,8 +317,24 @@ export default function CategoriasApartamentoPage() {
                       )}
                     </div>
                   </td>
+                  <td className="px-5 py-4">
+                    <span className={`text-[11px] font-mono ${isDark ? "text-slate-300" : "text-slate-700"}`}>
+                      {c.capacity} {c.capacity === 1 ? "pessoa" : "pessoas"}
+                    </span>
+                  </td>
                   <td className="px-5 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
+                      {stockedRoomEnabled && c.kind === "LODGING" && (
+                        <button
+                          onClick={() => setKitCategory({ id: c.id, name: c.name })}
+                          className={`p-2 rounded-xl transition ${
+                            isDark ? "bg-slate-800 text-teal-400 hover:bg-teal-600 hover:text-white" : "bg-slate-100 text-teal-700 hover:bg-teal-600 hover:text-white"
+                          }`}
+                          title="Kit do frigobar (quarto abastecido)"
+                        >
+                          <Refrigerator className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => handleOpenEdit(c)}
                         className={`p-2 rounded-xl transition ${
@@ -303,7 +358,7 @@ export default function CategoriasApartamentoPage() {
 
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={2} className="px-5 py-12 text-center text-slate-400 space-y-2">
+                  <td colSpan={3} className="px-5 py-12 text-center text-slate-400 space-y-2">
                     <Tags className="w-8 h-8 text-slate-400 mx-auto" />
                     <p className={`text-sm font-medium ${isDark ? "text-slate-300" : "text-slate-700"}`}>Nenhuma categoria cadastrada</p>
                   </td>
@@ -313,6 +368,12 @@ export default function CategoriasApartamentoPage() {
           </table>
         </div>
       </div>
+
+      <KitFrigobarModal
+        isOpen={!!kitCategory}
+        category={kitCategory}
+        onClose={() => setKitCategory(null)}
+      />
     </div>
   );
 }

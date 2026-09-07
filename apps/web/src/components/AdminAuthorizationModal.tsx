@@ -9,7 +9,10 @@ export interface AdminAuthorizationModalProps {
   onClose: () => void;
   /** Curta descrição da ação sendo autorizada (aparece na tela e vai para a auditoria). */
   reason: string;
-  onAuthorized: (admin: { id: string; name: string; role: string }) => void;
+  // O segundo argumento (credentials) é repassado para quem chamou revalidar a autorização
+  // dentro da própria rota que grava a alteração (defesa em profundidade — nunca confiar só
+  // no booleano retornado por este modal), como em /api/pdv/atendimentos/[id].
+  onAuthorized: (admin: { id: string; name: string; role: string }, credentials: { email: string; password: string }) => void;
 }
 
 // Modal genérico de autorização "step-up": pede e-mail + senha de um usuário com papel
@@ -41,9 +44,10 @@ export default function AdminAuthorizationModal({ isOpen, onClose, reason, onAut
       });
       const data = await res.json();
       if (data.success && data.admin) {
+        const credentials = { email: email.trim(), password };
         setEmail("");
         setPassword("");
-        onAuthorized(data.admin);
+        onAuthorized(data.admin, credentials);
       } else {
         setError(data.error || "Não foi possível autorizar.");
       }

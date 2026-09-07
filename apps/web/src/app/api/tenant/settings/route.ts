@@ -56,6 +56,8 @@ export async function GET(req: NextRequest) {
         overnightArrivalDefaultCharge: true,
         earlyCheckinFixedFeeAmount: true,
         earlyCheckinPolicyText: true,
+        stockedRoomEnabled: true,
+        stockedRoomPosLocationId: true,
       },
     });
 
@@ -97,6 +99,8 @@ export async function GET(req: NextRequest) {
         overnightArrivalDefaultCharge: tenant.overnightArrivalDefaultCharge,
         earlyCheckinFixedFeeAmount: Number(tenant.earlyCheckinFixedFeeAmount),
         earlyCheckinPolicyText: tenant.earlyCheckinPolicyText,
+        stockedRoomEnabled: tenant.stockedRoomEnabled,
+        stockedRoomPosLocationId: tenant.stockedRoomPosLocationId,
       },
     });
   } catch (error: any) {
@@ -262,6 +266,25 @@ export async function PATCH(req: NextRequest) {
         );
       }
       data.screenLockMinutes = parsed;
+    }
+
+    // --- Quarto abastecido / Frigobar ---
+    if (body.stockedRoomEnabled !== undefined) data.stockedRoomEnabled = Boolean(body.stockedRoomEnabled);
+    if (body.stockedRoomPosLocationId !== undefined) {
+      const raw = body.stockedRoomPosLocationId;
+      if (raw === null || raw === "") {
+        data.stockedRoomPosLocationId = null;
+      } else {
+        // O PDV do frigobar precisa pertencer ao próprio tenant (nunca aceitar id cru do body).
+        const pos = await prisma.pOSLocation.findFirst({
+          where: { id: String(raw), tenantId: session!.tenantId! },
+          select: { id: true },
+        });
+        if (!pos) {
+          return NextResponse.json({ success: false, error: "Ponto de venda do frigobar inválido." }, { status: 400 });
+        }
+        data.stockedRoomPosLocationId = pos.id;
+      }
     }
 
     if (Object.keys(data).length === 0) {

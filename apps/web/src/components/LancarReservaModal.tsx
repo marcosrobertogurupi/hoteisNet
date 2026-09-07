@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   X, Search, Plus, Trash2, Calendar, DollarSign, Save,
   CheckCircle2, AlertCircle, MessageSquare, ChevronDown,
-  BedDouble, User, Phone, FileText, Printer, Loader2
+  BedDouble, User, Phone, FileText, Printer, Loader2, ShieldCheck
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
@@ -20,6 +20,7 @@ import {
 } from "@/utils/pdfGenerator";
 import CustomDatePicker from "@/components/CustomDatePicker";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
+import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -267,6 +268,31 @@ export default function LancarReservaModal({
   const [discount, setDiscount] = useState(0);
   const [discountPct, setDiscountPct] = useState(0);
 
+  // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
+  // administrador — mesmo padrão usado no check-in (CheckinHospedagemModal) e no check-out
+  // (LancarPagamentoHospedagemModal). 20 é só o valor inicial até a busca responder.
+  const [maxDiscountPercent, setMaxDiscountPercent] = useState<number>(20);
+  const [discountAuthorized, setDiscountAuthorized] = useState<boolean>(false);
+  const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
+  const [discountAuthEmail, setDiscountAuthEmail] = useState<string | null>(null);
+  const [discountAuthPassword, setDiscountAuthPassword] = useState<string | null>(null);
+  const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
+  useEffect(() => {
+    if (!isOpen) return;
+    setDiscountAuthorized(false);
+    setDiscountAuthorizedBy(null);
+    setDiscountAuthEmail(null);
+    setDiscountAuthPassword(null);
+    fetch("/api/tenant/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && typeof data.settings?.maxDiscountPercent === "number") {
+          setMaxDiscountPercent(data.settings.maxDiscountPercent);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
   // ── Save state ─────────────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
 
@@ -274,6 +300,8 @@ export default function LancarReservaModal({
   const totalDiarias = nights * (selectedTariff?.price || 0);
   const totalAdiantamento = payments.reduce((s, p) => s + p.amount, 0);
   const totalLiquido = Math.max(0, totalDiarias - discount - totalAdiantamento);
+  const discountPercent = totalDiarias > 0 ? (discount / totalDiarias) * 100 : discount > 0 ? 100 : 0;
+  const discountNeedsAuth = discount > 0 && discountPercent > maxDiscountPercent && !discountAuthorized;
 
   // ─── Occupied Dates Detection ──────────────────────────────────────────────
   const [allReservations, setAllReservations] = useState<any[]>([]);
@@ -665,8 +693,8 @@ export default function LancarReservaModal({
           setHasWhatsapp(found.hasWhatsapp || false);
           setWppStatus(found.hasWhatsapp ? "ok" : "idle");
           setGuestId(found.id || null);
-          setHubMessage(`✓ Origem: BANCO DE DADOS (Supabase) — Hóspede localizado: ${gName}`);
-          toast.success("Hóspede localizado no BANCO DE DADOS!");
+          setHubMessage(`✓ Hóspede localizado: ${gName}`);
+          toast.success("Hóspede localizado!");
           setHubLoading(false);
           return; // Achou no banco: NÃO chama a API Hub do Desenvolvedor!
         }
@@ -681,8 +709,8 @@ export default function LancarReservaModal({
         const gPhone = (d.telefones && d.telefones.length > 0) ? d.telefones[0] : guestPhone;
         setGuestName(gName);
         if (gPhone) setGuestPhone(gPhone);
-        setHubMessage(`✓ Origem: API HUB DESENVOLVEDOR (Receita Federal) — Dados carregados para ${gName}`);
-        toast.info("Dados buscados via API Hub do Desenvolvedor!");
+        setHubMessage(`✓ Dados carregados para ${gName}`);
+        toast.info("Dados do hóspede carregados!");
 
         // Cadastrar automaticamente no banco de dados para que buscas posteriores encontrem no Supabase
         try {
@@ -704,7 +732,7 @@ export default function LancarReservaModal({
           // ignora se der duplicidade
         }
       } else {
-        setHubMessage(data.message || "✗ CPF não localizado no BANCO DE DADOS nem na API HUB DESENVOLVEDOR.");
+        setHubMessage(data.message || "✗ CPF não localizado.");
       }
     } catch {
       setHubMessage("Erro ao consultar dados do CPF.");
@@ -793,6 +821,12 @@ export default function LancarReservaModal({
     if (!selectedTariff) { toast.error("Selecione uma tarifa."); return; }
     if (!guestName.trim()) { toast.error("Informe o nome do hóspede."); return; }
     if (!dtChegadaLocal || !dtSaidaLocal) { toast.error("Informe o período da reserva."); return; }
+    if (discountNeedsAuth) {
+      toast.error(
+        `O desconto informado (${discountPercent.toFixed(1)}%) é maior que o limite de ${maxDiscountPercent}% permitido sem autorização, definido em Configurações.\n\nPeça a um administrador para autorizar.`
+      );
+      return;
+    }
 
     setSaving(true);
     try {
@@ -811,6 +845,10 @@ export default function LancarReservaModal({
         dailyRate: selectedTariff.price,
         totalDiarias,
         discountAmount: discount,
+        // Reenviadas para o servidor revalidar a autorização (via verifyAdminStepUp) na própria
+        // rota que cria a reserva — nunca confiar só no booleano local desta tela.
+        adminEmail: discountAuthorized ? discountAuthEmail : undefined,
+        adminPassword: discountAuthorized ? discountAuthPassword : undefined,
         totalAmount: totalLiquido,
         depositPaid: totalAdiantamento,
         adults,
@@ -871,6 +909,12 @@ export default function LancarReservaModal({
         }
 
         if (!data.success) {
+          if (data.precisaAutorizacao) {
+            setDiscountAuthorized(false);
+            setDiscountAuthorizedBy(null);
+            setDiscountAuthEmail(null);
+            setDiscountAuthPassword(null);
+          }
           toast.error(data.error || "Erro ao salvar reserva.");
           setSaving(false);
           return;
@@ -1340,11 +1384,28 @@ export default function LancarReservaModal({
               </div>
               <div className="text-center">
                 <label className={`text-[10px] ${isDark ? "text-slate-400" : "text-slate-500"}`}>Desconto (R$)</label>
-                <input
-                  type="number" min={0} value={discount}
-                  onChange={e => { setDiscount(Number(e.target.value)); setDiscountPct(0); }}
-                  className={`${inp} w-24 font-mono text-center mt-0.5`}
-                />
+                <div className="flex items-center gap-1 mt-0.5">
+                  <input
+                    type="number" min={0} value={discount}
+                    onChange={e => { setDiscount(Number(e.target.value)); setDiscountPct(0); }}
+                    className={`${inp} w-24 font-mono text-center ${discountNeedsAuth ? "border-red-500" : ""}`}
+                  />
+                  {discountNeedsAuth && (
+                    <button
+                      type="button"
+                      title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — exige autorização`}
+                      onClick={() => setShowAdminAuthModal(true)}
+                      className="shrink-0 p-1 rounded bg-red-500/15 border border-red-500/40 text-red-500 hover:bg-red-500/25 transition-colors"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                {discountAuthorized && discountAuthorizedBy && (
+                  <span className={`text-[9px] flex items-center gap-1 mt-0.5 justify-center ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>
+                    <ShieldCheck className="w-2.5 h-2.5" /> Autorizado por {discountAuthorizedBy}
+                  </span>
+                )}
               </div>
               <div className="text-center">
                 <label className={`text-[10px] ${isDark ? "text-slate-400" : "text-slate-500"}`}>Desconto (%)</label>
@@ -1419,6 +1480,21 @@ export default function LancarReservaModal({
           </div>
         </div>
       )}
+
+      {/* AUTORIZAÇÃO ADMIN: DESCONTO ACIMA DO LIMITE */}
+      <AdminAuthorizationModal
+        isOpen={showAdminAuthModal}
+        onClose={() => setShowAdminAuthModal(false)}
+        reason={`aplicar um desconto de ${discountPercent.toFixed(1)}%, acima do limite de ${maxDiscountPercent}% sem autorização`}
+        onAuthorized={(admin, credentials) => {
+          setDiscountAuthorized(true);
+          setDiscountAuthorizedBy(admin.name);
+          setDiscountAuthEmail(credentials.email);
+          setDiscountAuthPassword(credentials.password);
+          setShowAdminAuthModal(false);
+          toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
+        }}
+      />
     </div>
   );
 }
