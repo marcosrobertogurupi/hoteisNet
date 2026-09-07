@@ -70,6 +70,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           amount: Number(t.amount),
           description: t.description,
           paymentMethod: t.paymentMethod,
+          countsInCashTotal: t.countsInCashTotal,
           guestName: t.guestName,
           roomNumber: t.roomNumber,
           createdAt: t.createdAt,

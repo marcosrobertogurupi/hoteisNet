@@ -365,16 +365,30 @@ export default function TenantCashRegisterPage() {
                 ) : (
                   caixa!.transactions.map((trx) => {
                     const signedAmount = trx.type === "SANGRIA" ? -trx.amount : trx.amount;
+                    // Lançamentos que não somam no caixa (Conta Corrente, parcelamento, débito de
+                    // saldo do hóspede, adiantamento estornado): ficam na lista para conferência,
+                    // mas em cinza e sem sinal +/− nos totais.
+                    const naoSoma = (trx as any).countsInCashTotal === false;
+                    const isEstorno = trx.type === "ESTORNO";
                     return (
-                      <tr key={trx.id} className={`transition-colors ${theme.isDark ? "hover:bg-slate-800/40" : "hover:bg-slate-50"}`}>
+                      <tr key={trx.id} className={`transition-colors ${theme.isDark ? "hover:bg-slate-800/40" : "hover:bg-slate-50"} ${naoSoma ? "opacity-60" : ""}`}>
                         <td className="p-3.5 font-mono">
                           <span className={`font-bold block ${theme.textMain}`}>{fmtHora(trx.createdAt)}</span>
                           <span className={`text-[10px] ${theme.textMuted}`}>{trx.id.slice(0, 8)}</span>
                         </td>
-                        <td className={`p-3.5 font-medium ${theme.textMain}`}>{trx.description}</td>
+                        <td className={`p-3.5 font-medium ${theme.textMain}`}>
+                          {trx.description}
+                          {naoSoma && (
+                            <span className={`ml-2 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${isEstorno ? "bg-red-500/15 text-red-400" : "bg-slate-500/15 text-slate-400"}`}>
+                              {isEstorno ? "Estorno" : "Não soma"}
+                            </span>
+                          )}
+                        </td>
                         <td className={`p-3.5 font-mono ${theme.textMuted}`}>{trx.paymentMethod}</td>
                         <td className="p-3.5 font-mono font-semibold">
-                          {signedAmount > 0 ? (
+                          {naoSoma ? (
+                            <span className={`line-through ${theme.textMuted}`}>{fmtBRL(Math.abs(trx.amount))}</span>
+                          ) : signedAmount > 0 ? (
                             <span className="text-[#10B981]">+ {fmtBRL(signedAmount)}</span>
                           ) : (
                             <span className="text-red-400">- {fmtBRL(Math.abs(signedAmount))}</span>

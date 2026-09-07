@@ -257,7 +257,18 @@ export async function PATCH(req: NextRequest) {
       totalAmount,
       status,
       notes,
+      operatorId,
+      operatorName,
+      // Reconciliação de adiantamentos feita pela tela de edição da reserva: novos adiantamentos
+      // a lançar e ids de reservation_payments a estornar. Quando qualquer um dos dois é enviado,
+      // o depositPaid é recalculado no servidor a partir da soma real (o valor do cliente é ignorado).
+      addedPayments = [],
+      removedPaymentIds = [],
     } = body;
+
+    const reconcilesPayments =
+      (Array.isArray(addedPayments) && addedPayments.length > 0) ||
+      (Array.isArray(removedPaymentIds) && removedPaymentIds.length > 0);
 
     if (!id) {
       return NextResponse.json({ success: false, error: "ID da reserva é obrigatório." }, { status: 400 });
@@ -300,7 +311,9 @@ export async function PATCH(req: NextRequest) {
       if (guestCpf !== undefined) data.guestCpf = guestCpf;
       if (guestPhone !== undefined) data.guestPhone = guestPhone;
       if (dailyRate !== undefined) data.dailyRate = dailyRate;
-      if (depositPaid !== undefined) data.depositPaid = depositPaid;
+      // Quando a tela reconcilia adiantamentos (add/remove), o depositPaid vem do recálculo abaixo,
+      // não do valor enviado pelo cliente.
+      if (depositPaid !== undefined && !reconcilesPayments) data.depositPaid = depositPaid;
       if (totalAmount !== undefined) data.totalAmount = totalAmount;
       if (notes !== undefined) data.notes = notes;
       if (status) data.status = status;
@@ -312,6 +325,71 @@ export async function PATCH(req: NextRequest) {
 
       if (updated.count === 0) {
         throw new Error(`Reserva ${id} não encontrada.`);
+      }
+
+      // ── Reconciliação de adiantamentos editados na tela de edição da reserva ──────────────
+      // Igual à criação: o valor entra/estorna no caixa ABERTO do operador da sessão, na mesma
+      // transação. Regra do usuário: "qualquer pagamento deve cair no caixa do operador".
+      if (reconcilesPayments) {
+        const opId = operatorId || "USR-001";
+        const opName = (operatorName || session.name || "OPERADOR RECEPÇÃO").toUpperCase();
+
+        const removedIds = (Array.isArray(removedPaymentIds) ? removedPaymentIds : []).map(String).filter(Boolean);
+        if (removedIds.length > 0) {
+          await reverseReservationDeposits(tx, {
+            tenantId: session.tenantId!,
+            reservationId: id,
+            reservationNumber: existing.reservationNumber,
+            guestId: existing.guestId,
+            onlyPaymentIds: removedIds,
+          });
+          await tx.reservation_payments.deleteMany({ where: { id: { in: removedIds }, reservationId: id } });
+        }
+
+        const addedValid = (Array.isArray(addedPayments) ? addedPayments : []).filter((p: any) => Number(p?.amount) > 0);
+        if (addedValid.length > 0) {
+          let caixa = await tx.cashRegister.findFirst({
+            where: { operatorId: opId, isOpen: true, tenantId: session.tenantId! },
+            select: { id: true },
+          });
+          if (!caixa) {
+            caixa = await tx.cashRegister.create({
+              data: { tenantId: session.tenantId!, operatorId: opId, operatorName: opName, openingBalance: 0, isOpen: true },
+              select: { id: true },
+            });
+          }
+          const room = await tx.room.findUnique({ where: { id: existing.roomId }, select: { number: true } });
+          for (const pmt of addedValid) {
+            const { cashTransactionId } = await processReservationDeposit(tx, {
+              tenantId: session.tenantId!,
+              cashRegisterId: caixa.id,
+              reservationNumber: existing.reservationNumber,
+              guestId: existing.guestId,
+              roomNumber: room?.number || null,
+              guestName: existing.guestName,
+              amount: Number(pmt.amount),
+              paymentMethodDescription: pmt.paymentMethod || "DINHEIRO",
+              operatorId: opId,
+              operatorName: opName,
+            });
+            await tx.reservation_payments.create({
+              data: {
+                id: crypto.randomUUID(),
+                reservationId: id,
+                tenantId: RESERVATION_TENANT_ID,
+                cashRegisterId: caixa.id,
+                cashTransactionId,
+                amount: pmt.amount,
+                paymentMethod: pmt.paymentMethod || "DINHEIRO",
+                operatorName: opName,
+              },
+            });
+          }
+        }
+
+        // depositPaid autoritativo = soma real dos adiantamentos que restaram.
+        const agg = await tx.reservation_payments.aggregate({ where: { reservationId: id }, _sum: { amount: true } });
+        await tx.reservation.update({ where: { id }, data: { depositPaid: Number(agg._sum.amount || 0) } });
       }
 
       if (status && realRoomId && ["CHECKED_IN", "CHECKEDIN", "OCCUPIED"].includes(String(status).toUpperCase())) {
@@ -368,7 +446,7 @@ export async function DELETE(req: NextRequest) {
     const result = await txWithRetry(async (tx) => {
       const reservation = await tx.reservation.findFirst({
         where: { id, room: { tenantId: session!.tenantId! } },
-        select: { id: true, guestId: true },
+        select: { id: true, guestId: true, reservationNumber: true },
       });
       if (!reservation) return { notFound: true as const };
 
@@ -377,6 +455,7 @@ export async function DELETE(req: NextRequest) {
       await reverseReservationDeposits(tx, {
         tenantId: session!.tenantId!,
         reservationId: id,
+        reservationNumber: reservation.reservationNumber,
         guestId: reservation.guestId,
       });
 

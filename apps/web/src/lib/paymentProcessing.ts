@@ -185,7 +185,7 @@ export async function processPaymentLine(
 export interface ProcessReservationDepositParams {
   tenantId: string;
   cashRegisterId: string;
-  reservationNumber: string;
+  reservationNumber: string | null;
   guestId?: string | null;
   roomNumber?: string | null;
   guestName: string;
@@ -239,7 +239,7 @@ export async function processReservationDeposit(
     );
   }
 
-  const descricao = `Adiantamento Reserva ${reservationNumber} - ${guestName}`;
+  const descricao = `Adiantamento Reserva ${reservationNumber || "(s/nº)"} - ${guestName}`;
 
   // Debitar Saldo Hóspede — consome o saldo credor do hóspede em vez de dinheiro novo.
   if (pm.debitGuestBalance) {
@@ -320,25 +320,45 @@ export async function processReservationDeposit(
   return { cashTransactionId: movimento.id };
 }
 
-// Estorna (desfaz no caixa e no saldo do hóspede) os adiantamentos já lançados de uma reserva —
-// usado ao CANCELAR a reserva, para não deixar dinheiro preso no caixa nem crédito fantasma no
-// saldo do hóspede (equivalente ao Qry_DelReservaAdiantCaixa do sistema legado). Parcelamento e
-// Transf.Débito não ocorrem no sinal (bloqueados em processReservationDeposit), então só há dois
-// efeitos a desfazer: forma normal creditou o saldo do hóspede → debita de volta; "Debitar Saldo
-// Hóspede" debitou → credita de volta. Lança se algum sinal já foi revinculado a uma hospedagem
-// (check-in já consumiu o adiantamento) — nesse caso o estorno tem de passar pela hospedagem.
+// Estorna os adiantamentos (sinal) já lançados de uma reserva — usado ao CANCELAR a reserva ou
+// ao REMOVER um adiantamento pela tela de edição da reserva (equivalente ao Qry_DelReservaAdiantCaixa
+// do sistema legado). Regra do negócio (definida pelo usuário): o lançamento original NÃO é apagado
+// do caixa — ele continua visível para efeito de conferência, mas marcado "[ESTORNADO]" e fora dos
+// totais (`countsInCashTotal: false`); além disso é criada uma linha explícita `type: "ESTORNO"`
+// (também fora dos totais), datada de agora — o estorno pode acontecer dias depois, com o caixa do
+// operador já fechado. O efeito no saldo do hóspede é revertido com um novo `GuestBalanceEntry`
+// (nunca apagando o histórico). Parcelamento e Transf.Débito não ocorrem no sinal (bloqueados em
+// processReservationDeposit), então só há dois efeitos a desfazer: forma normal creditou o saldo
+// do hóspede → debita de volta; "Debitar Saldo Hóspede" debitou → credita de volta. Lança se algum
+// sinal já foi revinculado a uma hospedagem (check-in já herdou o adiantamento) — aí o estorno tem
+// de passar pela tela da hospedagem.
 export async function reverseReservationDeposits(
   tx: TxClient,
-  params: { tenantId: string; reservationId: string; guestId?: string | null }
+  params: {
+    tenantId: string;
+    reservationId: string;
+    reservationNumber?: string | null;
+    guestId?: string | null;
+    // Se informado, estorna só estes reservation_payments (tela de edição removeu adiantamentos
+    // específicos). Sem isso, estorna todos os adiantamentos da reserva (cancelamento).
+    onlyPaymentIds?: string[];
+  }
 ): Promise<{ reversedCount: number }> {
-  const { tenantId, reservationId, guestId } = params;
+  const { tenantId, reservationId, reservationNumber, guestId, onlyPaymentIds } = params;
 
   const deposits = await tx.reservation_payments.findMany({
-    where: { reservationId, cashTransactionId: { not: null } },
+    where: {
+      reservationId,
+      cashTransactionId: { not: null },
+      ...(onlyPaymentIds ? { id: { in: onlyPaymentIds } } : {}),
+    },
     select: { id: true, cashTransactionId: true },
   });
 
+  const hoje = new Date().toLocaleDateString("pt-BR");
+  const refReserva = reservationNumber || reservationId;
   let reversedCount = 0;
+
   for (const d of deposits) {
     const ct = await tx.cashTransaction.findUnique({ where: { id: d.cashTransactionId as string } });
     if (!ct) {
@@ -347,8 +367,12 @@ export async function reverseReservationDeposits(
     }
     if (ct.stayCheckinId) {
       throw new Error(
-        "Esta reserva já teve check-in e o sinal está vinculado à hospedagem. O estorno precisa passar pela tela da hospedagem, não pelo cancelamento da reserva."
+        "Este adiantamento já foi herdado por uma hospedagem (check-in feito). O estorno precisa passar pela tela da hospedagem, não pela reserva."
       );
+    }
+    // Idempotência: já estornado antes (retry / duplo clique) — não estorna de novo.
+    if (ct.countsInCashTotal === false && ct.description.startsWith("[ESTORNADO]")) {
+      continue;
     }
 
     const pm = await tx.paymentMethod.findFirst({
@@ -356,6 +380,30 @@ export async function reverseReservationDeposits(
     });
     const amount = ct.amount;
 
+    // 1. Mantém o lançamento original no caixa (conferência), fora dos totais e marcado.
+    await tx.cashTransaction.update({
+      where: { id: ct.id },
+      data: {
+        countsInCashTotal: false,
+        description: `[ESTORNADO] ${ct.description} — estornado em ${hoje} (reserva ${refReserva})`,
+      },
+    });
+
+    // 2. Linha explícita de estorno, datada de agora (o caixa do operador pode já estar fechado).
+    await tx.cashTransaction.create({
+      data: {
+        cashRegisterId: ct.cashRegisterId,
+        type: "ESTORNO",
+        amount,
+        description: `Estorno do adiantamento da reserva ${refReserva}`,
+        paymentMethod: ct.paymentMethod,
+        countsInCashTotal: false,
+        roomNumber: ct.roomNumber,
+        guestName: ct.guestName,
+      },
+    });
+
+    // 3. Reverte o efeito no saldo do hóspede.
     if (guestId) {
       const estorna: "CREDITO" | "DEBITO" = pm?.debitGuestBalance ? "CREDITO" : "DEBITO";
       await tx.guest.update({
@@ -369,13 +417,11 @@ export async function reverseReservationDeposits(
           type: estorna,
           amount,
           paymentMethodDescription: ct.paymentMethod,
-          description: `Estorno do sinal — reserva ${reservationId} cancelada`,
+          description: `Estorno do adiantamento — reserva ${refReserva}`,
         },
       });
     }
 
-    await tx.cashTransaction.delete({ where: { id: ct.id } });
-    await tx.reservation_payments.update({ where: { id: d.id }, data: { cashTransactionId: null } });
     reversedCount++;
   }
 

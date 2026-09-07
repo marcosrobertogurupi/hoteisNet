@@ -8,6 +8,9 @@ export interface CashTransactionDTO {
   amount: number;
   description: string;
   paymentMethod: string;
+  // false = não entra nos totais físicos do caixa (Conta Corrente, parcelamento, débito de saldo
+  // do hóspede, ou um adiantamento de reserva estornado). Continua listado para conferência.
+  countsInCashTotal?: boolean;
   guestName: string | null;
   roomNumber: string | null;
   createdAt: string;
@@ -55,10 +58,13 @@ export default function CaixaPrintPreview({ caixa, hotelName }: { caixa: CashReg
     });
     for (const t of caixa.transactions) {
       if (t.type === "SUPRIMENTO") continue;
+      // Lançamentos que não somam no caixa (Conta Corrente, parcelamento, débito de saldo do
+      // hóspede, adiantamento estornado) aparecem na lista mas com crédito/débito zero.
+      const somaNoCaixa = t.countsInCashTotal !== false;
       rows.push({
         dataHora: t.createdAt,
         descricao: t.description,
-        credito: t.type === "ENTRADA" ? t.amount : 0,
+        credito: somaNoCaixa && t.type === "ENTRADA" ? t.amount : 0,
         debito: t.type === "SANGRIA" ? t.amount : 0,
         planoContas: t.accountPlanCode
           ? `${t.accountPlanCode} - ${t.accountPlanDescription}`
@@ -75,7 +81,7 @@ export default function CaixaPrintPreview({ caixa, hotelName }: { caixa: CashReg
   const printTotalsByMethod = useMemo(() => {
     const totals = new Map<string, number>();
     for (const t of caixa.transactions) {
-      if (t.type !== "ENTRADA") continue;
+      if (t.type !== "ENTRADA" || t.countsInCashTotal === false) continue;
       totals.set(t.paymentMethod, (totals.get(t.paymentMethod) || 0) + t.amount);
     }
     return Array.from(totals.entries());

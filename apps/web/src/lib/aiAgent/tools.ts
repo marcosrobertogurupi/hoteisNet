@@ -675,6 +675,7 @@ async function cancelReservationForAgent(tenantId: string, guestPhone: string, r
       await reverseReservationDeposits(tx, {
         tenantId,
         reservationId: reservation.id,
+        reservationNumber: reservation.reservationNumber,
         guestId: reservation.guestId,
       });
       await tx.reservation.update({

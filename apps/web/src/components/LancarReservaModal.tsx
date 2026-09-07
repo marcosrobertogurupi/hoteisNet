@@ -28,6 +28,10 @@ export interface ReservaPaymentItem {
   date: string;
   amount: number;
   paymentMethod: string;
+  // true = adiantamento já gravado no banco (modo edição). Removê-lo aciona estorno no caixa;
+  // um adiantamento novo (false/undefined) é lançado no caixa ao salvar.
+  _persisted?: boolean;
+  postedToCashRegister?: boolean;
 }
 
 export interface RoomOption {
@@ -252,6 +256,9 @@ export default function LancarReservaModal({
 
   // ── Pagamentos ──────────────────────────────────────────────────────────────
   const [payments, setPayments] = useState<ReservaPaymentItem[]>([]);
+  // Modo edição: ids de reservation_payments já gravados que o operador removeu da grade — no
+  // salvar, cada um é estornado do caixa/saldo do hóspede.
+  const [removedPaymentIds, setRemovedPaymentIds] = useState<string[]>([]);
   const [newPmtAmount, setNewPmtAmount] = useState("0,00");
   const [newPmtMethod, setNewPmtMethod] = useState("");
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
@@ -402,18 +409,13 @@ export default function LancarReservaModal({
         }));
       }
 
-      if (editReservationData.depositPaid && editReservationData.depositPaid > 0) {
-        setPayments([{
-          id: "pmt-initial",
-          date: nowBrDisplay(),
-          amount: editReservationData.depositPaid,
-          paymentMethod: editReservationData.depositMethod || newPmtMethod || ""
-        }]);
-      } else {
-        setPayments([]);
-      }
+      // A grade de adiantamentos vem dos reservation_payments reais (efeito dedicado abaixo),
+      // não de um valor sintético a partir de depositPaid.
+      setPayments([]);
+      setRemovedPaymentIds([]);
     } else {
       // RESET COMPLETO PARA NOVA RESERVA
+      setRemovedPaymentIds([]);
       setGuestName("");
       setDocNumber("");
       setGuestPhone("");
@@ -496,6 +498,39 @@ export default function LancarReservaModal({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  // Modo edição: carrega os adiantamentos (sinal) já gravados nesta reserva para a grade, com o
+  // id real de cada um. Adicionar uma linha lança no caixa ao salvar; remover uma linha já
+  // gravada estorna do caixa/saldo do hóspede ao salvar.
+  useEffect(() => {
+    if (!isOpen || !editReservationData?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/reservations/${editReservationData.id}/payments`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (data?.success && Array.isArray(data.payments)) {
+          setPayments(
+            data.payments
+              .filter((p: any) => Number(p.amount) > 0)
+              .map((p: any) => ({
+                id: String(p.id),
+                date: p.createdAt ? new Date(p.createdAt).toLocaleString("pt-BR") : nowBrDisplay(),
+                amount: Number(p.amount),
+                paymentMethod: p.paymentMethod || "DINHEIRO",
+                _persisted: true,
+                postedToCashRegister: !!p.postedToCashRegister,
+              }))
+          );
+        }
+      } catch {
+        /* mantém a grade como está se a busca falhar */
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, editReservationData?.id]);
 
   // Recalculate nights
   useEffect(() => {
@@ -712,12 +747,19 @@ export default function LancarReservaModal({
       date: newPmtDate || nowBrDisplay(),
       amount: amt,
       paymentMethod: newPmtMethod,
+      _persisted: false,
     }]);
     setNewPmtAmount("0,00");
   };
 
   const handleRemovePayment = (id: string) => {
-    setPayments(prev => prev.filter(p => p.id !== id));
+    setPayments(prev => {
+      const item = prev.find(p => p.id === id);
+      if (item?._persisted) {
+        setRemovedPaymentIds(r => (r.includes(id) ? r : [...r, id]));
+      }
+      return prev.filter(p => p.id !== id);
+    });
   };
 
   // ─── Generate daily rows ────────────────────────────────────────────────────
@@ -797,7 +839,12 @@ export default function LancarReservaModal({
           depositPaid: totalAdiantamento,
           totalAmount: totalLiquido,
           notes: editReservationData.notes || null,
-          status: editReservationData.status || "CONFIRMED"
+          status: editReservationData.status || "CONFIRMED",
+          operatorId,
+          operatorName,
+          // Adiantamentos novos lançados na edição -> caixa; adiantamentos gravados removidos -> estorno.
+          addedPayments: payments.filter(p => !p._persisted).map(p => ({ amount: p.amount, paymentMethod: p.paymentMethod })),
+          removedPaymentIds,
         };
         const res = await fetch("/api/reservations", {
           method: "PATCH",
@@ -1254,8 +1301,15 @@ export default function LancarReservaModal({
                     <div key={p.id} className={`grid grid-cols-4 px-3 py-1.5 text-xs items-center ${isDark ? "text-slate-300 border-t border-slate-700/50" : "text-slate-700 border-t border-slate-200"}`}>
                       <span className="text-[10px]">{p.date}</span>
                       <span className="font-mono font-semibold text-[#10B981]">R$ {p.amount.toFixed(2)}</span>
-                      <span className="text-[10px]">{p.paymentMethod}</span>
-                      <button onClick={() => handleRemovePayment(p.id)} className="flex justify-end text-red-400 hover:text-red-300">
+                      <span className="text-[10px] flex items-center gap-1">
+                        {p.paymentMethod}
+                        {p._persisted && (
+                          <span className={`text-[8px] px-1 py-0.5 rounded font-bold uppercase ${isDark ? "bg-emerald-900/50 text-emerald-300" : "bg-emerald-100 text-emerald-700"}`}>
+                            no caixa
+                          </span>
+                        )}
+                      </span>
+                      <button onClick={() => handleRemovePayment(p.id)} title={p._persisted ? "Remover — será estornado do caixa ao salvar" : "Remover"} className="flex justify-end text-red-400 hover:text-red-300">
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
