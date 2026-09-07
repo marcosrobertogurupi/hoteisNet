@@ -94,6 +94,19 @@ export interface ObservationItem {
   note: string;
 }
 
+// Forma de pagamento vinda do cadastro (Central de Cadastros → Formas de Pagamento).
+// A grade de pagamento inicial do check-in usa a `description` canônica como valor — o
+// backend (processPaymentLine, via POST /api/stay/checkin) casa a forma por `description`
+// case-insensitive e aplica as flags (parcelamento, débito de saldo, soma no caixa).
+interface PaymentMethodOption {
+  id: string;
+  description: string;
+  installment: boolean;
+  debitGuestBalance: boolean;
+  transferDebit: boolean;
+  sumsToCashRegister: boolean;
+}
+
 export interface CheckinHospedagemModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -581,6 +594,37 @@ export default function CheckinHospedagemModal({
       .catch(() => {});
   }, [isOpen]);
 
+  // Busca as formas de pagamento cadastradas (Central de Cadastros → Formas de Pagamento) para
+  // popular o seletor de Pagamento Inicial / Adiantamento. Formas marcadas como "Transf.Débito"
+  // ficam de fora — esse fluxo tem botão dedicado (Transferência de Débito entre Quartos) e não
+  // é um pagamento de balcão. Mesmo padrão de LancarPagamentoHospedagemModal.
+  useEffect(() => {
+    if (!isOpen) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/cadastros/formas-pagamento");
+        const data = await res.json();
+        if (!data?.success || !Array.isArray(data.paymentMethods)) return;
+        const options: PaymentMethodOption[] = data.paymentMethods
+          .filter((f: any) => f.active !== false && !f.transferDebit)
+          .map((f: any) => ({
+            id: f.id,
+            description: f.description,
+            installment: !!f.installment,
+            debitGuestBalance: !!f.debitGuestBalance,
+            transferDebit: !!f.transferDebit,
+            sumsToCashRegister: !!f.sumsToCashRegister,
+          }));
+        setPaymentMethods(options);
+        setPaymentMethod((prev) =>
+          prev && options.some((o) => o.description === prev) ? prev : options[0]?.description || ""
+        );
+      } catch (err) {
+        console.warn("[CheckinHospedagemModal] Erro ao buscar formas de pagamento:", err);
+      }
+    })();
+  }, [isOpen]);
+
   // Polling do status da FNRH enquanto aguarda o hóspede preencher e assinar pelo link enviado —
   // é um polling interno deste modal (esperando um evento assíncrono externo), não o polling de
   // fundo do Mapa de Quartos/Reservas, então continua ativo mesmo com o modal aberto.
@@ -910,7 +954,10 @@ export default function CheckinHospedagemModal({
   // Initial Payments / Deposits
   const [paymentDate, setPaymentDate] = useState<string>(new Date().toLocaleDateString("pt-BR"));
   const [paymentAmount, setPaymentAmount] = useState<string>("0,00");
-  const [paymentMethod, setPaymentMethod] = useState<string>("Dinheiro");
+  // A forma de pagamento selecionada é a `description` de uma forma cadastrada — começa vazia
+  // e assume a primeira forma do cadastro assim que a busca abaixo responde.
+  const [paymentMethod, setPaymentMethod] = useState<string>("");
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [paymentsList, setPaymentsList] = useState<PaymentItem[]>(
     reservationData?.depositPaid
       ? [{ id: "PAY-1", date: new Date().toLocaleDateString("pt-BR"), amount: reservationData.depositPaid, methodDescription: "Adiantamento Reserva (PIX)" }]
@@ -1457,16 +1504,6 @@ export default function CheckinHospedagemModal({
       return;
     }
 
-    // Mapeia a descrição da forma de pagamento exibida na grade local para o código aceito
-    // pelo backend — só agora, no momento de efetivar o check-in, esses valores seguem para o banco.
-    const paymentMethodApiCodes: Record<string, string> = {
-      "Dinheiro": "DINHEIRO",
-      "PIX Instantâneo": "PIX",
-      "Cartão Crédito": "CARTAO_CREDITO",
-      "Cartão Débito": "CARTAO_DEBITO",
-      "Faturado Corporativo": "FATURADO_CORPORATIVO",
-    };
-
     const payload = {
       roomId: roomData.number,
       reservationId: reservationData?.id || fnrhReservationId || null,
@@ -1492,9 +1529,11 @@ export default function CheckinHospedagemModal({
       children,
       nights,
       secondaryGuests,
+      // A descrição canônica da forma de pagamento (do cadastro) segue direto — o backend
+      // (processPaymentLine) casa por `description` case-insensitive e honra as flags da forma.
       initialPayments: paymentsList.map((p) => ({
         valor: p.amount,
-        formaPagamento: paymentMethodApiCodes[p.methodDescription] || "DINHEIRO",
+        formaPagamento: p.methodDescription,
         descricao: `Pagamento no Check-in — Quarto ${roomData.number}`,
       })),
       observations: obsList,
@@ -2578,15 +2617,18 @@ export default function CheckinHospedagemModal({
                         <select
                           value={paymentMethod}
                           onChange={(e) => setPaymentMethod(e.target.value)}
+                          disabled={paymentMethods.length === 0}
                           className={`w-full border rounded p-1 text-[11px] ${
                             isDark ? "bg-slate-950 border-slate-700 text-slate-200" : "bg-white border-slate-300 text-slate-900"
                           }`}
                         >
-                          <option value="Dinheiro">Dinheiro Espécie</option>
-                          <option value="PIX Instantâneo">PIX Instantâneo</option>
-                          <option value="Cartão Crédito">Cartão Crédito</option>
-                          <option value="Cartão Débito">Cartão Débito</option>
-                          <option value="Faturado Corporativo">Faturado Corporativo</option>
+                          {paymentMethods.length === 0 ? (
+                            <option value="">Nenhuma forma de pagamento cadastrada</option>
+                          ) : (
+                            paymentMethods.map((f) => (
+                              <option key={f.id} value={f.description}>{f.description}</option>
+                            ))
+                          )}
                         </select>
                       </div>
                       <div className="col-span-1">
