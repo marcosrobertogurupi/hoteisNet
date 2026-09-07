@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Diagnóstico de instalação — Governança</title>
+<link rel="manifest" href="/housekeeping-manifest.json" />
+<meta name="theme-color" content="#E11D48" />
+<style>
+  :root { color-scheme: light; }
+  body { margin:0; padding:16px 14px 40px; font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:#f6f7f9; color:#0f172a; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  p.sub { margin:0 0 18px; color:#64748b; font-size:13px; }
+  .row { display:flex; gap:10px; align-items:flex-start; padding:11px 12px; background:#fff;
+         border:1px solid #e2e8f0; border-radius:12px; margin-bottom:8px; }
+  .row .ic { font-size:17px; line-height:1.2; flex:none; width:22px; text-align:center; }
+  .row .tx { flex:1; min-width:0; }
+  .row b { display:block; font-size:13.5px; font-weight:600; }
+  .row span { display:block; font-size:12.5px; color:#64748b; word-break:break-word; }
+  .verdict { padding:14px; border-radius:12px; margin:16px 0; font-size:14px; font-weight:600; }
+  .v-ok { background:#dcfce7; border:1px solid #86efac; color:#14532d; }
+  .v-bad { background:#fee2e2; border:1px solid #fca5a5; color:#7f1d1d; }
+  .v-wait { background:#fef3c7; border:1px solid #fcd34d; color:#78350f; }
+  button { width:100%; padding:14px; border-radius:12px; border:0; font-size:15px; font-weight:700;
+           margin-bottom:10px; }
+  #install { background:#e11d48; color:#fff; }
+  #install[disabled] { background:#cbd5e1; color:#64748b; }
+  #copy { background:#0f172a; color:#fff; }
+  pre { background:#0f172a; color:#e2e8f0; padding:12px; border-radius:12px; font-size:11px;
+        white-space:pre-wrap; word-break:break-all; margin:0; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:#64748b; margin:22px 0 8px; }
+</style>
+</head>
+<body>
+
+<h1>Diagnóstico de instalação</h1>
+<p class="sub">App de Governança · abra esta página no Chrome do celular</p>
+
+<div id="verdict" class="verdict v-wait">Verificando… aguarde uns 5 segundos.</div>
+
+<button id="install" disabled>Instalar app na tela inicial</button>
+<button id="copy">Copiar relatório (para colar no chat)</button>
+
+<div id="checks"></div>
+
+<h2>Dados brutos</h2>
+<pre id="raw">carregando…</pre>
+
+<script>
+(function () {
+  // Captura o evento o mais cedo possível — ele costuma disparar logo após o load.
+  var bip = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    bip = e;
+    render();
+  });
+  window.addEventListener('appinstalled', function () { render(); });
+
+  var results = [];
+  var raw = {};
+
+  function displayMode() {
+    var modes = ['standalone', 'minimal-ui', 'fullscreen', 'window-controls-overlay'];
+    for (var i = 0; i < modes.length; i++) {
+      if (window.matchMedia('(display-mode: ' + modes[i] + ')').matches) return modes[i];
+    }
+    return 'browser';
+  }
+
+  function add(ok, title, detail) {
+    results.push({ ok: ok, title: title, detail: detail });
+  }
+
+  function render() {
+    var el = document.getElementById('checks');
+    el.innerHTML = '';
+    results.forEach(function (r) {
+      var d = document.createElement('div');
+      d.className = 'row';
+      d.innerHTML = '<div class="ic">' + (r.ok === true ? '✅' : r.ok === false ? '❌' : 'ℹ️') + '</div>' +
+                    '<div class="tx"><b></b><span></span></div>';
+      d.querySelector('b').textContent = r.title;
+      d.querySelector('span').textContent = r.detail;
+      el.appendChild(d);
+    });
+
+    var btn = document.getElementById('install');
+    btn.disabled = !bip;
+
+    var v = document.getElementById('verdict');
+    var dm = displayMode();
+    if (dm !== 'browser') {
+      v.className = 'verdict v-ok';
+      v.textContent = 'Esta página JÁ está rodando em modo app (display-mode: ' + dm +
+        '). É por isso que o botão de instalar não aparece no app — o Android entende que ele já está instalado.';
+    } else if (bip) {
+      v.className = 'verdict v-ok';
+      v.textContent = 'Tudo certo: o Chrome ofereceu a instalação. Toque em "Instalar app na tela inicial" acima.';
+    } else {
+      v.className = 'verdict v-bad';
+      v.textContent = 'O Chrome NÃO ofereceu a instalação nesta página. Veja abaixo qual item está com ❌ e me mande o relatório.';
+    }
+
+    raw.displayMode = dm;
+    raw.beforeinstallprompt = !!bip;
+    raw.checks = results.map(function (r) { return (r.ok === true ? 'OK  ' : r.ok === false ? 'FALHA ' : '--  ') + r.title + ' :: ' + r.detail; });
+    document.getElementById('raw').textContent = JSON.stringify(raw, null, 1);
+  }
+
+  document.getElementById('install').addEventListener('click', function () {
+    if (!bip) return;
+    bip.prompt();
+    bip.userChoice.then(function (c) {
+      alert('Resultado: ' + c.outcome);
+      bip = null;
+      render();
+    });
+  });
+
+  document.getElementById('copy').addEventListener('click', function () {
+    var txt = document.getElementById('raw').textContent;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(txt).then(function () { alert('Relatório copiado. Cole no chat.'); },
+        function () { alert('Não deu para copiar. Tire um print da tela.'); });
+    } else {
+      alert('Não deu para copiar. Tire um print da tela.');
+    }
+  });
+
+  // ---------- coleta ----------
+  var ua = navigator.userAgent;
+  raw.userAgent = ua;
+  raw.url = location.href;
+  raw.referrer = document.referrer || '(vazio)';
+
+  var isAndroid = /android/i.test(ua);
+  var isWebView = /; wv\)/i.test(ua) || /FBAN|FBAV|Instagram|Line\//i.test(ua);
+  var isChrome = /Chrome\/\d/i.test(ua) && !/EdgA|OPR|SamsungBrowser|Firefox|FxiOS/i.test(ua);
+  var isSamsung = /SamsungBrowser/i.test(ua);
+
+  add(isAndroid ? true : null, 'Sistema', isAndroid ? 'Android detectado' : 'Não é Android — ' + ua.slice(0, 60));
+  add(isChrome && !isWebView, 'Navegador',
+      isWebView ? 'Navegador EMBUTIDO de outro app (WhatsApp/Instagram) — não instala. Abra no Chrome.'
+      : isSamsung ? 'Samsung Internet — use o menu do navegador para "Adicionar à tela inicial".'
+      : isChrome ? 'Chrome' : 'Outro navegador: ' + ua.slice(0, 60));
+  add(location.protocol === 'https:', 'HTTPS', location.protocol);
+  add(displayMode() === 'browser', 'Modo de exibição',
+      displayMode() === 'browser' ? 'Aberto no navegador (correto para instalar)'
+      : 'Já está em modo app (' + displayMode() + ') — o app JÁ está instalado neste aparelho');
+  add(document.referrer.indexOf('android-app://') === 0 ? false : null, 'Origem da abertura',
+      document.referrer.indexOf('android-app://') === 0 ? 'Aberto a partir de um ícone/atalho já existente' : 'Aberto direto no navegador');
+
+  // Service worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function (regs) {
+      var scopes = regs.map(function (r) { return r.scope; });
+      raw.swRegistrations = scopes;
+      raw.swController = navigator.serviceWorker.controller ? navigator.serviceWorker.controller.scriptURL : null;
+      add(regs.length > 0, 'Service worker',
+          regs.length ? 'Registrado: ' + scopes.join(', ') : 'NENHUM registrado — sem ele o Chrome não oferece instalação');
+      if (!regs.length) {
+        navigator.serviceWorker.register('/sw-housekeeping.js', { scope: '/housekeeping' })
+          .then(function () { add(true, 'Service worker (registro agora)', 'Registrado nesta visita — recarregue a página'); render(); })
+          .catch(function (e) { add(false, 'Service worker (registro agora)', 'Falhou: ' + e.message); render(); });
+      }
+      render();
+    });
+  } else {
+    add(false, 'Service worker', 'Navegador não suporta');
+  }
+
+  // Manifest + ícones
+  fetch('/housekeeping-manifest.json', { cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (m) {
+      add(true, 'Manifest', 'Carregado — start_url ' + m.start_url + ', scope ' + m.scope + ', display ' + m.display);
+      raw.manifest = m;
+      var inScope = location.pathname.indexOf(m.scope) === 0;
+      add(inScope, 'Página dentro do scope', inScope ? location.pathname + ' está em ' + m.scope
+          : location.pathname + ' está FORA de ' + m.scope + ' — o Chrome não oferece instalação aqui');
+      render();
+      (m.icons || []).forEach(function (ic) {
+        var img = new Image();
+        img.onload = function () {
+          add(img.naturalWidth >= 144, 'Ícone ' + ic.src.split('/').pop(),
+              'carregou ' + img.naturalWidth + 'x' + img.naturalHeight + ' (purpose: ' + (ic.purpose || 'any') + ')');
+          render();
+        };
+        img.onerror = function () {
+          add(false, 'Ícone ' + ic.src.split('/').pop(), 'FALHOU ao carregar');
+          render();
+        };
+        img.src = ic.src + '?d=' + Date.now();
+      });
+    })
+    .catch(function (e) {
+      add(false, 'Manifest', 'Falhou: ' + e.message);
+      render();
+    });
+
+  render();
+  // O beforeinstallprompt pode demorar; reavalia depois de alguns segundos.
+  setTimeout(render, 3000);
+  setTimeout(render, 8000);
+})();
+</script>
+</body>
+</html>
