@@ -29,10 +29,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ roo
       return NextResponse.json({ success: false, error: "Quarto não encontrado." }, { status: 404 });
     }
 
+    // Espelha a seleção de "tarefa ativa" de GET /api/housekeeping/rooms: num quarto que já está
+    // vago e sujo, uma tarefa OCCUPIED remanescente (arrumação com hóspede que ficou IN_PROGRESS
+    // porque o hóspede fez check-out antes de a governanta concluir) perdeu o sentido — o que vale
+    // é a limpeza pós check-out. Sem excluí-la aqui, o "start" reencontrava essa tarefa presa,
+    // via que já estava IN_PROGRESS e devolvia sucesso sem transicionar nada — o app recarregava,
+    // continuava mostrando a limpeza pós check-out como PENDING e o botão voltava para "Iniciar
+    // Limpeza" a cada toque. A limpeza de rotina (ensureDailyArrumacaoTasks) encerra essa tarefa
+    // presa como SKIPPED, mas pode não ter rodado ainda (guard de 60s / modo RECEPTION).
+    const ignoreStaleOccupied = room.status === "VACANT_DIRTY";
+    const staleOccupiedFilter = ignoreStaleOccupied ? { NOT: { type: "OCCUPIED" as const } } : {};
+
     // Uma governanta só pode ter uma limpeza IN_PROGRESS por vez — impede iniciar um segundo
-    // quarto sem antes concluir (ou ter cancelada) o que já está em andamento.
+    // quarto sem antes concluir (ou ter cancelada) o que já está em andamento. Uma arrumação
+    // OCCUPIED presa num quarto que já fez check-out (ver acima) não conta como "em andamento".
     const ongoingElsewhere = await prisma.housekeepingTask.findFirst({
-      where: { tenantId: session.tenantId, housekeeperId: session.housekeeperId, status: "IN_PROGRESS", roomId: { not: roomId } },
+      where: {
+        tenantId: session.tenantId,
+        housekeeperId: session.housekeeperId,
+        status: "IN_PROGRESS",
+        roomId: { not: roomId },
+        NOT: { type: "OCCUPIED", room: { status: "VACANT_DIRTY" } },
+      },
       include: { room: { select: { number: true } } },
     });
     if (ongoingElsewhere) {
@@ -43,7 +61,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ roo
     }
 
     const existing = await prisma.housekeepingTask.findFirst({
-      where: { tenantId: session.tenantId, roomId, status: { in: ["PENDING", "IN_PROGRESS"] } },
+      where: { tenantId: session.tenantId, roomId, status: { in: ["PENDING", "IN_PROGRESS"] }, ...staleOccupiedFilter },
+      orderBy: { createdAt: "desc" },
     });
 
     if (existing) {

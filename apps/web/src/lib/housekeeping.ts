@@ -67,21 +67,40 @@ export async function ensureDailyArrumacaoTasks(tenantId: string): Promise<void>
     });
   }
 
-  // Arrumações que perderam o sentido, em dois casos — preserva sempre IN_PROGRESS / DONE / SKIPPED
-  // (histórico), só mexe em PENDING sem dono:
-  //  1. Do dia de hoje, mas o quarto deixou de estar ocupado (check-out no meio do dia).
-  //  2. De um dia anterior que nunca foi assumida — a fila daquele dia já morreu na virada; deixar
-  //     "presa" fazia o quarto ficar preso em "Arrumação c/ hóspede" indefinidamente (inclusive
-  //     depois de um check-out real, mascarando a limpeza pós check-out — ver bug do quarto 306).
+  // Arrumações OCCUPIED que perderam o sentido, em dois casos:
+  //  1. serviceDate de hoje, mas o quarto deixou de estar ocupado (check-out no meio do dia).
+  //  2. serviceDate de um dia anterior — a fila daquele dia já morreu na virada; deixar "presa"
+  //     fazia o quarto ficar preso em "Arrumação c/ hóspede" indefinidamente (inclusive depois de
+  //     um check-out real, mascarando a limpeza pós check-out — ver bug do quarto 306).
+  const staleOccupiedWhere = {
+    tenantId,
+    type: "OCCUPIED" as const,
+    OR: [
+      { serviceDate: today, room: { status: { not: "OCCUPIED" as const } } },
+      { serviceDate: { lt: today } },
+    ],
+  };
+
+  // PENDING (ninguém trabalhou nela): some sem deixar rastro.
   await prisma.housekeepingTask.deleteMany({
-    where: {
-      tenantId,
-      type: "OCCUPIED",
-      status: "PENDING",
-      OR: [
-        { serviceDate: today, room: { status: { not: "OCCUPIED" } } },
-        { serviceDate: { lt: today } },
-      ],
+    where: { ...staleOccupiedWhere, status: "PENDING" },
+  });
+
+  // IN_PROGRESS (a governanta começou a arrumação e o hóspede fez check-out antes de ela concluir):
+  // não pode ficar presa. Além de manter o quarto eternamente em "Arrumação c/ hóspede" no Mapa e
+  // o selo na recepção, ela travava o app da governanta — a limpeza pós check-out aparecia como
+  // "Iniciar Limpeza", mas o endpoint /start reencontrava esta tarefa OCCUPIED ainda IN_PROGRESS e
+  // não transicionava nada, então o botão voltava para "Iniciar Limpeza" a cada toque. Encerra
+  // como SKIPPED/OTHER preservando quem começou e quando — vira registro de arrumação interrompida
+  // no histórico, não some.
+  await prisma.housekeepingTask.updateMany({
+    where: { ...staleOccupiedWhere, status: "IN_PROGRESS" },
+    data: {
+      status: "SKIPPED",
+      skipReason: "OTHER",
+      finishedAt: new Date(),
+      durationSeconds: null,
+      notes: "Arrumação interrompida — hóspede fez check-out antes da conclusão.",
     },
   });
 }
