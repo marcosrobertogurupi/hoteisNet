@@ -13,8 +13,8 @@ export const metadata: Metadata = {
     title: "Governança",
   },
   icons: {
-    icon: "/brand/icon.png",
-    apple: "/brand/icon.png",
+    icon: "/brand/icon-192.png",
+    apple: "/brand/icon-192.png",
   },
 };
 
