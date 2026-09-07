@@ -1676,6 +1676,48 @@ export default function TenantDashboardPage() {
               </button>
 
               <button
+                disabled={contextMenu.room.status !== "OCCUPIED"}
+                onClick={async () => {
+                  const room = contextMenu.room;
+                  setContextMenu(prev => ({ ...prev, visible: false }));
+                  if (!room) return;
+                  const isDnd = dndTodayRoomIds.has(room.id);
+                  const url = isDnd
+                    ? "/api/tenant/housekeeping-tasks/reopen"
+                    : "/api/tenant/housekeeping-tasks/dnd";
+                  try {
+                    const res = await fetch(url, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ roomId: room.id }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) {
+                      toast.error(data.error || "Não foi possível concluir a operação.", "Não Perturbe");
+                      return;
+                    }
+                    toast.success(
+                      isDnd
+                        ? `Quarto ${room.number} voltou para a relação de limpeza.`
+                        : `Quarto ${room.number} marcado como "não perturbe" — fora da limpeza de hoje.`,
+                      "Não Perturbe"
+                    );
+                    syncRoomsFromDatabase();
+                  } catch {
+                    toast.error("Falha de conexão ao atualizar o \"não perturbe\".", "Não Perturbe");
+                  }
+                }}
+                className={`w-full px-3.5 py-2 text-left hover:bg-[#0284C7] hover:text-white flex items-center gap-2.5 transition-colors ${
+                  theme.isDark ? "text-slate-200" : "text-slate-800 font-medium"
+                } disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed`}
+              >
+                <DoorClosed className="w-4 h-4 text-amber-500" />
+                {contextMenu.room && dndTodayRoomIds.has(contextMenu.room.id)
+                  ? "Retirar \"Não Perturbe\""
+                  : "Marcar \"Não Perturbe\""}
+              </button>
+
+              <button
                 disabled={contextMenu.room.status !== "OCCUPIED" && contextMenu.room.status !== "OCCUPIED_CLEANING"}
                 onClick={() => {
                   setContextMenu(prev => ({ ...prev, visible: false }));
