@@ -4,6 +4,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
+import { processReservationDeposit } from "@/lib/paymentProcessing";
 
 // POST /api/reservations/batch — cria várias reservas de uma só vez, dentro de uma única
 // transação Prisma (equivalente ao botão "Salvar Reservas" da tela de Reservas Múltiplas do
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      cashRegisterId,
+      operatorId,
       operatorName,
       reservations = [],
     } = body;
@@ -48,12 +49,27 @@ export async function POST(req: NextRequest) {
     const results = await txWithRetry(async (tx) => {
       const created: { reservationId: string; reservationNumber: string; roomId: string; guestName: string }[] = [];
 
-      // cashRegisterId, se informado, precisa ser um caixa do mesmo tenant — senão o adiantamento
-      // seria lançado no caixa de outro hotel.
+      // O sinal (adiantamento) de cada reserva entra no caixa ABERTO do operador da sessão —
+      // nunca um cashRegisterId vindo do cliente. Só resolve/cria o caixa quando o lote tem de
+      // fato algum adiantamento a lançar.
+      const opId = operatorId || "USR-001";
+      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      const loteTemAdiantamento = reservations.some(
+        (r: any) => Array.isArray(r?.payments) && r.payments.some((p: any) => Number(p?.amount) > 0)
+      );
       let realCashRegisterId: string | null = null;
-      if (cashRegisterId) {
-        const caixa = await tx.cashRegister.findFirst({ where: { id: cashRegisterId, tenantId: session.tenantId! }, select: { id: true } });
-        realCashRegisterId = caixa?.id || null;
+      if (loteTemAdiantamento) {
+        let caixa = await tx.cashRegister.findFirst({
+          where: { operatorId: opId, isOpen: true, tenantId: session.tenantId! },
+          select: { id: true },
+        });
+        if (!caixa) {
+          caixa = await tx.cashRegister.create({
+            data: { tenantId: session.tenantId!, operatorId: opId, operatorName: opName, openingBalance: 0, isOpen: true },
+            select: { id: true },
+          });
+        }
+        realCashRegisterId = caixa.id;
       }
 
       for (const r of reservations) {
@@ -110,31 +126,34 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        const validPayments = ((r.payments || []) as any[]).filter((p) => p.amount && p.amount > 0);
+        const validPayments = ((r.payments || []) as any[]).filter((p) => Number(p?.amount) > 0);
         for (const pmt of validPayments) {
+          if (!realCashRegisterId) break; // trava de segurança — loteTemAdiantamento já garantiu o caixa
+          const { cashTransactionId } = await processReservationDeposit(tx, {
+            tenantId: session.tenantId!,
+            cashRegisterId: realCashRegisterId,
+            reservationNumber,
+            guestId: realGuestId,
+            roomNumber: r.roomNumber || String(r.roomId),
+            guestName: r.guestName,
+            amount: Number(pmt.amount),
+            paymentMethodDescription: pmt.paymentMethod || "DINHEIRO",
+            operatorId: opId,
+            operatorName: opName,
+          });
+
           await tx.reservation_payments.create({
             data: {
               id: crypto.randomUUID(),
               reservationId: reservation.id,
               tenantId: RESERVATION_TENANT_ID,
               cashRegisterId: realCashRegisterId,
+              cashTransactionId,
               amount: pmt.amount,
               paymentMethod: pmt.paymentMethod || "DINHEIRO",
-              operatorName: operatorName || null,
+              operatorName: opName,
             },
           });
-
-          if (realCashRegisterId) {
-            await tx.cashTransaction.create({
-              data: {
-                cashRegisterId: realCashRegisterId,
-                type: "INCOME",
-                amount: pmt.amount,
-                description: `Adiantamento Reserva ${reservationNumber} - ${r.guestName}`,
-                paymentMethod: pmt.paymentMethod || "DINHEIRO",
-              },
-            });
-          }
         }
 
         created.push({

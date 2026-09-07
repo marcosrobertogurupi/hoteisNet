@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
+import { useOperator } from "@/context/OperatorContext";
 import {
   LISTA_TARIFAS, TariffOption,
   validateCPF, formatCPF, formatCNPJ,
@@ -196,6 +197,7 @@ export default function LancarReservaModal({
 }: LancarReservaModalProps) {
   const { theme, hotelName } = useTheme();
   const toast = useToast();
+  const { operatorId } = useOperator();
   const isDark = theme.isDark;
 
   // ── STEP 1: Tarifa / Quarto ─────────────────────────────────────────────────
@@ -464,8 +466,9 @@ export default function LancarReservaModal({
   }, [isOpen, tenantId]);
 
   // Formas de pagamento do adiantamento — carregadas do cadastro (Central de Cadastros → Formas
-  // de Pagamento). Formas marcadas como "Transf.Débito" ficam de fora: têm fluxo dedicado
-  // (transferência de débito entre quartos) e nunca representam um sinal de reserva.
+  // de Pagamento). Ficam de fora: "Transf.Débito" (fluxo dedicado de transferência de débito
+  // entre quartos) e "Parcelamento/Fatura" (a Conta a Receber exige uma hospedagem, que o sinal
+  // ainda não tem — o servidor também recusa essas formas no sinal).
   useEffect(() => {
     if (!isOpen) return;
     (async () => {
@@ -474,7 +477,7 @@ export default function LancarReservaModal({
         const data = await res.json();
         if (!data?.success || !Array.isArray(data.paymentMethods)) return;
         const options: PaymentMethodOption[] = data.paymentMethods
-          .filter((f: any) => f.active !== false && !f.transferDebit)
+          .filter((f: any) => f.active !== false && !f.transferDebit && !f.installment)
           .map((f: any) => ({
             id: f.id,
             description: f.description,
@@ -769,7 +772,7 @@ export default function LancarReservaModal({
         adults,
         children,
         hasWhatsapp,
-        cashRegisterId: cashRegisterId || null,
+        operatorId,
         operatorName,
         roomDescription: selectedRoom.room_categories?.description || null,
         roomCategory: selectedRoom.room_categories?.name || null,

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
+import { useOperator } from "@/context/OperatorContext";
 import { LISTA_TARIFAS, TariffOption } from "@/components/CheckinHospedagemModal";
 import { DEFAULT_ROOM_OPTIONS, RoomOption } from "@/components/LancarReservaModal";
 import {
@@ -146,6 +147,7 @@ export default function ReservasMultiplasModal({
 }: ReservasMultiplasModalProps) {
   const { theme, hotelName, defaultCheckInTime, defaultCheckOutTime } = useTheme();
   const toast = useToast();
+  const { operatorId } = useOperator();
   const isDark = theme.isDark;
 
   // ── Tarifa / Quarto ─────────────────────────────────────────────────────────
@@ -243,7 +245,8 @@ export default function ReservasMultiplasModal({
   }, [isOpen, tenantId]);
 
   // Formas de pagamento do adiantamento — carregadas do cadastro (Central de Cadastros → Formas
-  // de Pagamento). Formas de "Transf.Débito" ficam de fora (fluxo dedicado, nunca um sinal).
+  // de Pagamento). Ficam de fora "Transf.Débito" (fluxo dedicado) e "Parcelamento/Fatura" (a
+  // Conta a Receber exige uma hospedagem, que o sinal ainda não tem).
   useEffect(() => {
     if (!isOpen) return;
     (async () => {
@@ -252,7 +255,7 @@ export default function ReservasMultiplasModal({
         const data = await res.json();
         if (!data?.success || !Array.isArray(data.paymentMethods)) return;
         const options: PaymentMethodOption[] = data.paymentMethods
-          .filter((f: any) => f.active !== false && !f.transferDebit)
+          .filter((f: any) => f.active !== false && !f.transferDebit && !f.installment)
           .map((f: any) => ({
             id: f.id,
             description: f.description,
@@ -548,10 +551,11 @@ export default function ReservasMultiplasModal({
     try {
       const payload = {
         tenantId,
-        cashRegisterId: cashRegisterId || null,
+        operatorId,
         operatorName,
         reservations: pendingReservations.map(r => ({
           roomId: r.roomId,
+          roomNumber: r.roomNumber,
           tariffId: r.tariffId,
           tariffName: r.tariffName,
           guestName: r.guestName,

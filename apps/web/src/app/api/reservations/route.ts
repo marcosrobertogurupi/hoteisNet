@@ -6,6 +6,7 @@ import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelp
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
 import { txWithRetry } from "@/lib/dbTx";
+import { processReservationDeposit, reverseReservationDeposits } from "@/lib/paymentProcessing";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
@@ -72,7 +73,7 @@ export async function POST(req: NextRequest) {
       adults = 1,
       children = 0,
       hasWhatsapp = false,
-      cashRegisterId,
+      operatorId,
       operatorName,
       notes,
       roomDescription,
@@ -111,12 +112,26 @@ export async function POST(req: NextRequest) {
         realGuestId = guest?.id || null;
       }
 
-      // cashRegisterId, se informado, também precisa ser um caixa do mesmo tenant — senão o
-      // adiantamento seria lançado no caixa de outro hotel.
+      const validPayments = (payments as any[]).filter((p) => Number(p?.amount) > 0);
+
+      // O sinal (adiantamento) entra no caixa ABERTO do operador da sessão — nunca um
+      // cashRegisterId vindo do cliente (que permitiria lançar no caixa de outro hotel/operador).
+      // Só resolve/cria o caixa quando há de fato um adiantamento a lançar.
+      const opId = operatorId || "USR-001";
+      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
       let realCashRegisterId: string | null = null;
-      if (cashRegisterId) {
-        const caixa = await tx.cashRegister.findFirst({ where: { id: cashRegisterId, tenantId: session.tenantId! }, select: { id: true } });
-        realCashRegisterId = caixa?.id || null;
+      if (validPayments.length > 0) {
+        let caixa = await tx.cashRegister.findFirst({
+          where: { operatorId: opId, isOpen: true, tenantId: session.tenantId! },
+          select: { id: true },
+        });
+        if (!caixa) {
+          caixa = await tx.cashRegister.create({
+            data: { tenantId: session.tenantId!, operatorId: opId, operatorName: opName, openingBalance: 0, isOpen: true },
+            select: { id: true },
+          });
+        }
+        realCashRegisterId = caixa.id;
       }
 
       const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
@@ -159,28 +174,32 @@ export async function POST(req: NextRequest) {
         await tx.room.update({ where: { id: realRoomId }, data: { status: "OCCUPIED" } });
       }
 
-      const validPayments = (payments as any[]).filter((p) => p.amount && p.amount > 0);
-      for (const pmt of validPayments) {
-        await tx.reservation_payments.create({
-          data: {
-            id: crypto.randomUUID(),
-            reservationId: reservation.id,
-            tenantId: RESERVATION_TENANT_ID,
+      if (validPayments.length > 0 && realCashRegisterId) {
+        const room = await tx.room.findUnique({ where: { id: realRoomId }, select: { number: true } });
+        for (const pmt of validPayments) {
+          const { cashTransactionId } = await processReservationDeposit(tx, {
+            tenantId: session.tenantId!,
             cashRegisterId: realCashRegisterId,
-            amount: pmt.amount,
-            paymentMethod: pmt.paymentMethod || "DINHEIRO",
-            operatorName: operatorName || null,
-          },
-        });
+            reservationNumber,
+            guestId: realGuestId,
+            roomNumber: room?.number || String(roomId),
+            guestName,
+            amount: Number(pmt.amount),
+            paymentMethodDescription: pmt.paymentMethod || "DINHEIRO",
+            operatorId: opId,
+            operatorName: opName,
+          });
 
-        if (realCashRegisterId) {
-          await tx.cashTransaction.create({
+          await tx.reservation_payments.create({
             data: {
+              id: crypto.randomUUID(),
+              reservationId: reservation.id,
+              tenantId: RESERVATION_TENANT_ID,
               cashRegisterId: realCashRegisterId,
-              type: "INCOME",
+              cashTransactionId,
               amount: pmt.amount,
-              description: `Adiantamento Reserva ${reservationNumber} - ${guestName}`,
               paymentMethod: pmt.paymentMethod || "DINHEIRO",
+              operatorName: opName,
             },
           });
         }
@@ -346,12 +365,29 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Usuário sem tenant associado." }, { status: 400 });
     }
 
-    const updated = await prisma.reservation.updateMany({
-      where: { id, room: { tenantId: session!.tenantId } },
-      data: { status: "CANCELLED" },
+    const result = await txWithRetry(async (tx) => {
+      const reservation = await tx.reservation.findFirst({
+        where: { id, room: { tenantId: session!.tenantId! } },
+        select: { id: true, guestId: true },
+      });
+      if (!reservation) return { notFound: true as const };
+
+      // Uma reserva cancelada não pode deixar o sinal preso no caixa nem um crédito fantasma no
+      // saldo do hóspede.
+      await reverseReservationDeposits(tx, {
+        tenantId: session!.tenantId!,
+        reservationId: id,
+        guestId: reservation.guestId,
+      });
+
+      await tx.reservation.updateMany({
+        where: { id, room: { tenantId: session!.tenantId! } },
+        data: { status: "CANCELLED" },
+      });
+      return { notFound: false as const };
     });
 
-    if (updated.count === 0) {
+    if (result.notFound) {
       return NextResponse.json({ success: false, error: `Reserva ${id} não encontrada.` }, { status: 404 });
     }
 

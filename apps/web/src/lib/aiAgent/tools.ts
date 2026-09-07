@@ -11,6 +11,7 @@ import { findConflictingReservation, findBlockingOpenStay, stayOccupiedUntil } f
 import { sendUazapiImage } from "@/lib/uazapi";
 import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
+import { reverseReservationDeposits } from "@/lib/paymentProcessing";
 
 function startOfToday(): Date {
   const now = new Date();
@@ -666,11 +667,24 @@ async function cancelReservationForAgent(tenantId: string, guestPhone: string, r
     };
   }
 
-  // Segunda chamada dentro da janela de validade: cancela de verdade.
-  await prisma.reservation.update({
-    where: { id: reservation.id },
-    data: { status: "CANCELLED", agentCancelRequestedAt: null },
-  });
+  // Segunda chamada dentro da janela de validade: cancela de verdade. Estorna, na mesma
+  // transação, qualquer sinal já lançado no caixa/saldo do hóspede (reservas com adiantamento
+  // feito na recepção) — nunca deixa dinheiro preso ao cancelar.
+  try {
+    await prisma.$transaction(async (tx) => {
+      await reverseReservationDeposits(tx, {
+        tenantId,
+        reservationId: reservation.id,
+        guestId: reservation.guestId,
+      });
+      await tx.reservation.update({
+        where: { id: reservation.id },
+        data: { status: "CANCELLED", agentCancelRequestedAt: null },
+      });
+    });
+  } catch (err: any) {
+    return { sucesso: false, precisaEscalar: true, erro: err?.message || "Não foi possível cancelar a reserva." };
+  }
 
   await logActivity({
     tenantId,
