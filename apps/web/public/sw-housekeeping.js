@@ -2,7 +2,7 @@
 // tela inicial, abre em tela cheia). NÃO faz cache de dados: a lista de quartos precisa sempre
 // vir do servidor. Só entrega uma tela offline simples quando não há rede numa navegação.
 const OFFLINE_URL = "/housekeeping/offline.html";
-const CACHE = "housekeeping-shell-v1";
+const CACHE = "housekeeping-shell-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.add(OFFLINE_URL)).catch(() => {}));

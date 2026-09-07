@@ -3,7 +3,7 @@
 // sempre falar com o servidor. Só entrega uma tela offline simples quando não há rede numa
 // navegação.
 const OFFLINE_URL = "/contagem/offline.html";
-const CACHE = "contagem-shell-v1";
+const CACHE = "contagem-shell-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.add(OFFLINE_URL)).catch(() => {}));
