@@ -1736,6 +1736,11 @@ model reservation_payments {
   paymentMethod  String?   @default("DINHEIRO")
   operatorName   String?
   createdAt      DateTime? @default(now()) @db.Timestamptz(6)
+  // Movimento de caixa gerado por este adiantamento no momento da criação da reserva (o sinal
+  // entra no caixa do operador já na reserva, honrando as flags da forma — ver lib/paymentProcessing
+  // processReservationDeposit). Fica null para reservas antigas, cujo sinal só é lançado no
+  // check-in. No check-in, esse CashTransaction é revinculado à hospedagem (stayCheckinId).
+  cashTransactionId String?
 }
 
 // ============================================================================

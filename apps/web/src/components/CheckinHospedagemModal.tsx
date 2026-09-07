@@ -483,21 +483,10 @@ export default function CheckinHospedagemModal({
         setObsList([]);
       }
 
-      // Pagamentos/Adiantamentos da reserva
-      if (Array.isArray(reservationData.payments) && reservationData.payments.length > 0) {
-        setPaymentsList(reservationData.payments as any);
-      } else if (reservationData.depositPaid && reservationData.depositPaid > 0) {
-        setPaymentsList([
-          {
-            id: `PAY-RES-1`,
-            date: new Date().toLocaleDateString("pt-BR"),
-            amount: reservationData.depositPaid,
-            methodDescription: "Adiantamento Reserva (PIX)",
-          },
-        ]);
-      } else {
-        setPaymentsList([]);
-      }
+      // A grade de pagamentos começa vazia: aqui só entram pagamentos NOVOS feitos no balcão
+      // durante o check-in. O sinal já pago na reserva é carregado à parte (reservationDeposits,
+      // efeito dedicado abaixo) e processado pelo servidor.
+      setPaymentsList([]);
     } else {
       // ── ORIGEM: DIRETA NO QUARTO (SEM RESERVA / WALK-IN) ─────────────────
       // Todos os campos zerados / em branco
@@ -561,6 +550,43 @@ export default function CheckinHospedagemModal({
       }
     }
   }, [isOpen, reservationData, roomData?.number, roomData?.category, roomData?.ratePerNight, defaultCheckInTime, defaultCheckOutTime]);
+
+  // Sinal (adiantamento) já pago na reserva de origem — carregado uma vez ao abrir. É
+  // somente-leitura: o servidor o processa no check-in (revincula ao quarto os que já entraram
+  // no caixa na criação da reserva; lança os de reservas antigas que ainda não entraram).
+  useEffect(() => {
+    if (!isOpen || !reservationData?.id) {
+      setReservationDeposits([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/reservations/${reservationData.id}/payments`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (data?.success && Array.isArray(data.payments)) {
+          setReservationDeposits(
+            data.payments
+              .filter((p: any) => Number(p.amount) > 0)
+              .map((p: any) => ({
+                id: String(p.id),
+                amount: Number(p.amount),
+                paymentMethod: p.paymentMethod || "DINHEIRO",
+                postedToCashRegister: !!p.postedToCashRegister,
+              }))
+          );
+        } else {
+          setReservationDeposits([]);
+        }
+      } catch {
+        if (!cancelled) setReservationDeposits([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, reservationData?.id]);
 
   // Busca o percentual máximo de desconto sem autorização de admin (Configurações do assinante)
   // sempre que o modal abre, e reseta a autorização de desconto de uma sessão de check-in anterior.
@@ -911,11 +937,14 @@ export default function CheckinHospedagemModal({
   const [paymentDate, setPaymentDate] = useState<string>(new Date().toLocaleDateString("pt-BR"));
   const [paymentAmount, setPaymentAmount] = useState<string>("0,00");
   const [paymentMethod, setPaymentMethod] = useState<string>("Dinheiro");
-  const [paymentsList, setPaymentsList] = useState<PaymentItem[]>(
-    reservationData?.depositPaid
-      ? [{ id: "PAY-1", date: new Date().toLocaleDateString("pt-BR"), amount: reservationData.depositPaid, methodDescription: "Adiantamento Reserva (PIX)" }]
-      : []
-  );
+  // Grade local de pagamentos: SÓ pagamentos novos feitos no balcão durante o check-in. O sinal
+  // já pago na reserva NÃO entra aqui — é carregado em reservationDeposits e processado pelo
+  // servidor (GET /api/reservations/[id]/payments + POST /api/stay/checkin), para nunca ser
+  // lançado em dobro.
+  const [paymentsList, setPaymentsList] = useState<PaymentItem[]>([]);
+  const [reservationDeposits, setReservationDeposits] = useState<
+    { id: string; amount: number; paymentMethod: string; postedToCashRegister: boolean }[]
+  >([]);
 
   // Observations
   const [obsDate, setObsDate] = useState<string>(formatDateForInput(now));
@@ -1148,7 +1177,9 @@ export default function CheckinHospedagemModal({
 
   // Total calculations
   const totalDiariasBruto = nights * dailyRate + earlyArrivalCharge;
-  const totalAdiantamento = paymentsList.reduce((acc, item) => acc + item.amount, 0);
+  const totalDepositosReserva = reservationDeposits.reduce((acc, d) => acc + d.amount, 0);
+  const totalAdiantamento =
+    paymentsList.reduce((acc, item) => acc + item.amount, 0) + totalDepositosReserva;
   const saldoAPagar = Math.max(0, totalDiariasBruto - discount - totalAdiantamento);
 
   // Desconto acima do percentual configurado em Configurações exige autorização de admin —
@@ -2618,7 +2649,22 @@ export default function CheckinHospedagemModal({
                           </tr>
                         </thead>
                         <tbody className={`divide-y ${isDark ? "divide-slate-800/60" : "divide-slate-200"}`}>
-                          {paymentsList.length === 0 ? (
+                          {reservationDeposits.map((d) => (
+                            <tr key={d.id} className={isDark ? "bg-slate-900/40" : "bg-sky-50/60"}>
+                              <td className="p-1.5 font-mono opacity-80">Reserva</td>
+                              <td className={`p-1.5 font-mono font-bold text-right ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>
+                                R$ {d.amount.toFixed(2).replace(".", ",")}
+                              </td>
+                              <td className="p-1.5">{d.paymentMethod}</td>
+                              <td className="p-1.5 text-center">
+                                <span className={`text-[9px] flex items-center justify-center gap-0.5 font-mono ${d.postedToCashRegister ? (isDark ? "text-emerald-400" : "text-emerald-600") : "opacity-60"}`}>
+                                  <CheckCircle2 className="w-3 h-3" /> {d.postedToCashRegister ? "No caixa" : "No check-in"}
+                                </span>
+                              </td>
+                              <td className="p-1.5 text-center opacity-30">—</td>
+                            </tr>
+                          ))}
+                          {paymentsList.length === 0 && reservationDeposits.length === 0 ? (
                             <tr>
                               <td colSpan={5} className="p-2 text-center opacity-60 italic">
                                 Nenhum adiantamento lançado

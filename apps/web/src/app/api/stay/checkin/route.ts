@@ -621,14 +621,17 @@ export async function POST(req: NextRequest) {
         (p: any) => Number(p?.valor) > 0
       );
 
-      if (validPayments.length > 0) {
-        const opId = operatorId || "USR-001";
-        const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      const opId = operatorId || "USR-001";
+      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
 
+      // Caixa do operador — resolvido só quando há algo a lançar (pagamento no balcão ou sinal
+      // de reserva antiga ainda não lançado). Reutiliza a mesma instância entre os dois blocos.
+      let caixaCache: { id: string } | null = null;
+      const getCaixa = async () => {
+        if (caixaCache) return caixaCache;
         let caixa = await tx.cashRegister.findFirst({
           where: { operatorId: opId, isOpen: true, tenantId: room.tenantId },
         });
-
         if (!caixa) {
           caixa = await tx.cashRegister.create({
             data: {
@@ -640,14 +643,43 @@ export async function POST(req: NextRequest) {
             },
           });
         }
+        caixaCache = caixa;
+        return caixa;
+      };
 
-        let totalPagoCheckin = 0;
-        for (const p of validPayments) {
-          const valorNum = Number(p.valor);
-          const fpg = p.formaPagamento || "DINHEIRO";
-          const desc = p.descricao || `Pagamento de diárias — Quarto ${room.number}`;
+      // Adiantamentos (sinal) da reserva de origem, gravados em reservation_payments na criação
+      // da reserva. Dois casos:
+      //  • já lançados no caixa na criação da reserva (cashTransactionId preenchido — ver
+      //    lib/paymentProcessing.processReservationDeposit): apenas revincula o CashTransaction a
+      //    esta hospedagem, para aparecer no histórico de pagamentos do quarto. NADA é re-lançado.
+      //  • reservas antigas (cashTransactionId nulo): o sinal nunca entrou no caixa; é lançado
+      //    agora, honrando a forma real gravada na reserva (flags via processPaymentLine).
+      let totalSinalReserva = 0;
+      if (targetReservationId) {
+        const sinais = await tx.reservation_payments.findMany({
+          where: { reservationId: targetReservationId },
+          select: { id: true, amount: true, paymentMethod: true, cashTransactionId: true },
+        });
 
-          await processPaymentLine(tx, {
+        const jaPostados = sinais.filter((s) => s.cashTransactionId && Number(s.amount) > 0);
+        const naoPostados = sinais.filter((s) => !s.cashTransactionId && Number(s.amount) > 0);
+
+        if (jaPostados.length > 0) {
+          await tx.cashTransaction.updateMany({
+            where: { id: { in: jaPostados.map((s) => s.cashTransactionId as string) } },
+            data: {
+              stayCheckinId: stay.id,
+              roomNumber: room.number,
+              guestName: String(guestName).toUpperCase(),
+            },
+          });
+          for (const s of jaPostados) totalSinalReserva += Number(s.amount);
+        }
+
+        for (const s of naoPostados) {
+          const valorNum = Number(s.amount);
+          const caixa = await getCaixa();
+          const { cashTransactionId } = await processPaymentLine(tx, {
             tenantId: room.tenantId,
             cashRegisterId: caixa.id,
             stayCheckinId: stay.id,
@@ -655,25 +687,53 @@ export async function POST(req: NextRequest) {
             roomNumber: room.number,
             guestName: String(guestName).toUpperCase(),
             amount: valorNum,
-            paymentMethodDescription: fpg,
-            description: `${desc} (Hóspede: ${String(guestName).toUpperCase()})`,
+            paymentMethodDescription: s.paymentMethod || "DINHEIRO",
+            description: `Adiantamento da reserva — Quarto ${room.number} (Hóspede: ${String(guestName).toUpperCase()})`,
             operatorId: opId,
             operatorName: opName,
           });
-          totalPagoCheckin += valorNum;
+          await tx.reservation_payments.update({
+            where: { id: s.id },
+            data: { cashTransactionId, cashRegisterId: caixa.id },
+          });
+          totalSinalReserva += valorNum;
         }
-
-        // Sem isto, o snapshot financeiro da hospedagem (totalAdvance/balanceDue) nasce zerado
-        // mesmo com adiantamento já pago no check-in — só seria corrigido no próximo pagamento
-        // avulso ou no checkout, deixando qualquer leitura nesse meio-tempo (ex.: Transferência de
-        // Débitos) com o saldo devedor desatualizado. Usa o valor TOTAL da hospedagem (todas as
-        // diárias), não só uma diária — senão o saldo nasce subavaliado em estadias de N > 1 noites.
-        const saldoAposCheckin = Math.max(0, guestDebitTotal - totalPagoCheckin - Number(discount || 0));
-        await tx.stayCheckin.update({
-          where: { id: stay.id },
-          data: { totalAdvance: totalPagoCheckin, balanceDue: saldoAposCheckin },
-        });
       }
+
+      // Pagamentos NOVOS feitos no balcão durante o check-in (grade local do modal).
+      let totalPagoCheckin = 0;
+      for (const p of validPayments) {
+        const valorNum = Number(p.valor);
+        const fpg = p.formaPagamento || "DINHEIRO";
+        const desc = p.descricao || `Pagamento de diárias — Quarto ${room.number}`;
+        const caixa = await getCaixa();
+
+        await processPaymentLine(tx, {
+          tenantId: room.tenantId,
+          cashRegisterId: caixa.id,
+          stayCheckinId: stay.id,
+          guestId: guest.id,
+          roomNumber: room.number,
+          guestName: String(guestName).toUpperCase(),
+          amount: valorNum,
+          paymentMethodDescription: fpg,
+          description: `${desc} (Hóspede: ${String(guestName).toUpperCase()})`,
+          operatorId: opId,
+          operatorName: opName,
+        });
+        totalPagoCheckin += valorNum;
+      }
+
+      // Snapshot financeiro da hospedagem (totalAdvance/balanceDue). Sempre gravado — mesmo sem
+      // nenhum pagamento — para nunca deixar uma leitura no meio-tempo (ex.: Transferência de
+      // Débitos) com saldo devedor desatualizado. Usa o valor TOTAL da hospedagem (todas as
+      // diárias), não só uma diária — senão o saldo nasce subavaliado em estadias de N > 1 noites.
+      const totalAdvanceCheckin = totalPagoCheckin + totalSinalReserva;
+      const saldoAposCheckin = Math.max(0, guestDebitTotal - totalAdvanceCheckin - Number(discount || 0));
+      await tx.stayCheckin.update({
+        where: { id: stay.id },
+        data: { totalAdvance: totalAdvanceCheckin, balanceDue: saldoAposCheckin },
+      });
 
       return {
         stayCheckinId: stay.id,
