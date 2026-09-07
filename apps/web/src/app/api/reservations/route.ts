@@ -159,6 +159,7 @@ export async function POST(req: NextRequest) {
           hasWhatsapp: !!hasWhatsapp,
           wppSent: false,
           cashRegisterId: realCashRegisterId,
+          operatorId: operatorId || null,
           operatorName: operatorName || null,
           notes: notes || null,
           roomDescription: roomDescription || null,
@@ -199,6 +200,7 @@ export async function POST(req: NextRequest) {
               cashTransactionId,
               amount: pmt.amount,
               paymentMethod: pmt.paymentMethod || "DINHEIRO",
+              operatorId: opId,
               operatorName: opName,
             },
           });
@@ -381,6 +383,7 @@ export async function PATCH(req: NextRequest) {
                 cashTransactionId,
                 amount: pmt.amount,
                 paymentMethod: pmt.paymentMethod || "DINHEIRO",
+                operatorId: opId,
                 operatorName: opName,
               },
             });

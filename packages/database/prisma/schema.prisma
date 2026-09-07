@@ -903,6 +903,10 @@ model Reservation {
   totalDiarias           Decimal?          @default(0) @db.Decimal
   discountAmount         Decimal?          @default(0) @db.Decimal
   cashRegisterId         String?
+  // Operador que criou a reserva (id estável + nome denormalizado para exibição) — mesmo padrão
+  // de StayCheckin.checkedInByUserId / CashRegister.operatorId / AuditLog.userId. O operatorName
+  // sozinho não bastava: caía no default "RECEPÇÃO" quando o contexto de operador não estava setado.
+  operatorId             String?
   operatorName           String?
   notes                  String?
   adults                 Int?              @default(1)
@@ -1734,6 +1738,9 @@ model reservation_payments {
   cashRegisterId String?
   amount         Decimal   @default(0) @db.Decimal(10, 2)
   paymentMethod  String?   @default("DINHEIRO")
+  // Operador que lançou este adiantamento (pode diferir de quem criou a reserva — ex.: sinal
+  // adicionado depois pela tela de edição). Id estável + nome denormalizado, como em Reservation.
+  operatorId     String?
   operatorName   String?
   createdAt      DateTime? @default(now()) @db.Timestamptz(6)
   // Movimento de caixa gerado por este adiantamento no momento da criação da reserva (o sinal

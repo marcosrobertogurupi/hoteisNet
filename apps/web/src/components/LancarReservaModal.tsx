@@ -28,6 +28,7 @@ export interface ReservaPaymentItem {
   date: string;
   amount: number;
   paymentMethod: string;
+  operatorName?: string | null;
   // true = adiantamento já gravado no banco (modo edição). Removê-lo aciona estorno no caixa;
   // um adiantamento novo (false/undefined) é lançado no caixa ao salvar.
   _persisted?: boolean;
@@ -519,6 +520,7 @@ export default function LancarReservaModal({
                 date: p.createdAt ? new Date(p.createdAt).toLocaleString("pt-BR") : nowBrDisplay(),
                 amount: Number(p.amount),
                 paymentMethod: p.paymentMethod || "DINHEIRO",
+                operatorName: p.operatorName || null,
                 _persisted: true,
                 postedToCashRegister: !!p.postedToCashRegister,
               }))
@@ -1299,7 +1301,10 @@ export default function LancarReservaModal({
                   </div>
                   {payments.map(p => (
                     <div key={p.id} className={`grid grid-cols-4 px-3 py-1.5 text-xs items-center ${isDark ? "text-slate-300 border-t border-slate-700/50" : "text-slate-700 border-t border-slate-200"}`}>
-                      <span className="text-[10px]">{p.date}</span>
+                      <span className="text-[10px] leading-tight">
+                        {p.date}
+                        {p.operatorName && <span className={`block text-[9px] ${isDark ? "text-slate-500" : "text-slate-400"}`}>por {p.operatorName}</span>}
+                      </span>
                       <span className="font-mono font-semibold text-[#10B981]">R$ {p.amount.toFixed(2)}</span>
                       <span className="text-[10px] flex items-center gap-1">
                         {p.paymentMethod}

@@ -32,6 +32,7 @@ export async function GET(
         id: true,
         amount: true,
         paymentMethod: true,
+        operatorId: true,
         operatorName: true,
         createdAt: true,
         cashTransactionId: true,
@@ -43,6 +44,7 @@ export async function GET(
       id: r.id,
       amount: Number(r.amount),
       paymentMethod: r.paymentMethod || "DINHEIRO",
+      operatorId: r.operatorId,
       operatorName: r.operatorName,
       createdAt: r.createdAt,
       // true = sinal já lançado no caixa na criação da reserva (nada a re-lançar no check-in).
