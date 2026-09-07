@@ -8,11 +8,13 @@ import { getClientIp, getTerminalName } from "@/lib/auth";
 
 // Conferência do frigobar do quarto abastecido feita pela recepção no check-out.
 //
-// GET  /api/stay/minibar-check?stayCheckinId=...  → kit da categoria do quarto + se a conferência
-//      de check-out já foi feita para esta hospedagem (idempotência da tela).
-// POST /api/stay/minibar-check                    → aplica a conferência (source CHECKOUT): gera o
-//      consumo do que faltou e baixa o estoque do PDV do frigobar. Deve rodar ANTES do pagamento
-//      do check-out, para o consumo entrar no saldo.
+// GET  /api/stay/minibar-check?stayCheckinId=...  → kit da categoria do quarto + `alreadyDone`/
+//      `lastCheck` quando já houve uma conferência de check-out ABANDONADA para esta hospedagem
+//      (usado só para o aviso na tela; a conferência sempre reaparece e refaz do zero).
+// POST /api/stay/minibar-check                    → aplica a conferência (source CHECKOUT): estorna
+//      a conferência de check-out anterior desta hospedagem (se houver), gera o consumo do que
+//      faltou e baixa o estoque do PDV do frigobar. Deve rodar ANTES do pagamento do check-out,
+//      para o consumo entrar no saldo. Ver lib/minibarCheck.ts.
 
 export async function GET(req: NextRequest) {
   try {

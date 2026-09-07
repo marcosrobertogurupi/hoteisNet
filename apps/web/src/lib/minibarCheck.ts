@@ -11,6 +11,12 @@ import type { Prisma } from "@prisma/client";
 // soma em StayCheckin.totalConsumption). Toda conferência gera um RoomMinibarCheck + itens, mesmo
 // quando nada foi vendido (prova de que a conferência aconteceu).
 //
+// Uma conferência de CHECKOUT é PROVISÓRIA até o check-out ser realmente concluído: se a recepção
+// abre o check-out, confere e sai sem finalizar, na próxima vez a conferência anterior é ESTORNADA
+// e refeita a partir do kit cheio — o hóspede pode ter consumido mais nesse meio-tempo, e a
+// baseline no check-out é sempre "frigobar reabastecido na última limpeza". Conferências de
+// CLEANING (governanta) nunca são estornadas — representam consumo real entre arrumações.
+//
 // IMPORTANTE: o chamador deve ter travado a linha da hospedagem antes
 // (`SELECT id FROM stay_checkins WHERE id = ... FOR UPDATE`), igual ao check-out e ao consumo.
 
@@ -84,6 +90,39 @@ export async function applyMinibarCheck(
   const posLocationId = tenant.stockedRoomPosLocationId || null;
   const performedById = args.performedById || null;
   const performedByName = args.performedByName || null;
+
+  // Estorna a conferência de check-out anterior desta hospedagem (se houver) — ver comentário do
+  // cabeçalho. Devolve o estoque e desconta do total de consumo cada lançamento que ela gerou.
+  if (source === "CHECKOUT") {
+    const prior = await tx.roomMinibarCheck.findMany({
+      where: { tenantId, stayCheckinId, source: "CHECKOUT" },
+      select: { id: true, items: { select: { stayConsumptionId: true } } },
+    });
+    for (const pc of prior) {
+      for (const it of pc.items) {
+        if (!it.stayConsumptionId) continue;
+        const cons = await tx.stayConsumption.findUnique({
+          where: { id: it.stayConsumptionId },
+          select: { id: true, productId: true, posLocationId: true, quantity: true, totalPrice: true },
+        });
+        if (!cons) continue;
+        if (cons.productId && cons.posLocationId) {
+          await tx.pOSProductStock.upsert({
+            where: { productId_posLocationId: { productId: cons.productId, posLocationId: cons.posLocationId } },
+            update: { currentStock: { increment: Number(cons.quantity) } },
+            create: { productId: cons.productId, posLocationId: cons.posLocationId, currentStock: Number(cons.quantity) },
+          });
+        }
+        await tx.stayCheckin.update({
+          where: { id: stayCheckinId },
+          data: { totalConsumption: { decrement: cons.totalPrice } },
+        });
+        await tx.stayConsumption.delete({ where: { id: cons.id } });
+      }
+      await tx.roomMinibarCheckItem.deleteMany({ where: { checkId: pc.id } });
+      await tx.roomMinibarCheck.delete({ where: { id: pc.id } });
+    }
+  }
 
   const check = await tx.roomMinibarCheck.create({
     data: {

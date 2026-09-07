@@ -44,6 +44,9 @@ export default function ConferenciaFrigobarModal({
   const [items, setItems] = useState<KitItem[]>([]);
   const [found, setFound] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
+  // Valor de uma conferência de check-out anterior desta hospedagem que foi abandonada sem
+  // concluir o check-out — será substituída por esta (o hóspede pode ter consumido mais).
+  const [previousTotal, setPreviousTotal] = useState<number | null>(null);
 
   const proceed = useCallback(() => onProceed(), [onProceed]);
 
@@ -56,13 +59,15 @@ export default function ConferenciaFrigobarModal({
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
-        // Não se aplica (recurso desligado, categoria sem kit) ou já conferido neste check-out —
-        // segue direto para o pagamento sem incomodar o operador.
-        if (!data.success || !data.enabled || data.alreadyDone) {
+        // Só pula quando o recurso não se aplica (desligado, categoria sem kit). Se já houve uma
+        // conferência de check-out antes (check-out abandonado), a tela AINDA aparece — ela será
+        // refeita do zero, pois o hóspede pode ter consumido mais nesse meio-tempo.
+        if (!data.success || !data.enabled) {
           proceed();
           return;
         }
         setItems(data.items || []);
+        setPreviousTotal(data.alreadyDone && data.lastCheck ? Number(data.lastCheck.totalSold) : null);
         const initial: Record<string, number> = {};
         for (const it of data.items || []) initial[it.productId] = it.parQuantity;
         setFound(initial);
@@ -158,6 +163,15 @@ export default function ConferenciaFrigobarModal({
             Confira o frigobar e informe quantas unidades <strong>ainda tem</strong> de cada item. A diferença em relação
             ao kit é lançada como consumo do quarto antes do pagamento.
           </p>
+
+          {previousTotal !== null && (
+            <p className={`text-xs rounded-lg px-3 py-2 border ${
+              isDark ? "bg-amber-500/10 border-amber-500/30 text-amber-200" : "bg-amber-50 border-amber-200 text-amber-800"
+            }`}>
+              Já houve uma conferência de check-out para esta hospedagem ({money(previousTotal)}), mas o check-out não
+              foi concluído. Esta nova conferência <strong>substitui</strong> a anterior — confira o frigobar de novo.
+            </p>
+          )}
 
           <div className={`rounded-xl border overflow-hidden ${isDark ? "border-slate-800" : "border-slate-200"}`}>
             <table className="w-full text-left text-xs">
