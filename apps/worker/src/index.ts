@@ -7,6 +7,7 @@ import { runPreCheckinFnrh } from "./preCheckinFnrh";
 import { runSnrhosTransmit } from "./snrhosTransmit";
 import { runOperationalAgent } from "./operationalAgent";
 import { runSaasDunning } from "./saasDunning";
+import { runSaasMonitor } from "./saasMonitor";
 
 console.log("[worker] Virada de diária — worker iniciado.");
 
@@ -50,5 +51,12 @@ cron.schedule("*/15 * * * *", () => {
 cron.schedule("7 * * * *", () => {
   runSaasDunning().catch((err) => {
     console.error("[worker] Erro ao rodar régua de inadimplência:", err);
+  });
+});
+
+// Monitor da plataforma (cota de IA estourada por assinante etc.) — 1x por hora.
+cron.schedule("12 * * * *", () => {
+  runSaasMonitor().catch((err) => {
+    console.error("[worker] Erro ao rodar monitor da plataforma:", err);
   });
 });

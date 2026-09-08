@@ -210,10 +210,13 @@ dark (convertidos nas fases seguintes).
   **Egress por assinante:** `TenantEgressDaily` + `jsonForTenant` nas rotas de polling dos mapas
   + `egressMeter` (buffer em memória, flush 30s). `admin/settings` (tema claro) recolhe os
   controles reais que estavam no mock (cota CPF, IA por assinante, release crítico).
-- **4b (a fazer):** `admin/ai-telemetry` real (por assinante + por recurso) e alertas
-  determinísticos no worker (cota IA estourada, instância WhatsApp caída, pagamento falho).
+- **4b ✅ (08/09/2026):** `admin/ai-telemetry` real (`GET /api/admin/ai-usage` — por recurso e
+  por assinante, uso do mês × cota efetiva). Monitor da plataforma no worker
+  (`saasMonitor.ts`): cota de IA estourada → 1 alerta/mês (dedup) + WhatsApp para
+  `PLATFORM_ALERT_PHONE`.
 
-Falta: Fase 5 (suporte IA), 6 (comunicação), 7 (config/equipe).
+**Fase 4 concluída.** Falta: Fase 5 (suporte IA + prompt dos agentes), 6 (comunicação),
+7 (config/equipe).
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido
