@@ -186,7 +186,20 @@ dark (convertidos nas fases seguintes).
 - 3 planos semeados (Starter/Pro/Enterprise).
 - **Pendente:** ligar `maxRooms`/`maxUsers` do plano ao enforcement nas rotas do app do assinante.
 
-Falta o resto do painel: Fase 3 (Asaas/financeiro), 4 (dashboards/egress), 5 (suporte IA), etc.
+### Fase 3 — Asaas + financeiro (em andamento)
+- **3a+3b ✅ (08/09/2026):** `lib/asaas.ts` (cliente REST direto), schema (`Tenant.asaasCustomerId`,
+  `SaASSubscription.billingType`/`asaasSubscriptionId`/`asaasPaymentId`, modelo `SaaSInvoice`),
+  `provisionBillingForTenant` no cadastro de assinante (mensal → assinatura recorrente Asaas;
+  semestral/anual → cobrança única; degrada para "cobrança manual" sem chave/CNPJ),
+  webhook `POST /api/asaas/webhook/[secret]` (segredo timing-safe, espelha faturas, estende
+  `accessValidUntil` no pagamento, rebaixa status em atraso/chargeback, idempotente).
+  Env prod: `ASAAS_API_KEY`, `ASAAS_BASE_URL=https://api.asaas.com/v3`, `ASAAS_WEBHOOK_SECRET`.
+- **3c (a fazer):** régua de inadimplência no worker — cron determinístico: +15d de atraso →
+  `OVERDUE` + aviso (WhatsApp/e-mail, uma vez); +30d → `SUSPENDED`.
+- **3d (a fazer):** tela Financeiro — MRR/ARR, inadimplência (aging), faturas por assinante,
+  próximas cobranças, ações manuais (baixa, crédito, reembolso, cobrança avulsa, cancelar).
+
+Falta ainda: Fase 4 (dashboards/egress), 5 (suporte IA), 6 (comunicação), 7 (config/equipe).
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido

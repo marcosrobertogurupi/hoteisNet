@@ -24,6 +24,9 @@ const PUBLIC_API_PREFIXES = [
   "/api/stock-count/login",
   "/api/stock-count/logout",
   "/api/uazapi/webhook/",
+  // Webhook de pagamento do Asaas — autenticado por segredo próprio (ASAAS_WEBHOOK_SECRET),
+  // comparado timing-safe na própria rota (CLAUDE.md §5), não por sessão.
+  "/api/asaas/webhook/",
   "/api/public/",
   // Agente fiscal do PDV do restaurante: autentica com o token do caixa (Bearer), verificado
   // em lib/agentAuth.ts — cada rota /api/pdv/agente/* faz a própria checagem.

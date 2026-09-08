@@ -109,6 +109,10 @@ model Tenant {
   // Anotações internas da equipe do SaaS sobre o assinante (negociação, histórico de suporte,
   // observações comerciais). NUNCA exposto ao próprio assinante — só no painel /admin.
   internalNotes              String?
+  // ID do cliente correspondente no Asaas (gateway de pagamento) — criado no provisionamento
+  // quando o assinante tem CNPJ e ASAAS_API_KEY está configurado. null = cobrança manual.
+  asaasCustomerId            String?
+  saasInvoices               SaaSInvoice[]
   createdAt                  DateTime                @default(now())
   updatedAt                  DateTime                @updatedAt
   dailyRolloverTime          String                  @default("14:30")
@@ -241,10 +245,17 @@ model SaASSubscription {
   nextBilling DateTime
   amount      Decimal      @db.Decimal(10, 2)
   active      Boolean      @default(true)
+  // Forma de cobrança preferida no Asaas: BOLETO | PIX | CREDIT_CARD | UNDEFINED (deixa o
+  // cliente escolher na fatura). Mensal vira assinatura recorrente no Asaas (asaasSubscriptionId);
+  // semestral/anual são pagamento único antecipado (asaasPaymentId), decisão D5.
+  billingType          String   @default("UNDEFINED")
+  asaasSubscriptionId  String?
+  asaasPaymentId       String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   plan        SaaSPlan     @relation(fields: [planId], references: [id])
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices    SaaSInvoice[]
 
   @@map("saas_subscriptions")
 }
@@ -253,6 +264,45 @@ enum BillingCycle {
   MONTHLY
   SEMIANNUAL
   ANNUAL
+}
+
+// Uma cobrança/fatura do SaaS para um assinante (espelho local do "payment" do Asaas, ou uma
+// cobrança avulsa/baixa manual quando manual = true). O webhook do Asaas mantém `status`,
+// `paidAt` e as URLs em dia; a régua de inadimplência (worker) lê `status`/`dueDate`.
+model SaaSInvoice {
+  id             String            @id @default(uuid())
+  tenantId       String
+  subscriptionId String?
+  asaasPaymentId String?           @unique
+  cycle          BillingCycle      @default(MONTHLY)
+  amount         Decimal           @db.Decimal(10, 2)
+  billingType    String?           // BOLETO | PIX | CREDIT_CARD | UNDEFINED
+  status         SaaSInvoiceStatus @default(PENDING)
+  dueDate        DateTime
+  paidAt         DateTime?
+  invoiceUrl     String?           // página da fatura no Asaas
+  bankSlipUrl    String?           // PDF do boleto
+  pixPayload     String?           // copia-e-cola do PIX
+  description    String?
+  manual         Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription   SaASSubscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("saas_invoices")
+}
+
+enum SaaSInvoiceStatus {
+  PENDING
+  CONFIRMED // pago; aguardando compensação (boleto/cartão)
+  RECEIVED // valor creditado
+  OVERDUE
+  REFUNDED
+  CHARGEBACK
+  CANCELLED
 }
 
 model User {

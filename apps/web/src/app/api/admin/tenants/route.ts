@@ -5,6 +5,7 @@ import { getPlatformSession, requirePlatformRole, requirePlatformAdmin, hashPass
 import { logPlatformAction } from "@/lib/platformAudit";
 import { validateCNPJ } from "@/lib/documentValidation";
 import { lookupCep } from "@/lib/viaCep";
+import { provisionBillingForTenant } from "@/lib/saasBilling";
 
 const TENANT_STATUSES = ["TRIAL", "ACTIVE", "OVERDUE", "SUSPENDED", "CANCELLED"] as const;
 const TAX_REGIMES = ["SIMPLES_NACIONAL", "LUCRO_PRESUMIDO", "LUCRO_REAL", "MEI"] as const;
@@ -227,6 +228,9 @@ export async function POST(req: NextRequest) {
           cycle: cycle as "MONTHLY" | "SEMIANNUAL" | "ANNUAL",
           amount: cyclePrice,
           nextBilling,
+          billingType: ["BOLETO", "PIX", "CREDIT_CARD"].includes(String(body.billingType))
+            ? String(body.billingType)
+            : "UNDEFINED",
           active: true,
         },
       });
@@ -239,21 +243,26 @@ export async function POST(req: NextRequest) {
       return { tenant, adminUser };
     });
 
+    // Cobrança no Asaas — fora da transação (chamada externa). Best-effort: se falhar ou não
+    // estiver configurado, o assinante fica em cobrança manual.
+    const billing = await provisionBillingForTenant(created.tenant.id);
+
     await logPlatformAction({
       req,
       session: session!,
       action: "TENANT_CREATE",
-      description: `Assinante criado: ${created.tenant.name}`,
+      description: `Assinante criado: ${created.tenant.name} (cobrança ${billing.mode})`,
       targetTenantId: created.tenant.id,
       entityType: "Tenant",
       entityId: created.tenant.id,
-      details: { planId: plan.id, adminEmail: created.adminUser.email },
+      details: { planId: plan.id, cycle, adminEmail: created.adminUser.email, billing },
     });
 
     return NextResponse.json({
       success: true,
       tenantId: created.tenant.id,
       admin: { email: created.adminUser.email, tempPassword },
+      billing,
     });
   } catch (error) {
     console.error("[POST /api/admin/tenants] Erro:", error);
