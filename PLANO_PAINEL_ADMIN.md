@@ -175,7 +175,18 @@ dark (convertidos nas fases seguintes).
 (`/api/admin/tenants/[id]/impersonate` + `/api/admin/impersonation/stop`), faixa
 `ImpersonationBanner` no topo do app do assinante, tudo auditado em `PlatformAuditLog`.
 
-**Fase 1 concluída.** Falta o resto do painel: Fase 2 (planos), Fase 3 (Asaas), etc.
+**Fase 1 concluída.**
+
+### Fase 2 — Catálogo de planos ✅ (08/09/2026)
+- `SaaSPlan`: `priceSemiannual`/`priceAnnual` (opcionais, desconto embutido, pagamento único),
+  `features` (lista), `trialDays`. `SaASSubscription`: `cycle` (`BillingCycle`).
+- CRUD `/api/admin/plans` (+ `/[id]`), tela `admin/plans` em tema claro.
+- Cadastro de assinante ganhou seletor de ciclo (só os ciclos com preço no plano); `amount`/
+  `nextBilling`/`accessValidUntil` calculados do ciclo + `trialDays`.
+- 3 planos semeados (Starter/Pro/Enterprise).
+- **Pendente:** ligar `maxRooms`/`maxUsers` do plano ao enforcement nas rotas do app do assinante.
+
+Falta o resto do painel: Fase 3 (Asaas/financeiro), 4 (dashboards/egress), 5 (suporte IA), etc.
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido

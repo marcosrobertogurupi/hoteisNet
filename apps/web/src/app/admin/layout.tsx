@@ -102,11 +102,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="pt-3 mt-2 border-t border-slate-200">
               <span className="px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">Financeiro</span>
               <Link
-                href="/admin/billing"
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+                href="/admin/plans"
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  pathname.startsWith("/admin/plans")
+                    ? "bg-sky-50 text-sky-700 border border-sky-200"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent"
+                }`}
               >
                 <DollarSign className="w-4 h-4" />
-                <span>Planos & Cobrança</span>
+                <span>Catálogo de Planos</span>
               </Link>
             </div>
           </nav>

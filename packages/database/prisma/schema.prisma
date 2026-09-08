@@ -12,10 +12,20 @@ model SaaSPlan {
   id            String             @id @default(uuid())
   name          String             @unique
   description   String?
-  priceMonthly  Decimal            @db.Decimal(10, 2)
+  // Preço por ciclo de cobrança. priceMonthly é o valor cheio mensal; semestral e anual já vêm
+  // com o desconto embutido e são pagamento único antecipado (decisão D5 do PLANO_PAINEL_ADMIN.md).
+  // Quando priceSemiannual/priceAnnual são null, o ciclo correspondente não é oferecido nesse plano.
+  priceMonthly    Decimal          @db.Decimal(10, 2)
+  priceSemiannual Decimal?         @db.Decimal(10, 2)
+  priceAnnual     Decimal?         @db.Decimal(10, 2)
   maxRooms      Int
   maxUsers      Int
   aiTokenQuota  Int                @default(50000)
+  // Recursos inclusos, texto livre por item — exibidos no cadastro/edição do assinante e (futuro)
+  // na página de planos. Não é enforcement, é descrição comercial.
+  features      String[]           @default([])
+  // Dias de degustação concedidos ao contratar este plano (0 = sem trial).
+  trialDays     Int                @default(0)
   active        Boolean            @default(true)
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
@@ -220,19 +230,29 @@ model Tenant {
 }
 
 model SaASSubscription {
-  id          String   @id @default(uuid())
+  id          String       @id @default(uuid())
   tenantId    String
   planId      String
-  startDate   DateTime @default(now())
+  // Ciclo contratado: mensal (recorrente no Asaas), semestral ou anual (pagamento único
+  // antecipado). `amount` é o preço do plano para esse ciclo; `nextBilling` é a data da próxima
+  // cobrança / renovação.
+  cycle       BillingCycle @default(MONTHLY)
+  startDate   DateTime     @default(now())
   nextBilling DateTime
-  amount      Decimal  @db.Decimal(10, 2)
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  plan        SaaSPlan @relation(fields: [planId], references: [id])
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  amount      Decimal      @db.Decimal(10, 2)
+  active      Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  plan        SaaSPlan     @relation(fields: [planId], references: [id])
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("saas_subscriptions")
+}
+
+enum BillingCycle {
+  MONTHLY
+  SEMIANNUAL
+  ANNUAL
 }
 
 model User {

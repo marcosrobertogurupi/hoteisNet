@@ -156,8 +156,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Já existe um usuário com o e-mail do administrador informado." }, { status: 409 });
   }
 
-  const plan = await prisma.saaSPlan.findUnique({ where: { id: planId }, select: { id: true, priceMonthly: true } });
+  const plan = await prisma.saaSPlan.findUnique({
+    where: { id: planId },
+    select: { id: true, priceMonthly: true, priceSemiannual: true, priceAnnual: true, trialDays: true },
+  });
   if (!plan) return NextResponse.json({ success: false, error: "Plano não encontrado." }, { status: 404 });
+
+  // Ciclo contratado. Semestral/anual só valem se o plano tiver preço para o ciclo.
+  const cycle = ["MONTHLY", "SEMIANNUAL", "ANNUAL"].includes(String(body.cycle)) ? String(body.cycle) : "MONTHLY";
+  const cyclePrice =
+    cycle === "ANNUAL" ? plan.priceAnnual : cycle === "SEMIANNUAL" ? plan.priceSemiannual : plan.priceMonthly;
+  if (cyclePrice == null) {
+    return NextResponse.json({ success: false, error: "Este plano não oferece o ciclo escolhido." }, { status: 400 });
+  }
 
   const taxRegime = (TAX_REGIMES as readonly string[]).includes(String(body.taxRegime))
     ? (body.taxRegime as (typeof TAX_REGIMES)[number])
@@ -171,8 +182,11 @@ export async function POST(req: NextRequest) {
   if (accessValidUntil && Number.isNaN(accessValidUntil.getTime())) {
     return NextResponse.json({ success: false, error: "Data de validade do acesso inválida." }, { status: 400 });
   }
-  // nextBilling da assinatura: a data de validade informada, senão +30 dias (trial padrão).
-  const nextBilling = accessValidUntil ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  // nextBilling / accessValidUntil: a data informada; senão, hoje + trialDays do plano (mín. 1 dia
+  // para não nascer vencido), ou +30 dias quando o plano não tem trial.
+  const trialMs = (plan.trialDays > 0 ? plan.trialDays : 30) * 24 * 60 * 60 * 1000;
+  const nextBilling = accessValidUntil ?? new Date(Date.now() + trialMs);
+  const effectiveAccessUntil = accessValidUntil ?? nextBilling;
 
   const tempPassword = randomBytes(9).toString("base64url"); // ~12 chars, entregue uma única vez ao admin
   const passwordHash = await hashPassword(tempPassword);
@@ -199,7 +213,7 @@ export async function POST(req: NextRequest) {
             body.interestRate === undefined || body.interestRate === null || body.interestRate === ""
               ? null
               : Number(body.interestRate),
-          accessValidUntil,
+          accessValidUntil: effectiveAccessUntil,
           internalNotes: String(body.internalNotes || "").trim() || null,
           status: "TRIAL",
         },
@@ -207,7 +221,14 @@ export async function POST(req: NextRequest) {
       });
 
       await tx.saASSubscription.create({
-        data: { tenantId: tenant.id, planId: plan.id, amount: plan.priceMonthly, nextBilling, active: true },
+        data: {
+          tenantId: tenant.id,
+          planId: plan.id,
+          cycle: cycle as "MONTHLY" | "SEMIANNUAL" | "ANNUAL",
+          amount: cyclePrice,
+          nextBilling,
+          active: true,
+        },
       });
       await tx.aIAgentSetting.create({ data: { tenantId: tenant.id } });
       const adminUser = await tx.user.create({

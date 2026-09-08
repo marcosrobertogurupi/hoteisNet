@@ -41,8 +41,12 @@ interface Plan {
   id: string;
   name: string;
   priceMonthly: string;
+  priceSemiannual: string | null;
+  priceAnnual: string | null;
   maxRooms: number;
 }
+
+const CYCLE_LABEL: Record<string, string> = { MONTHLY: "Mensal", SEMIANNUAL: "Semestral", ANNUAL: "Anual" };
 
 interface FormState {
   name: string;
@@ -64,6 +68,7 @@ interface FormState {
   internalNotes: string;
   status: string;
   planId: string;
+  cycle: string;
   adminName: string;
   adminEmail: string;
 }
@@ -71,6 +76,7 @@ interface FormState {
 const EMPTY_FORM: FormState = {
   name: "", tradeName: "", cnpj: "", stateRegistration: "", taxRegime: "", zipCode: "", street: "",
   number: "", neighborhood: "", city: "", state: "", phone: "", email: "", website: "", interestRate: "",
+  cycle: "MONTHLY",
   accessValidUntil: "", internalNotes: "", status: "TRIAL", planId: "", adminName: "", adminEmail: "",
 };
 
@@ -181,6 +187,7 @@ export default function AdminTenantsPage() {
         interestRate: t.interestRate != null ? String(t.interestRate) : "",
         accessValidUntil: toDateInput(t.accessValidUntil), internalNotes: t.internalNotes || "",
         status: t.status || "TRIAL", planId: t.subscriptions?.[0]?.plan?.id || "",
+        cycle: t.subscriptions?.[0]?.cycle || "MONTHLY",
         adminName: "", adminEmail: "",
       });
     } catch {
@@ -234,6 +241,7 @@ export default function AdminTenantsPage() {
       };
       if (isCreate) {
         payload.planId = form.planId;
+        payload.cycle = form.cycle;
         payload.adminName = form.adminName;
         payload.adminEmail = form.adminEmail;
       } else {
@@ -504,7 +512,7 @@ export default function AdminTenantsPage() {
                       <select
                         className={input}
                         value={form.planId}
-                        onChange={(e) => setForm({ ...form, planId: e.target.value })}
+                        onChange={(e) => setForm({ ...form, planId: e.target.value, cycle: "MONTHLY" })}
                         disabled={modal.mode === "edit"}
                         required={modal.mode === "create"}
                       >
@@ -514,17 +522,39 @@ export default function AdminTenantsPage() {
                         ))}
                       </select>
                     </Field>
+
+                    {modal.mode === "create" ? (
+                      <Field label="Ciclo de cobrança">
+                        {(() => {
+                          const sel = plans.find((p) => p.id === form.planId);
+                          const opts: Array<[string, string]> = [["MONTHLY", `Mensal — R$ ${sel ? Number(sel.priceMonthly).toFixed(2) : "—"}`]];
+                          if (sel?.priceSemiannual != null) opts.push(["SEMIANNUAL", `Semestral — R$ ${Number(sel.priceSemiannual).toFixed(2)} à vista`]);
+                          if (sel?.priceAnnual != null) opts.push(["ANNUAL", `Anual — R$ ${Number(sel.priceAnnual).toFixed(2)} à vista`]);
+                          return (
+                            <select className={input} value={form.cycle} onChange={(e) => setForm({ ...form, cycle: e.target.value })} disabled={!sel}>
+                              {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                          );
+                        })()}
+                      </Field>
+                    ) : (
+                      <Field label="Ciclo atual">
+                        <input className={`${input} bg-slate-100`} value={CYCLE_LABEL[form.cycle] || form.cycle} readOnly />
+                      </Field>
+                    )}
+
                     <Field label='Acesso válido até ("data_Reset")'>
                       <input className={input} type="date" value={form.accessValidUntil} onChange={(e) => setForm({ ...form, accessValidUntil: e.target.value })} />
                     </Field>
-                    {modal.mode === "edit" && (
-                      <Field label="Status / ciclo de vida">
-                        <select className={input} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                          {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                        </select>
-                      </Field>
-                    )}
                   </div>
+
+                  {modal.mode === "edit" && (
+                    <Field label="Status / ciclo de vida do assinante">
+                      <select className={`${input} md:max-w-xs`} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                        {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                      </select>
+                    </Field>
+                  )}
 
                   <Field label="Anotações internas (nunca vistas pelo assinante)">
                     <textarea className={input} rows={2} value={form.internalNotes} onChange={(e) => setForm({ ...form, internalNotes: e.target.value })} />

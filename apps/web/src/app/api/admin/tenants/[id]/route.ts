@@ -47,7 +47,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         where: { active: true },
         orderBy: { startDate: "desc" },
         take: 1,
-        select: { id: true, nextBilling: true, amount: true, plan: { select: { id: true, name: true } } },
+        select: { id: true, cycle: true, nextBilling: true, amount: true, plan: { select: { id: true, name: true } } },
       },
       aiAgentSettings: { select: { systemPromptExtra: true, tokenQuotaOverride: true, blocked: true } },
       _count: { select: { users: true, rooms: true } },
