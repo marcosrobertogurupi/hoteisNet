@@ -6,7 +6,7 @@ import ImpersonationBanner from "@/components/ImpersonationBanner";
 import CashRegisterGate from "@/components/CashRegisterGate";
 import InactivityLock from "@/components/InactivityLock";
 import AppVersionGate from "@/components/AppVersionGate";
-import { Settings, Bell, Bot, ShieldAlert, Check } from "lucide-react";
+import { Settings, Bell, Bot, ShieldAlert, Check, Hourglass } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "@/context/ThemeContext";
@@ -28,6 +28,7 @@ interface HumanEscalation {
   source: "SUPPORT_AGENT" | "OPERATIONAL_AGENT";
   reason: string;
   guestPhone: string | null;
+  entityType: string | null;
   createdAt: string;
 }
 
@@ -106,8 +107,18 @@ function HumanEscalationBell() {
                     className={`p-3 space-y-1.5 ${e.source === "OPERATIONAL_AGENT" ? "border-l-2 border-red-500 bg-red-500/5" : ""}`}
                   >
                     <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                      {e.source === "SUPPORT_AGENT" ? <Bot className="w-3.5 h-3.5 text-violet-500" /> : <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />}
-                      {e.source === "SUPPORT_AGENT" ? "Agente de Atendimento" : "Agente Operacional"}
+                      {e.entityType === "WAITLIST_MATCH" ? (
+                        <Hourglass className="w-3.5 h-3.5 text-amber-400" />
+                      ) : e.source === "SUPPORT_AGENT" ? (
+                        <Bot className="w-3.5 h-3.5 text-violet-500" />
+                      ) : (
+                        <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+                      )}
+                      {e.entityType === "WAITLIST_MATCH"
+                        ? "Fila de espera"
+                        : e.source === "SUPPORT_AGENT"
+                          ? "Agente de Atendimento"
+                          : "Agente Operacional"}
                       {e.guestPhone && <span className="opacity-60 font-normal">· {e.guestPhone}</span>}
                     </div>
                     <p className="text-xs">{e.reason}</p>

@@ -73,6 +73,39 @@ export async function findBlockingOpenStay(
   return stays.find((s) => stayOccupiedUntil(s) > checkInDate) ?? null;
 }
 
+// Conjunto de ids de quartos (dentre os informados) ocupados no período — reserva ativa/futura
+// (PRE_RESERVATION/CONFIRMED/CHECKED_IN) que se sobrepõe, ou hospedagem em aberto cuja ocupação
+// efetiva (stayOccupiedUntil, cobre overstay) alcança o período. Mesma régua do Mapa de Reservas.
+// Extraído de apps/web/src/lib/aiAgent/tools.ts (busyRoomIdsForPeriod) para ser reaproveitado pelo
+// match da fila de espera (lib/waitlistMatch.ts) sem duplicar a lógica.
+export async function busyRoomIdsForPeriod(
+  tx: PrismaClientOrTx,
+  roomIds: string[],
+  checkIn: Date,
+  checkOut: Date
+): Promise<Set<string>> {
+  if (roomIds.length === 0) return new Set();
+  const [overlappingReservations, openStays] = await Promise.all([
+    tx.reservation.findMany({
+      where: {
+        roomId: { in: roomIds },
+        status: { in: ["PRE_RESERVATION", "CONFIRMED", "CHECKED_IN"] },
+        checkInDate: { lt: checkOut },
+        checkOutDate: { gt: checkIn },
+      },
+      select: { roomId: true },
+    }),
+    // NUNCA filtrar por `expectedCheckOut > checkIn` — um hóspede em overstay continua ocupando o
+    // quarto. Traz as candidatas e filtra pela ocupação efetiva (stayOccupiedUntil).
+    tx.stayCheckin.findMany({
+      where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut } },
+      select: { roomId: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
+    }),
+  ]);
+  const busyByStay = openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId);
+  return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...busyByStay]);
+}
+
 // Verifica se existe alguma reserva ativa (não CANCELLED/CHECKED_OUT) sobrepondo o período
 // informado para o quarto indicado. Usado tanto na criação individual quanto em lote, sempre
 // dentro da própria transação Prisma, para que a checagem de conflito seja atômica e não apenas
