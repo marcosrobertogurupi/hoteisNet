@@ -251,6 +251,11 @@ model SaASSubscription {
   billingType          String   @default("UNDEFINED")
   asaasSubscriptionId  String?
   asaasPaymentId       String?
+  // Estágio atual da régua de inadimplência (worker apps/worker/src/saasDunning.ts):
+  // null = em dia · "WARNED_15" = avisado após 15 dias de atraso · "SUSPENDED_30" = suspenso após
+  // 30 dias. Volta a null quando um pagamento é confirmado (webhook do Asaas).
+  dunningStage         String?
+  dunningNotifiedAt    DateTime?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   plan        SaaSPlan     @relation(fields: [planId], references: [id])

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { mapAsaasStatus } from "@/lib/asaas";
+import { extendAccessForPaidSubscription } from "@/lib/saasBilling";
 import { logPlatformAction } from "@/lib/platformAudit";
 
 // POST /api/asaas/webhook/[secret] — recebe os eventos de pagamento do Asaas e mantém as faturas
@@ -19,13 +20,6 @@ function safeEqual(a: string | null | undefined, b: string | null | undefined): 
   return timingSafeEqual(ba, bb);
 }
 
-const CYCLE_MONTHS: Record<string, number> = { MONTHLY: 1, SEMIANNUAL: 6, ANNUAL: 12 };
-
-function addMonths(date: Date, months: number): Date {
-  const d = new Date(date);
-  d.setMonth(d.getMonth() + months);
-  return d;
-}
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ secret: string }> }) {
   const expected = process.env.ASAAS_WEBHOOK_SECRET || "";
@@ -125,29 +119,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sec
 
     // --- Efeito no acesso do assinante ---
     if (shouldExtendAccess) {
-      const months = CYCLE_MONTHS[sub.cycle] ?? 1;
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: sub.tenantId },
-        select: { accessValidUntil: true, name: true },
-      });
-      const base =
-        tenant?.accessValidUntil && tenant.accessValidUntil > new Date() ? tenant.accessValidUntil : new Date();
-      const newValidUntil = addMonths(base, months);
-
-      await prisma.tenant.update({
-        where: { id: sub.tenantId },
-        data: { status: "ACTIVE", accessValidUntil: newValidUntil },
-      });
-      await prisma.saASSubscription.update({
-        where: { id: sub.id },
-        data: { nextBilling: newValidUntil },
-      });
-
+      const newValidUntil = await extendAccessForPaidSubscription(sub.id);
       await logPlatformAction({
         req,
         session: { userId: "asaas-webhook", name: "Asaas (webhook)", role: "SYSTEM" },
         action: "BILLING_PAYMENT_RECEIVED",
-        description: `Pagamento ${status} de ${tenant?.name || sub.tenantId} — acesso estendido até ${newValidUntil.toISOString().slice(0, 10)}.`,
+        description: `Pagamento ${status} do assinante ${sub.tenantId} — acesso estendido até ${newValidUntil?.toISOString().slice(0, 10) ?? "?"}.`,
         targetTenantId: sub.tenantId,
         entityType: "SaaSInvoice",
         entityId: p.id,

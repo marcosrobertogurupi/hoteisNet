@@ -194,12 +194,15 @@ dark (convertidos nas fases seguintes).
   webhook `POST /api/asaas/webhook/[secret]` (segredo timing-safe, espelha faturas, estende
   `accessValidUntil` no pagamento, rebaixa status em atraso/chargeback, idempotente).
   Env prod: `ASAAS_API_KEY`, `ASAAS_BASE_URL=https://api.asaas.com/v3`, `ASAAS_WEBHOOK_SECRET`.
-- **3c (a fazer):** régua de inadimplência no worker — cron determinístico: +15d de atraso →
-  `OVERDUE` + aviso (WhatsApp/e-mail, uma vez); +30d → `SUSPENDED`.
-- **3d (a fazer):** tela Financeiro — MRR/ARR, inadimplência (aging), faturas por assinante,
-  próximas cobranças, ações manuais (baixa, crédito, reembolso, cobrança avulsa, cancelar).
+- **3c ✅ (08/09/2026):** régua de inadimplência — `apps/worker/src/saasDunning.ts` (cron 1×/h,
+  determinístico): +15d de atraso → `OVERDUE` + aviso WhatsApp da plataforma (uma vez,
+  `dunningStage`); +30d → `SUSPENDED`. Webhook do Asaas zera `dunningStage` no pagamento.
+- **3d ✅ (08/09/2026):** tela `admin/billing` — cards MRR/ARR/inadimplência/renovações 30d,
+  assinantes por status, tabela de faturas com baixa manual / cancelar / estornar, e cobrança
+  avulsa (`POST /api/admin/tenants/[id]/invoices`). Rotas `GET /api/admin/billing`,
+  `GET /api/admin/invoices`, `PATCH /api/admin/invoices/[id]`.
 
-Falta ainda: Fase 4 (dashboards/egress), 5 (suporte IA), 6 (comunicação), 7 (config/equipe).
+**Fase 3 concluída.** Falta: Fase 4 (dashboards/egress), 5 (suporte IA), 6 (comunicação), 7 (config/equipe).
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido

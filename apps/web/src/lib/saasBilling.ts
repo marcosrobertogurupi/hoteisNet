@@ -8,6 +8,55 @@ import {
   type AsaasBillingType,
 } from "@/lib/asaas";
 
+const CYCLE_MONTHS: Record<string, number> = { MONTHLY: 1, SEMIANNUAL: 6, ANNUAL: 12 };
+
+function addMonths(date: Date, months: number): Date {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+
+// Aplica o efeito de "assinatura paga": estende Tenant.accessValidUntil pela duração do ciclo,
+// volta o status para ACTIVE, sincroniza nextBilling e zera a régua de inadimplência. Usado tanto
+// pelo webhook do Asaas quanto pela baixa manual no painel. Retorna a nova data de validade.
+export async function extendAccessForPaidSubscription(subscriptionId: string): Promise<Date | null> {
+  const sub = await prisma.saASSubscription.findUnique({
+    where: { id: subscriptionId },
+    select: { id: true, tenantId: true, cycle: true, tenant: { select: { accessValidUntil: true } } },
+  });
+  if (!sub) return null;
+
+  const months = CYCLE_MONTHS[sub.cycle] ?? 1;
+  const current = sub.tenant.accessValidUntil;
+  const base = current && current > new Date() ? current : new Date();
+  const newValidUntil = addMonths(base, months);
+
+  await prisma.tenant.update({
+    where: { id: sub.tenantId },
+    data: { status: "ACTIVE", accessValidUntil: newValidUntil },
+  });
+  await prisma.saASSubscription.update({
+    where: { id: sub.id },
+    data: { nextBilling: newValidUntil, dunningStage: null, dunningNotifiedAt: null },
+  });
+  return newValidUntil;
+}
+
+// MRR (receita recorrente mensal) normalizada: mensal = valor cheio; semestral = valor / 6;
+// anual = valor / 12. Sobre as assinaturas ativas de assinantes não cancelados.
+export async function computeMrr(): Promise<number> {
+  const subs = await prisma.saASSubscription.findMany({
+    where: { active: true, tenant: { status: { not: "CANCELLED" } } },
+    select: { cycle: true, amount: true },
+  });
+  let mrr = 0;
+  for (const s of subs) {
+    const v = Number(s.amount);
+    mrr += s.cycle === "ANNUAL" ? v / 12 : s.cycle === "SEMIANNUAL" ? v / 6 : v;
+  }
+  return Math.round(mrr * 100) / 100;
+}
+
 // Provisiona a cobrança do assinante no Asaas depois que o Tenant + assinatura já existem no
 // banco (fora da transação — chamada externa não segura transação de DB). Best-effort: se o
 // Asaas não estiver configurado, ou o assinante não tiver CNPJ, ou a chamada falhar, o assinante
