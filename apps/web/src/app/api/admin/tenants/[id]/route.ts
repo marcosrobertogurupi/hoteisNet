@@ -162,6 +162,55 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       await prisma.tenant.update({ where: { id }, data: tenantData });
     }
 
+    // --- Troca de plano / ciclo da assinatura ativa (exclusiva do painel admin) ---
+    // Ajuste manual do admin master: atualiza a assinatura ativa no lugar. Não dispara
+    // recálculo/prorata no Asaas — se a cobrança recorrente precisar acompanhar, isso é feito
+    // à parte pelo financeiro.
+    if (body.planId !== undefined) {
+      const newPlanId = String(body.planId || "").trim();
+      if (!newPlanId) {
+        return NextResponse.json({ success: false, error: "Selecione um plano." }, { status: 400 });
+      }
+      const plan = await prisma.saaSPlan.findUnique({
+        where: { id: newPlanId },
+        select: { id: true, priceMonthly: true, priceSemiannual: true, priceAnnual: true },
+      });
+      if (!plan) return NextResponse.json({ success: false, error: "Plano não encontrado." }, { status: 404 });
+
+      const cycle = ["MONTHLY", "SEMIANNUAL", "ANNUAL"].includes(String(body.cycle))
+        ? (String(body.cycle) as "MONTHLY" | "SEMIANNUAL" | "ANNUAL")
+        : "MONTHLY";
+      const cyclePrice =
+        cycle === "ANNUAL" ? plan.priceAnnual : cycle === "SEMIANNUAL" ? plan.priceSemiannual : plan.priceMonthly;
+      if (cyclePrice == null) {
+        return NextResponse.json({ success: false, error: "O plano não oferece o ciclo escolhido." }, { status: 400 });
+      }
+
+      const current = await prisma.saASSubscription.findFirst({
+        where: { tenantId: id, active: true },
+        orderBy: { startDate: "desc" },
+        select: { id: true, planId: true, cycle: true },
+      });
+
+      if (!current) {
+        await prisma.saASSubscription.create({
+          data: {
+            tenantId: id,
+            planId: plan.id,
+            cycle,
+            amount: cyclePrice,
+            nextBilling: tenantData.accessValidUntil ?? new Date(),
+            active: true,
+          },
+        });
+      } else if (current.planId !== plan.id || current.cycle !== cycle) {
+        await prisma.saASSubscription.update({
+          where: { id: current.id },
+          data: { planId: plan.id, cycle, amount: cyclePrice },
+        });
+      }
+    }
+
     // --- Config de IA (AIAgentSetting) — exclusiva do painel admin ---
     // aiSystemPromptExtra = persona do Agente de Atendimento; aiOperationalPromptExtra = persona
     // do Agente Operacional. O assinante nunca edita nenhum dos dois (só presets de tom na tela dele).

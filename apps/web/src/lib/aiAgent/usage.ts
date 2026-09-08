@@ -2,6 +2,7 @@
 // usado são definidos globalmente pelo admin master — o assinante nunca escolhe nem vê o modelo
 // ou a chave do AI Gateway, só se beneficia ou é bloqueado pela cota do próprio plano.
 import { prisma } from "@/lib/prisma";
+import { computeAiCostUsd } from "@/lib/aiAgent/pricing";
 
 // Ciclo de cota = mês corrente (calendário), simples e alinhado ao "refresh mensal" já usado para
 // a cota de consulta de CPF (Tenant.cpfQueryCycleStart) — sem introduzir um segundo conceito de ciclo.
@@ -39,24 +40,42 @@ export async function hasAiQuotaAvailable(tenantId: string): Promise<boolean> {
   return !blocked && remaining > 0;
 }
 
-// Preço do gemini-2.5-flash (tier pago, texto), em USD por token — usado só para o registro
-// de custo em AIUsageLog (telemetria), não afeta o bloqueio por cota (que é em tokens, não em $).
-const INPUT_COST_PER_TOKEN = 0.3 / 1_000_000;
-const OUTPUT_COST_PER_TOKEN = 2.5 / 1_000_000;
-
+// Registra o uso de uma chamada de IA. O custo (AiModelPrice vigente) é só para telemetria/fatura —
+// não afeta o bloqueio por cota, que continua sendo em tokens (tokensInput + tokensOutput).
+//
+// Contrato dos campos de token (para o custo bater com o provedor):
+//  - tokensInput: total de tokens de entrada (inclui os lidos de cache).
+//  - tokensCachedInput: subconjunto de tokensInput lido de cache (cobrado mais barato). 0 se não houve.
+//  - tokensOutput: total de saída, JÁ incluindo os tokens de reasoning/thinking.
+//  - tokensReasoning: subconjunto de tokensOutput gasto em thinking (informativo, não recobrar).
 export async function logAiUsage(params: {
   tenantId: string;
   feature: string;
+  model: string;
   tokensInput: number;
   tokensOutput: number;
+  tokensCachedInput?: number;
+  tokensReasoning?: number;
+  stepCount?: number;
 }): Promise<void> {
-  const totalCostUsd = params.tokensInput * INPUT_COST_PER_TOKEN + params.tokensOutput * OUTPUT_COST_PER_TOKEN;
+  const tokensCachedInput = Math.max(0, params.tokensCachedInput ?? 0);
+  const tokensReasoning = Math.max(0, params.tokensReasoning ?? 0);
+  const totalCostUsd = await computeAiCostUsd({
+    model: params.model,
+    tokensInput: params.tokensInput,
+    tokensCachedInput,
+    tokensOutput: params.tokensOutput,
+  });
   await prisma.aIUsageLog.create({
     data: {
       tenantId: params.tenantId,
       feature: params.feature,
+      model: params.model,
       tokensInput: params.tokensInput,
+      tokensCachedInput,
       tokensOutput: params.tokensOutput,
+      tokensReasoning,
+      stepCount: Math.max(1, params.stepCount ?? 1),
       totalCostUsd,
     },
   });

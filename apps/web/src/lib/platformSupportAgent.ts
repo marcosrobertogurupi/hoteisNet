@@ -3,6 +3,9 @@ import { z } from "zod";
 import { google } from "@ai-sdk/google";
 import { prisma } from "@/lib/prisma";
 import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
+import { resolveAiModel } from "@/lib/aiAgent/modelResolver";
+import { AI_FEATURES } from "@/lib/aiAgent/features";
+import { readUsage } from "@/lib/aiAgent/readUsage";
 
 // Agente de IA de SUPORTE AO ASSINANTE (a equipe do hotel pedindo ajuda ao Hoteis.Net). Gemini
 // via @ai-sdk/google (mesmo provider/modelo do agente de atendimento ao hóspede — não usar
@@ -13,7 +16,6 @@ import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
 // Não bloqueia nem age em partes vitais: só redige uma resposta e um grau de confiança. Se não
 // tiver certeza, sinaliza needsHuman e o chamado fica na fila para a equipe.
 
-const MODEL = google("gemini-2.5-flash");
 const CONFIDENCE_THRESHOLD = 0.7;
 const MAX_MESSAGES = 12;
 
@@ -97,18 +99,20 @@ export async function answerSupportTicket(ticketId: string): Promise<SupportAgen
     `Escreva a resposta para a equipe do hotel. Não use markdown pesado. Não diga que é uma IA a menos que precise justificar que um humano vai assumir.`,
   ].join("\n");
 
+  const modelId = await resolveAiModel(AI_FEATURES.PLATFORM_SUPPORT, ticket.tenantId);
+
   try {
     const { object, usage } = await generateObject({
-      model: MODEL,
+      model: google(modelId),
       schema: answerSchema,
       prompt,
       abortSignal: AbortSignal.timeout(20000),
     });
     await logAiUsage({
       tenantId: ticket.tenantId,
-      feature: "platform_support",
-      tokensInput: usage.inputTokens ?? 0,
-      tokensOutput: usage.outputTokens ?? 0,
+      feature: AI_FEATURES.PLATFORM_SUPPORT,
+      model: modelId,
+      ...readUsage(usage),
     });
 
     const handled = !object.needsHuman && object.confidence >= CONFIDENCE_THRESHOLD;

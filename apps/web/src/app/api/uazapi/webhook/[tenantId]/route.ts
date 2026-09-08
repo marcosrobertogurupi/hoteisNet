@@ -16,6 +16,9 @@ import { sendUazapiText, downloadUazapiMedia, fetchAsBase64 } from "@/lib/uazapi
 import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
 import { prepareConversationContext } from "@/lib/aiAgent/conversationMemory";
 import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
+import { resolveAiModel } from "@/lib/aiAgent/modelResolver";
+import { AI_FEATURES } from "@/lib/aiAgent/features";
+import { readUsage } from "@/lib/aiAgent/readUsage";
 import { recordAgentKnowledgeGap } from "@/lib/knowledgeBase";
 
 type AgentMessageContent = string | Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: string }>;
@@ -85,7 +88,14 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
     // mensagens antigas via um refold, se for hora) e decide quais mensagens vão CRUAS no prompt.
     // Assim o agente acompanha uma negociação que se arrasta por dias sem que o começo da conversa
     // saia da janela — ver apps/web/src/lib/aiAgent/conversationMemory.ts.
-    const { memoryPrompt, rawWindowMessageIds } = await prepareConversationContext(tenantId, phone);
+    // Modelos resolvidos por recurso para este assinante (override do tenant > default de plataforma
+    // > fallback). O mesmo id vai para a chamada de IA e para o registro de uso, para o custo bater.
+    const [supportModelId, summaryModelId] = await Promise.all([
+      resolveAiModel(AI_FEATURES.WHATSAPP_GUEST_SUPPORT, tenantId),
+      resolveAiModel(AI_FEATURES.WHATSAPP_GUEST_SUPPORT_SUMMARY, tenantId),
+    ]);
+
+    const { memoryPrompt, rawWindowMessageIds } = await prepareConversationContext(tenantId, phone, summaryModelId);
     const rawWindowIdSet = new Set(rawWindowMessageIds);
 
     // Inclui mídia recebida do hóspede (IN) além de texto — mídia enviada pelo próprio hotel (OUT,
@@ -134,6 +144,7 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
       tenantId,
       phone,
       {
+        modelId: supportModelId,
         agentDisplayName: setting.agentDisplayName,
         tonePreset: setting.tonePreset,
         adminSystemPromptExtra: setting.systemPromptExtra,
@@ -174,11 +185,13 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
       }
     }
 
+    // result.usage do AI SDK v7 já é a soma de todos os passos do tool-loop.
     await logAiUsage({
       tenantId,
-      feature: "whatsapp_guest_support",
-      tokensInput: result.usage.inputTokens ?? 0,
-      tokensOutput: result.usage.outputTokens ?? 0,
+      feature: AI_FEATURES.WHATSAPP_GUEST_SUPPORT,
+      model: supportModelId,
+      stepCount: result.steps?.length ?? 1,
+      ...readUsage(result.usage),
     });
 
     if (result.text?.trim()) {

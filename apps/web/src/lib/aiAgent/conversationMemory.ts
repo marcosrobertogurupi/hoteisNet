@@ -12,10 +12,13 @@
 // cursor `summarizedThrough`. O refold é UMA chamada barata ao mesmo modelo do agente, a cada
 // ~REFOLD_TRIGGER turnos — nunca a cada resposta — e é contabilizada no AIUsageLog do tenant.
 import { generateObject } from "ai";
+import { google } from "@ai-sdk/google";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { AI_AGENT_MODEL } from "@/lib/aiAgent/agent";
+import { AI_AGENT_MODEL_FALLBACK } from "@/lib/aiAgent/agent";
+import { AI_FEATURES } from "@/lib/aiAgent/features";
 import { logAiUsage } from "@/lib/aiAgent/usage";
+import { readUsage } from "@/lib/aiAgent/readUsage";
 
 // Mensagens cruas que sempre acompanham o resumo no prompt do agente.
 export const RAW_WINDOW = 16;
@@ -86,7 +89,8 @@ async function foldOldMessages(
   tenantId: string,
   phone: string,
   existing: ConversationMemoryRow | null,
-  toFold: FoldMessage[]
+  toFold: FoldMessage[],
+  modelId: string
 ): Promise<ConversationMemoryRow> {
   const priorState = existing?.state && typeof existing.state === "object" ? JSON.stringify(existing.state) : null;
 
@@ -101,7 +105,7 @@ async function foldOldMessages(
   ].filter(Boolean);
 
   const { object, usage } = await generateObject({
-    model: AI_AGENT_MODEL,
+    model: google(modelId),
     schema: z.object({
       resumo: z.string().describe("Resumo em português do Brasil, no máximo 6 linhas, do resumo anterior + das mensagens a incorporar."),
       estado: negotiationStateSchema,
@@ -111,9 +115,9 @@ async function foldOldMessages(
 
   await logAiUsage({
     tenantId,
-    feature: "whatsapp_guest_support_summary",
-    tokensInput: usage.inputTokens ?? 0,
-    tokensOutput: usage.outputTokens ?? 0,
+    feature: AI_FEATURES.WHATSAPP_GUEST_SUPPORT_SUMMARY,
+    model: modelId,
+    ...readUsage(usage),
   });
 
   const cursor = toFold[toFold.length - 1].createdAt;
@@ -136,7 +140,9 @@ export type PreparedConversationContext = {
 // Nunca lança: se o refold falhar, cai para "memória antiga + janela cheia" e segue o turno.
 export async function prepareConversationContext(
   tenantId: string,
-  phone: string
+  phone: string,
+  // Modelo resolvido para o recurso whatsapp_guest_support_summary deste assinante.
+  summaryModelId: string = AI_AGENT_MODEL_FALLBACK
 ): Promise<PreparedConversationContext> {
   const memoryRow = await prisma.conversationMemory.findUnique({
     where: { tenantId_phone: { tenantId, phone } },
@@ -163,7 +169,7 @@ export async function prepareConversationContext(
     const foldEndIdx = unsummarized.length - RAW_WINDOW;
     const toFold = unsummarized.slice(Math.max(0, foldEndIdx - MAX_FOLD_BATCH), foldEndIdx);
     try {
-      const refreshed = await foldOldMessages(tenantId, phone, existing, toFold);
+      const refreshed = await foldOldMessages(tenantId, phone, existing, toFold, summaryModelId);
       memoryPrompt = renderMemoryForPrompt(refreshed);
       rawWindow = unsummarized.slice(foldEndIdx);
     } catch (err) {

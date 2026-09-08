@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Building2, TrendingUp, Cpu, LifeBuoy, Database, AlertTriangle, Loader2, IdCard,
 } from "lucide-react";
+import { aiFeatureLabel } from "@/lib/aiFeatureLabels";
 
 const brl = (v: number | null | undefined) =>
   v == null ? "—" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -72,7 +73,7 @@ export default function AdminOverviewPage() {
               <tbody className="divide-y divide-slate-100">
                 {d.ai30d.byFeature.map((f) => (
                   <tr key={f.feature}>
-                    <td className="py-2 text-slate-700">{f.feature}</td>
+                    <td className="py-2 text-slate-700">{aiFeatureLabel(f.feature).label}</td>
                     <td className="py-2 text-right font-mono text-slate-600">{nfmt(f.tokens)} tok</td>
                     <td className="py-2 text-right font-mono text-emerald-700 w-24">{usd(f.costUsd)}</td>
                   </tr>
