@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getPlatformSession, requirePlatformRole, requirePlatformAdmin } from "@/lib/auth";
 
 // GET/POST /api/admin/release-control — restrito a SUPER_ADMIN (painel do admin master).
 //
@@ -24,16 +24,17 @@ function currentBuildId(): string {
   return (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 12) || DEV_BUILD_ID;
 }
 
-async function requireSuperAdmin(req: NextRequest) {
-  const session = await getSessionUser(req);
-  if (!session || session.role !== "SUPER_ADMIN") {
-    return { error: NextResponse.json({ success: false, error: "Ação restrita ao SuperAdmin." }, { status: 403 }) };
-  }
-  return { session };
+// Leitura: qualquer papel de plataforma. Escrita (forçar/limpar release crítico): só
+// PLATFORM_ADMIN / SUPER_ADMIN.
+async function requirePlatform(req: NextRequest, forEdit: boolean) {
+  const session = await getPlatformSession(req);
+  const authError = forEdit ? requirePlatformAdmin(session) : requirePlatformRole(session);
+  if (authError) return { error: NextResponse.json(authError.body, { status: authError.status }) };
+  return { session: session! };
 }
 
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requirePlatform(req, false);
   if (auth.error) return auth.error;
 
   const row = await prisma.appReleaseControl.findUnique({
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requirePlatform(req, true);
   if (auth.error) return auth.error;
 
   let body: { action?: string; message?: string };

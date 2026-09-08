@@ -12,6 +12,7 @@ import {
   roomsStatusPayload,
   housekeepingTasksPayload,
 } from "@/lib/mapQueries";
+import { jsonForTenant } from "@/lib/tenantResponse";
 
 // GET /api/mapa/reservas-tick — uma única requisição por tick do polling de 3 s do Mapa de
 // Reservas, no lugar das três que a tela fazia (a página buscava /api/reservations e o
@@ -41,7 +42,8 @@ export async function GET(req: NextRequest) {
       housekeepingTasksPayload(tenantId),
     ]);
 
-    return NextResponse.json(
+    return jsonForTenant(
+      tenantId,
       { success: true, reservations, gridRooms, housekeepingTasks: tasks },
       { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
     );

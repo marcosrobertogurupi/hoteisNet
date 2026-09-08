@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 // Importa do núcleo leve (só `jose`, sem bcrypt/Prisma) — o middleware roda no Edge Runtime,
 // que tem limite de 1 MB de bundle. Ver comentário em lib/sessionToken.ts.
 import { verifySessionToken, isAdminRole, SESSION_COOKIE } from "@/lib/sessionToken";
+import { verifyPlatformSessionToken, PLATFORM_SESSION_COOKIE } from "@/lib/platformAuth";
 import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib/housekeeperAuth";
 import { verifyStockCountSessionToken, STOCK_COUNT_SESSION_COOKIE } from "@/lib/stockCountAuth";
 
@@ -12,6 +13,9 @@ const ADMIN_ONLY_PREFIXES = ["/app/settings", "/app/cadastros/usuarios", "/app/f
 // segredo de webhook, token de caixa) ou são o próprio endpoint de login. Ver CLAUDE.md, regra 1.
 const PUBLIC_API_PREFIXES = [
   "/api/auth/login",
+  // Login/logout do painel da plataforma (sessão própria, ver lib/platformAuth.ts).
+  "/api/admin/auth/login",
+  "/api/admin/auth/logout",
   // Só devolve o build id da versão publicada e se ela é obrigatória — nenhum dado de tenant.
   // Consumida por abas ainda logadas e pela tela de login (aviso de versão desatualizada).
   "/api/version",
@@ -20,6 +24,9 @@ const PUBLIC_API_PREFIXES = [
   "/api/stock-count/login",
   "/api/stock-count/logout",
   "/api/uazapi/webhook/",
+  // Webhook de pagamento do Asaas — autenticado por segredo próprio (ASAAS_WEBHOOK_SECRET),
+  // comparado timing-safe na própria rota (CLAUDE.md §5), não por sessão.
+  "/api/asaas/webhook/",
   "/api/public/",
   // Agente fiscal do PDV do restaurante: autentica com o token do caixa (Bearer), verificado
   // em lib/agentAuth.ts — cada rota /api/pdv/agente/* faz a própria checagem.
@@ -42,6 +49,16 @@ export async function middleware(req: NextRequest) {
       return NextResponse.next();
     }
 
+    // Painel da plataforma: cookie de sessão PRÓPRIO (não o SESSION_COOKIE do app do assinante).
+    // A checagem fina view-vs-edit (requirePlatformRole / requirePlatformAdmin) fica em cada
+    // route.ts — isto é só a primeira barreira. NÃO existe rede de segurança automática.
+    if (pathname.startsWith("/api/admin/")) {
+      const platformToken = req.cookies.get(PLATFORM_SESSION_COOKIE)?.value;
+      const platformSession = platformToken ? await verifyPlatformSessionToken(platformToken) : null;
+      if (platformSession) return NextResponse.next();
+      return NextResponse.json({ success: false, error: "Sessão da plataforma inválida ou expirada." }, { status: 401 });
+    }
+
     const sessionToken = req.cookies.get(SESSION_COOKIE)?.value;
     const session = sessionToken ? await verifySessionToken(sessionToken) : null;
     if (session) return NextResponse.next();
@@ -61,6 +78,20 @@ export async function middleware(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
   }
 
+  // --- Páginas do painel da plataforma (/admin/**) — sessão própria, login em /admin/login ---
+  if (pathname.startsWith("/admin")) {
+    if (pathname === "/admin/login") return NextResponse.next();
+    const platformToken = req.cookies.get(PLATFORM_SESSION_COOKIE)?.value;
+    const platformSession = platformToken ? await verifyPlatformSessionToken(platformToken) : null;
+    if (!platformSession) {
+      const loginUrl = new URL("/admin/login", req.url);
+      if (pathname !== "/admin") loginUrl.searchParams.set("next", pathname);
+      return NextResponse.redirect(loginUrl);
+    }
+    return NextResponse.next();
+  }
+
+  // --- Páginas do app do assinante (/app/**) ---
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await verifySessionToken(token) : null;
 

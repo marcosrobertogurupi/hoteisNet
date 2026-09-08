@@ -1,245 +1,266 @@
 "use client";
 
-import { useState } from "react";
-import { LifeBuoy, Sparkles, Send, CheckCircle2, ShieldAlert, Check, RefreshCw, ThumbsUp, ThumbsDown, MessageSquare } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { LifeBuoy, Send, Loader2, CheckCircle2, BookOpen, Plus, Trash2, Power } from "lucide-react";
+import { useToast } from "@/context/ToastContext";
+import { cadastroUI } from "../../app/cadastros/_ui";
 
-export default function SuperAdminSupportPage() {
-  const [tickets, setTickets] = useState([
-    {
-      id: "TKT-1083",
-      tenantName: "Hotel Central Executivo",
-      authorName: "Gerente Amanda",
-      category: "Faturamento Corporativo",
-      subject: "Dificuldade na configuração de Faturamento para Empresa Conveniada",
-      priority: "HIGH",
-      status: "OPEN",
-      aiHandled: false,
-      confidence: 62,
-      createdAt: "Há 15 minutos",
-      lastMessage: "Olá! Cadastrei o CNPJ da empresa mas no checkout não aparece a opção de faturar.",
-    },
-    {
-      id: "TKT-1082",
-      tenantName: "Pousada Sol & Mar",
-      authorName: "Recepcionista Carlos",
-      category: "FNRH / Governo",
-      subject: "Dúvida na transmissão da FNRH para o SNRHos",
-      priority: "HIGH",
-      status: "RESOLVED_BY_AI",
-      aiHandled: true,
-      confidence: 94,
-      createdAt: "Há 45 minutos",
-      lastMessage: "IA de Suporte forneceu a solução sobre a janela de manutenção do SNRHos.",
-    },
-    {
-      id: "TKT-1045",
-      tenantName: "Hotel Praia Azul",
-      authorName: "Recepção Praia",
-      category: "WhatsApp",
-      subject: "Como re-conectar QR Code da API do WhatsApp?",
-      priority: "MEDIUM",
-      status: "RESOLVED",
-      aiHandled: true,
-      confidence: 98,
-      createdAt: "Ontem às 14:30",
-      lastMessage: "Procedimento de reconexão validado.",
-    },
-  ]);
+const c = cadastroUI(false);
 
-  const [activeTicket, setActiveTicket] = useState<any>(tickets[0]);
-  const [replyInput, setReplyInput] = useState("");
-  const [vectorizeNotification, setVectorizeNotification] = useState<string | null>(null);
+const STATUS_META: Record<string, { label: string; cls: string }> = {
+  OPEN: { label: "Aberto", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  IN_PROGRESS: { label: "Em atendimento", cls: "bg-sky-50 text-sky-700 border-sky-200" },
+  AI_ANSWERED: { label: "Respondido pela IA", cls: "bg-violet-50 text-violet-700 border-violet-200" },
+  RESOLVED: { label: "Resolvido", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  CLOSED: { label: "Fechado", cls: "bg-slate-100 text-slate-500 border-slate-200" },
+};
+const PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+const PRIORITY_LABEL: Record<string, string> = { LOW: "Baixa", MEDIUM: "Média", HIGH: "Alta", URGENT: "Urgente" };
 
-  const [messages, setMessages] = useState([
-    {
-      sender: "USER",
-      senderName: "Gerente Amanda (Hotel Central Executivo)",
-      content: "Olá! Cadastrei o CNPJ da empresa Meta Consultoria mas ao tentar faturar as diárias no checkout do hóspede Carlos, a opção de faturar aparece desabilitada.",
-      time: "10:45",
-    },
-    {
-      sender: "AI_AGENT",
-      senderName: "IA de Suporte Hoteis.Net (RAG Bot - 62% Confiança)",
-      content: "Identificamos que para habilitar o faturamento corporativo, é necessário verificar se o contrato da empresa possui limite de crédito cadastrado superior a R$ 0,00.",
-      time: "10:45",
-      lowConfidence: true,
-    },
-  ]);
+interface Row {
+  id: string; subject: string; category: string; priority: string; status: string;
+  tenantName: string; authorName: string; messages: number; createdAt: string; updatedAt: string;
+}
+interface Msg { id: string; senderType: string; senderName: string; content: string; createdAt: string; }
+interface Detail {
+  id: string; subject: string; category: string; priority: string; status: string; createdAt: string;
+  tenantName: string; author: { name: string; email: string }; messages: Msg[];
+}
 
-  const handleSendHumanReply = () => {
-    if (!replyInput.trim()) return;
+export default function AdminSupportPage() {
+  const toast = useToast();
+  const [canEdit, setCanEdit] = useState(false);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [openCount, setOpenCount] = useState(0);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sel, setSel] = useState<Detail | null>(null);
+  const [reply, setReply] = useState("");
+  const [busy, setBusy] = useState(false);
 
-    const humanMsg = {
-      sender: "SUPER_ADMIN",
-      senderName: "Atendente Humano (Suporte SaaS)",
-      content: replyInput,
-      time: "Agora",
-    };
+  // Base de conhecimento do produto (o agente de IA lê os artigos ACTIVE).
+  interface Doc { id: string; title: string; category: string; content: string; active: boolean; source: string; }
+  const [docs, setDocs] = useState<Doc[]>([]);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [newDoc, setNewDoc] = useState({ title: "", category: "", content: "" });
 
-    setMessages((prev) => [...prev, humanMsg]);
-    setReplyInput("");
+  const loadDocs = useCallback(async () => {
+    const d = await fetch("/api/admin/support/docs").then((r) => r.json()).catch(() => null);
+    if (d?.success) setDocs(d.docs);
+  }, []);
+  useEffect(() => { loadDocs(); }, [loadDocs]);
 
-    // Update status
-    setTickets((prev) =>
-      prev.map((t) => (t.id === activeTicket.id ? { ...t, status: "IN_PROGRESS", aiHandled: false } : t))
-    );
+  const addDoc = async () => {
+    if (!newDoc.title.trim() || !newDoc.content.trim()) { toast.warning("Título e conteúdo são obrigatórios."); return; }
+    const res = await fetch("/api/admin/support/docs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(newDoc) });
+    const d = await res.json();
+    if (d?.success) { setNewDoc({ title: "", category: "", content: "" }); toast.success("Artigo criado."); await loadDocs(); }
+    else toast.error(d?.error || "Erro ao criar.");
+  };
+  const patchDoc = async (id: string, data: Record<string, unknown>) => {
+    const res = await fetch(`/api/admin/support/docs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    if ((await res.json())?.success) await loadDocs();
+  };
+  const deleteDoc = async (id: string) => {
+    if (!window.confirm("Excluir este artigo?")) return;
+    const res = await fetch(`/api/admin/support/docs/${id}`, { method: "DELETE" });
+    if ((await res.json())?.success) { toast.success("Artigo excluído."); await loadDocs(); }
   };
 
-  const handleResolveAndVectorize = () => {
-    setVectorizeNotification(`Chamado ${activeTicket.id} resolvido e vetorizado no Supabase pgvector! A IA aprendeu com esta solução.`);
-    setTickets((prev) =>
-      prev.map((t) => (t.id === activeTicket.id ? { ...t, status: "RESOLVED" } : t))
-    );
+  useEffect(() => {
+    fetch("/api/admin/auth/me").then((r) => r.json()).then((d) => { if (d?.success) setCanEdit(!!d.user.canEdit); }).catch(() => {});
+  }, []);
 
-    setTimeout(() => {
-      setVectorizeNotification(null);
-    }, 4000);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const p = new URLSearchParams();
+      if (statusFilter) p.set("status", statusFilter);
+      const d = await fetch(`/api/admin/support/tickets?${p}`).then((r) => r.json());
+      if (d?.success) { setRows(d.tickets); setOpenCount(d.openCount); }
+    } catch {
+      toast.error("Falha ao carregar a fila.");
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter, toast]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const open = async (id: string) => {
+    const d = await fetch(`/api/admin/support/tickets/${id}`).then((r) => r.json());
+    if (d?.success) setSel(d.ticket);
+    else toast.error(d?.error || "Erro ao abrir.");
+  };
+
+  const send = async (resolve = false) => {
+    if (!sel || (!reply.trim() && !resolve)) return;
+    let learnTitle: string | undefined;
+    if (resolve && reply.trim()) {
+      const t = window.prompt("Salvar esta resposta como artigo da base de conhecimento? Informe um título (ou deixe vazio para não salvar):", sel.subject);
+      if (t && t.trim()) learnTitle = t.trim();
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/support/tickets/${sel.id}/messages`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: reply.trim() || "Chamado resolvido pela equipe.", resolve, learnTitle }),
+      });
+      const d = await res.json();
+      if (d?.success) { setReply(""); await open(sel.id); await load(); }
+      else toast.error(d?.error || "Não foi possível enviar.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const patch = async (data: Record<string, string>) => {
+    if (!sel) return;
+    const res = await fetch(`/api/admin/support/tickets/${sel.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+    });
+    const d = await res.json();
+    if (d?.success) { await open(sel.id); await load(); }
+    else toast.error(d?.error || "Erro ao atualizar.");
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <LifeBuoy className="w-5 h-5 text-[#0284C7]" />
-            Central Master de Gerenciamento de Suporte & Treinamento RAG
-          </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Console de atendimento humano do SuperAdmin. As resoluções finalizadas são vetorizadas automaticamente no Supabase para a IA aprender.
-          </p>
+    <div className="max-w-7xl mx-auto space-y-5">
+      <div className={c.headerCard}>
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-sky-50 border border-sky-200 text-sky-600 rounded-2xl"><LifeBuoy className="w-7 h-7" /></div>
+          <div>
+            <h1 className={c.title}>Suporte aos assinantes</h1>
+            <p className={c.subtitle}>Fila global de chamados. {openCount} em aberto.</p>
+          </div>
+        </div>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={`${c.field} md:w-52`}>
+          <option value="">Todos os status</option>
+          {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className={`${c.tableCard} overflow-hidden lg:max-h-[70vh] lg:overflow-y-auto`}>
+          {loading ? (
+            <div className="py-16 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /> Carregando…</div>
+          ) : rows.length === 0 ? (
+            <div className={`py-16 text-center ${c.empty} text-sm`}>Nenhum chamado.</div>
+          ) : (
+            <div className="divide-y divide-slate-200">
+              {rows.map((t) => {
+                const sm = STATUS_META[t.status] || STATUS_META.OPEN;
+                return (
+                  <button key={t.id} onClick={() => open(t.id)}
+                    className={`w-full text-left p-4 hover:bg-slate-50 ${sel?.id === t.id ? "bg-sky-50" : ""}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-900 truncate">{t.tenantName}</span>
+                      <span className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold border ${sm.cls}`}>{sm.label}</span>
+                    </div>
+                    <p className="text-xs text-slate-600 line-clamp-1 mt-0.5">{t.subject}</p>
+                    <div className="text-[10px] text-slate-400 mt-1">{t.category} · {PRIORITY_LABEL[t.priority] || t.priority} · {t.messages} msg</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <span className="px-3 py-1.5 rounded-lg bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-medium flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-[#10B981]" /> Taxa Autônoma da IA: 88.5%
-          </span>
+        <div className={`${c.tableCard} lg:col-span-2 flex flex-col lg:h-[70vh]`}>
+          {!sel ? (
+            <div className={`flex-1 flex items-center justify-center ${c.empty} text-sm`}>Selecione um chamado.</div>
+          ) : (
+            <>
+              <div className="p-4 border-b border-slate-200">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-bold text-slate-900 truncate">{sel.subject}</h2>
+                    <span className="text-[11px] text-slate-500">{sel.tenantName} · {sel.author.name} ({sel.author.email}) · {sel.category}</span>
+                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2 shrink-0">
+                      <select value={sel.priority} onChange={(e) => patch({ priority: e.target.value })} className={`${c.field} !w-28 !py-1 text-[11px]`}>
+                        {PRIORITIES.map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
+                      </select>
+                      <select value={sel.status} onChange={(e) => patch({ status: e.target.value })} className={`${c.field} !w-36 !py-1 text-[11px]`}>
+                        {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {sel.messages.map((m) => {
+                  const platform = m.senderType === "PLATFORM";
+                  return (
+                    <div key={m.id} className={`flex ${platform ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${platform ? "bg-sky-600 text-white rounded-br-sm" : m.senderType === "AI" ? "bg-violet-50 text-violet-900 border border-violet-200 rounded-bl-sm" : "bg-slate-100 text-slate-800 rounded-bl-sm"}`}>
+                        <div className={`text-[10px] mb-1 ${platform ? "text-sky-100" : "text-slate-400"}`}>{m.senderName} · {new Date(m.createdAt).toLocaleString("pt-BR")}</div>
+                        <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {canEdit && (
+                <div className="p-3 border-t border-slate-200 flex items-center gap-2">
+                  <input value={reply} onChange={(e) => setReply(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
+                    placeholder="Resposta oficial do suporte…" className={c.field} />
+                  <button onClick={() => send(false)} disabled={busy} className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </button>
+                  <button onClick={() => send(true)} disabled={busy} title="Responder e marcar como resolvido" className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold disabled:opacity-50 flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> resolver
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Vectorize Alert Notification */}
-      {vectorizeNotification && (
-        <div className="p-4 rounded-xl bg-[#10B981]/15 border border-[#10B981]/40 text-[#10B981] text-xs font-semibold flex items-center gap-2 animate-bounce">
-          <CheckCircle2 className="w-4 h-4" />
-          <span>{vectorizeNotification}</span>
-        </div>
-      )}
-
-      {/* Master Console Grid */}
-      <div className="grid md:grid-cols-3 gap-6">
-        {/* Left Column: Tickets Queue */}
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-slate-300 px-1">Fila Global de Tickets</h3>
-
-          {tickets.map((tkt) => (
-            <div
-              key={tkt.id}
-              onClick={() => setActiveTicket(tkt)}
-              className={`p-4 rounded-xl border transition-all cursor-pointer space-y-2 ${
-                activeTicket?.id === tkt.id
-                  ? "border-[#F59E0B] bg-[#F59E0B]/10"
-                  : "border-slate-800 bg-[#0F172A] hover:border-slate-700"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono font-semibold text-[#F59E0B]">{tkt.id}</span>
-                <span className="text-[10px] text-slate-400 font-mono">{tkt.createdAt}</span>
-              </div>
-
-              <span className="text-xs font-bold text-white block">{tkt.tenantName}</span>
-              <p className="text-xs text-slate-300 line-clamp-1">{tkt.subject}</p>
-
-              <div className="flex items-center justify-between pt-1 text-xs">
-                <span className="text-slate-400 text-[11px]">{tkt.category}</span>
-                {tkt.aiHandled ? (
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-[#10B981]/15 text-[#10B981]">IA ({tkt.confidence}%)</span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-red-500/15 text-red-400 font-semibold flex items-center gap-1">
-                    <ShieldAlert className="w-3 h-3" /> Humano Necessário
-                  </span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Right Column: Ticket Management & RAG Vectorizer */}
-        <div className="md:col-span-2 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-col h-[560px] overflow-hidden">
-          {/* Header */}
-          <div className="p-4 border-b border-slate-800 bg-[#1E293B]/40 flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-[#F59E0B] font-semibold">{activeTicket?.id}</span>
-                <h3 className="text-sm font-semibold text-white">{activeTicket?.tenantName}</h3>
-              </div>
-              <p className="text-xs text-slate-300 mt-0.5">{activeTicket?.subject}</p>
-            </div>
-
-            <button
-              onClick={handleResolveAndVectorize}
-              className="px-3.5 py-1.5 bg-[#10B981] hover:bg-[#059669] text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-lg shadow-[#10B981]/20"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>Resolver & Vetorizar RAG</span>
-            </button>
-          </div>
-
-          {/* Messages Feed */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex gap-3 max-w-[85%] ${msg.sender === "SUPER_ADMIN" ? "ml-auto flex-row-reverse" : ""}`}
-              >
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                    msg.sender === "SUPER_ADMIN"
-                      ? "bg-[#F59E0B] text-slate-950"
-                      : msg.sender === "USER"
-                      ? "bg-slate-700 text-white"
-                      : "bg-amber-500/20 text-[#F59E0B] border border-[#F59E0B]/40"
-                  }`}
-                >
-                  {msg.sender === "SUPER_ADMIN" ? "ADM" : msg.sender === "USER" ? "HT" : <Sparkles className="w-4 h-4" />}
+      <div className={`${c.tableCard} overflow-hidden`}>
+        <button onClick={() => setDocsOpen((v) => !v)} className="w-full p-4 flex items-center justify-between hover:bg-slate-50">
+          <span className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+            <BookOpen className="w-4 h-4 text-slate-500" /> Base de conhecimento do produto
+            <span className="text-[11px] font-normal text-slate-400">({docs.filter((d) => d.active).length} ativos — o agente de IA usa estes artigos)</span>
+          </span>
+          <span className="text-slate-400 text-xs">{docsOpen ? "fechar" : "abrir"}</span>
+        </button>
+        {docsOpen && (
+          <div className="border-t border-slate-200 p-4 space-y-4">
+            {canEdit && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <input value={newDoc.title} onChange={(e) => setNewDoc({ ...newDoc, title: e.target.value })} placeholder="Título do artigo" className={`${c.field} md:col-span-2`} />
+                  <input value={newDoc.category} onChange={(e) => setNewDoc({ ...newDoc, category: e.target.value })} placeholder="Categoria (opcional)" className={c.field} />
                 </div>
-
-                <div
-                  className={`p-3.5 rounded-2xl text-sm space-y-1.5 ${
-                    msg.sender === "SUPER_ADMIN"
-                      ? "bg-[#F59E0B]/15 border border-[#F59E0B]/30 text-white rounded-tr-none"
-                      : msg.sender === "USER"
-                      ? "bg-slate-800 text-slate-200 rounded-tl-none"
-                      : "bg-[#1E293B] text-amber-300 border border-amber-500/30 rounded-tl-none"
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-4 text-[11px] opacity-80">
-                    <span className="font-semibold">{msg.senderName}</span>
-                    <span>{msg.time}</span>
+                <textarea value={newDoc.content} onChange={(e) => setNewDoc({ ...newDoc, content: e.target.value })} rows={3} placeholder="Conteúdo — o procedimento, a explicação, o passo a passo…" className={c.field} />
+                <div className="flex justify-end">
+                  <button onClick={addDoc} className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-1.5"><Plus className="w-4 h-4" /> Adicionar artigo</button>
+                </div>
+              </div>
+            )}
+            <div className="divide-y divide-slate-200">
+              {docs.length === 0 ? (
+                <p className={`py-6 text-center ${c.empty} text-sm`}>Nenhum artigo. Sem base de conhecimento, o agente de IA sempre escala para humano.</p>
+              ) : docs.map((d) => (
+                <div key={d.id} className={`py-3 ${!d.active ? "opacity-50" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-900">{d.title} <span className="text-[10px] font-normal text-slate-400">[{d.category}]{d.source === "TICKET_RESOLUTION" ? " · de chamado" : ""}</span></span>
+                    {canEdit && (
+                      <div className="flex gap-1.5 shrink-0">
+                        <button onClick={() => patchDoc(d.id, { active: !d.active })} title={d.active ? "Desativar" : "Reativar"} className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-amber-500 hover:text-white"><Power className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => deleteDoc(d.id)} title="Excluir" className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-rose-600 hover:text-white"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </div>
+                    )}
                   </div>
-                  <p className="leading-relaxed">{msg.content}</p>
+                  <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 whitespace-pre-wrap">{d.content}</p>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-
-          {/* SuperAdmin Reply Input */}
-          <div className="p-3 border-t border-slate-800 bg-[#0F172A] flex items-center gap-2">
-            <input
-              type="text"
-              value={replyInput}
-              onChange={(e) => setReplyInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSendHumanReply()}
-              placeholder="Digite a resposta oficial do suporte do SaaS..."
-              className="flex-1 bg-[#1E293B] border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#F59E0B]"
-            />
-            <button
-              onClick={handleSendHumanReply}
-              className="px-4 py-2.5 bg-[#F59E0B] hover:bg-[#D97706] text-slate-950 font-bold rounded-lg text-sm transition-colors flex items-center gap-1.5"
-            >
-              <Send className="w-4 h-4" /> Responder
-            </button>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

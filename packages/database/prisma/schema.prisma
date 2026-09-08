@@ -12,10 +12,20 @@ model SaaSPlan {
   id            String             @id @default(uuid())
   name          String             @unique
   description   String?
-  priceMonthly  Decimal            @db.Decimal(10, 2)
+  // Preço por ciclo de cobrança. priceMonthly é o valor cheio mensal; semestral e anual já vêm
+  // com o desconto embutido e são pagamento único antecipado (decisão D5 do PLANO_PAINEL_ADMIN.md).
+  // Quando priceSemiannual/priceAnnual são null, o ciclo correspondente não é oferecido nesse plano.
+  priceMonthly    Decimal          @db.Decimal(10, 2)
+  priceSemiannual Decimal?         @db.Decimal(10, 2)
+  priceAnnual     Decimal?         @db.Decimal(10, 2)
   maxRooms      Int
   maxUsers      Int
   aiTokenQuota  Int                @default(50000)
+  // Recursos inclusos, texto livre por item — exibidos no cadastro/edição do assinante e (futuro)
+  // na página de planos. Não é enforcement, é descrição comercial.
+  features      String[]           @default([])
+  // Dias de degustação concedidos ao contratar este plano (0 = sem trial).
+  trialDays     Int                @default(0)
   active        Boolean            @default(true)
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
@@ -90,6 +100,20 @@ model Tenant {
   website                    String?
   interestRate               Decimal?                @db.Decimal(5, 2)
   logoUrl                    String?
+  // Data de validade do acesso ("data_Reset" no cadastro do assinante; Hot_DTReset do WinDev, onde
+  // era o kill-switch de licença: passou da data → sistema bloqueado). No SaaS é a data-limite
+  // "pago até" — atualizada pelos webhooks de pagamento do Asaas (Fase 3) e ajustável manualmente
+  // pelo admin da plataforma (cortesia, negociação). A régua de inadimplência (cron, Fase 3) usa
+  // esta data para virar o status: +15d → OVERDUE + aviso, +30d → SUSPENDED.
+  accessValidUntil           DateTime?
+  // Anotações internas da equipe do SaaS sobre o assinante (negociação, histórico de suporte,
+  // observações comerciais). NUNCA exposto ao próprio assinante — só no painel /admin.
+  internalNotes              String?
+  // ID do cliente correspondente no Asaas (gateway de pagamento) — criado no provisionamento
+  // quando o assinante tem CNPJ e ASAAS_API_KEY está configurado. null = cobrança manual.
+  asaasCustomerId            String?
+  saasInvoices               SaaSInvoice[]
+  egressDaily                 TenantEgressDaily[]
   createdAt                  DateTime                @default(now())
   updatedAt                  DateTime                @updatedAt
   dailyRolloverTime          String                  @default("14:30")
@@ -211,19 +235,125 @@ model Tenant {
 }
 
 model SaASSubscription {
-  id          String   @id @default(uuid())
+  id          String       @id @default(uuid())
   tenantId    String
   planId      String
-  startDate   DateTime @default(now())
+  // Ciclo contratado: mensal (recorrente no Asaas), semestral ou anual (pagamento único
+  // antecipado). `amount` é o preço do plano para esse ciclo; `nextBilling` é a data da próxima
+  // cobrança / renovação.
+  cycle       BillingCycle @default(MONTHLY)
+  startDate   DateTime     @default(now())
   nextBilling DateTime
-  amount      Decimal  @db.Decimal(10, 2)
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  plan        SaaSPlan @relation(fields: [planId], references: [id])
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  amount      Decimal      @db.Decimal(10, 2)
+  active      Boolean      @default(true)
+  // Forma de cobrança preferida no Asaas: BOLETO | PIX | CREDIT_CARD | UNDEFINED (deixa o
+  // cliente escolher na fatura). Mensal vira assinatura recorrente no Asaas (asaasSubscriptionId);
+  // semestral/anual são pagamento único antecipado (asaasPaymentId), decisão D5.
+  billingType          String   @default("UNDEFINED")
+  asaasSubscriptionId  String?
+  asaasPaymentId       String?
+  // Estágio atual da régua de inadimplência (worker apps/worker/src/saasDunning.ts):
+  // null = em dia · "WARNED_15" = avisado após 15 dias de atraso · "SUSPENDED_30" = suspenso após
+  // 30 dias. Volta a null quando um pagamento é confirmado (webhook do Asaas).
+  dunningStage         String?
+  dunningNotifiedAt    DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  plan        SaaSPlan     @relation(fields: [planId], references: [id])
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices    SaaSInvoice[]
 
   @@map("saas_subscriptions")
+}
+
+enum BillingCycle {
+  MONTHLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+// Uma cobrança/fatura do SaaS para um assinante (espelho local do "payment" do Asaas, ou uma
+// cobrança avulsa/baixa manual quando manual = true). O webhook do Asaas mantém `status`,
+// `paidAt` e as URLs em dia; a régua de inadimplência (worker) lê `status`/`dueDate`.
+model SaaSInvoice {
+  id             String            @id @default(uuid())
+  tenantId       String
+  subscriptionId String?
+  asaasPaymentId String?           @unique
+  cycle          BillingCycle      @default(MONTHLY)
+  amount         Decimal           @db.Decimal(10, 2)
+  billingType    String?           // BOLETO | PIX | CREDIT_CARD | UNDEFINED
+  status         SaaSInvoiceStatus @default(PENDING)
+  dueDate        DateTime
+  paidAt         DateTime?
+  invoiceUrl     String?           // página da fatura no Asaas
+  bankSlipUrl    String?           // PDF do boleto
+  pixPayload     String?           // copia-e-cola do PIX
+  description    String?
+  manual         Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription   SaASSubscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("saas_invoices")
+}
+
+enum SaaSInvoiceStatus {
+  PENDING
+  CONFIRMED // pago; aguardando compensação (boleto/cartão)
+  RECEIVED // valor creditado
+  OVERDUE
+  REFUNDED
+  CHARGEBACK
+  CANCELLED
+}
+
+// Base de conhecimento GLOBAL do produto (como usar o Hoteis.Net) — não é por tenant. O agente
+// de IA de suporte ao assinante (lib/platformSupportAgent.ts) lê os artigos ACTIVE como contexto
+// RAG leve (o acervo é pequeno o suficiente para caber no prompt — sem embeddings/pgvector por
+// enquanto). Distinta do SupportKnowledgeBase, que é por-tenant e serve ao agente de atendimento
+// ao HÓSPEDE. Gerenciada só no painel /admin.
+// Log das mensagens que a plataforma (painel /admin → Mensagens) enviou aos assinantes por
+// WhatsApp — 1:1 (assinante ou pessoa) ou em massa (segmento). Sempre pela instância uazapi DA
+// PLATAFORMA (UAZAPI_FALLBACK_*), nunca pela do hotel. RLS habilitado.
+model PlatformMessageLog {
+  id            String   @id @default(uuid())
+  tenantId      String?
+  targetUserId  String?
+  targetPhone   String
+  targetLabel   String?  // nome do destinatário para a listagem
+  kind          String   @default("TEXT") // TEXT | DOCUMENT | AUDIO
+  body          String?  // texto ou legenda
+  mediaFilename String?
+  batchId       String?  // agrupa um envio em massa
+  status        String   @default("SENT") // SENT | FAILED
+  error         String?
+  sentById      String?
+  sentByName    String?
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([batchId])
+  @@index([createdAt])
+  @@map("platform_message_logs")
+}
+
+model PlatformSupportDoc {
+  id        String   @id @default(uuid())
+  title     String
+  category  String   @default("Geral")
+  content   String
+  active    Boolean  @default(true)
+  // "MANUAL" (equipe escreveu) | "TICKET_RESOLUTION" (aprendido de um chamado resolvido).
+  source    String   @default("MANUAL")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
+  @@map("platform_support_docs")
 }
 
 model User {
@@ -234,6 +364,9 @@ model User {
   passwordHash        String
   role                UserRole        @default(RECEPCIONIST)
   avatarUrl           String?
+  // WhatsApp do usuário (DDD + número). Usado pela plataforma para falar direto com uma pessoa
+  // do hotel (painel /admin → Mensagens). Opcional; sem ele, a plataforma cai no telefone do tenant.
+  phone               String?
   active              Boolean         @default(true)
   // Incrementado ao desativar o usuário, trocar senha ou mudar o role — invalida instantaneamente
   // qualquer JWT de sessão já emitido antes da mudança (ver getSessionUser em lib/auth.ts).
@@ -241,6 +374,10 @@ model User {
   // Proteção contra força bruta no login (ver checkAndRegisterLoginAttempt em lib/auth.ts).
   failedLoginAttempts Int             @default(0)
   lockedUntil         DateTime?
+  // 2FA (TOTP) — hoje só usado no login do painel da plataforma (/admin/login). mfaSecret guarda
+  // o segredo base32; mfaEnabled só vira true depois que a pessoa confirma um código válido.
+  mfaSecret           String?
+  mfaEnabled          Boolean         @default(false)
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   sentTickets         SupportTicket[] @relation("TicketAuthor")
@@ -263,6 +400,25 @@ model AIUsageLog {
   @@map("ai_usage_logs")
 }
 
+// Volume de dados (egress) que cada assinante puxa do banco por dia — instrumentado no cliente
+// Prisma (extensão em apps/web/src/lib/prisma.ts) que soma o tamanho dos resultados de leitura e
+// atribui ao tenant da requisição (AsyncLocalStorage, ver lib/tenantContext.ts). Serve para o
+// painel admin identificar qual hotel domina o consumo do Supabase (Shared Pooler Egress ~90%).
+// NUNCA exposto ao próprio assinante — só no painel /admin. Ver CLAUDE.md > Implementações futuras.
+model TenantEgressDaily {
+  id            String   @id @default(uuid())
+  tenantId      String
+  day           DateTime @db.Date
+  responseBytes BigInt   @default(0)
+  queryCount    Int      @default(0)
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, day])
+  @@index([day])
+  @@map("tenant_egress_daily")
+}
+
 // Trilha de auditoria: registra quem fez o quê, quando e de qual terminal/IP, para
 // investigação posterior (ex.: "quem fez o check-out do quarto 106 e às 14h32 de qual estação").
 model AuditLog {
@@ -282,6 +438,29 @@ model AuditLog {
   user        User?    @relation(fields: [userId], references: [id])
 
   @@map("tenant_activity_logs")
+}
+
+// Trilha de auditoria GLOBAL da plataforma (painel /admin) — NÃO é isolada por tenant: registra o
+// que a equipe do SaaS (SUPER_ADMIN / PLATFORM_ADMIN / PLATFORM_SUPPORT) faz no back-office —
+// trocar plano de um assinante, editar prompt de IA, suspender conta, impersonar, enviar broadcast.
+// Distinta de AuditLog, que é a trilha por-tenant das ações dentro do app do hotel.
+model PlatformAuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?
+  actorName   String?
+  actorRole   String?
+  action      String
+  description String?
+  targetTenantId String?
+  entityType  String?
+  entityId    String?
+  ipAddress   String?
+  details     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([targetTenantId])
+  @@index([createdAt])
+  @@map("platform_audit_logs")
 }
 
 model SupportTicket {
@@ -1460,6 +1639,13 @@ model AIAgentSetting {
   tokenQuotaOverride Int? // sobrescreve SaaSPlan.aiTokenQuota para este tenant, se definido
   blocked            Boolean @default(false) // força desligar os dois agentes, independente dos toggles do assinante
 
+  // --- Agente Operacional (admin master) ---
+  // Instruções extras de estilo/personalidade aplicadas às mensagens de alerta do agente
+  // operacional (apps/worker/src/operationalAgent.ts). Só o admin da plataforma edita — o
+  // assinante nunca vê nem altera o prompt cru (ver painel /admin/settings e a memória
+  // ai-agent-control-centralized-in-admin).
+  operationalSystemPromptExtra String?
+
   // --- Agente Operacional (assinante) ---
   monitoringEnabled       Boolean                 @default(false)
   alertPhone              String? // número WhatsApp que recebe alertas do agente operacional
@@ -2269,6 +2455,10 @@ enum UserRole {
   RECEPCIONIST
   GOVERNESS
   FINANCIAL
+  // Papéis da equipe do SaaS no painel /admin (User com tenantId nulo). PLATFORM_SUPPORT só
+  // visualiza; PLATFORM_ADMIN visualiza e edita. SUPER_ADMIN = controle total da plataforma.
+  PLATFORM_ADMIN
+  PLATFORM_SUPPORT
 }
 
 enum TicketStatus {

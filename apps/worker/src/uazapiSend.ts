@@ -8,6 +8,38 @@ import { PrismaClient } from "@prisma/client";
 const FALLBACK_UAZAPI_SERVER = process.env.UAZAPI_FALLBACK_SERVER_URL || "";
 const FALLBACK_UAZAPI_TOKEN = process.env.UAZAPI_FALLBACK_INSTANCE_TOKEN || "";
 
+// Envio pela instância uazapi DA PLATAFORMA (número compartilhado do SaaS, UAZAPI_FALLBACK_*),
+// nunca pela instância do próprio tenant — usado para mensagens do SaaS ao assinante, como a
+// régua de inadimplência (um hotel suspenso pode estar com a própria instância fora do ar).
+export async function sendPlatformWhatsApp(phone: string, message: string): Promise<boolean> {
+  const server = FALLBACK_UAZAPI_SERVER.replace(/\/$/, "");
+  const token = FALLBACK_UAZAPI_TOKEN;
+  if (!server || !token) {
+    console.error("[uazapi] envio da plataforma abortado — UAZAPI_FALLBACK_* não configurado.");
+    return false;
+  }
+  try {
+    const response = await fetch(`${server}/send/text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", token },
+      body: JSON.stringify({ number: normalizeBrazilPhone(phone), text: message }),
+    });
+    const raw = await response.text();
+    let body: any = null;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      body = null;
+    }
+    const ok = response.ok && !!body && !body.error && (body.messageid || body.id);
+    if (!ok) console.error(`[uazapi] falha no envio da plataforma http=${response.status} resposta=${raw.slice(0, 200)}`);
+    return ok;
+  } catch (err: any) {
+    console.error("[uazapi] erro de rede no envio da plataforma:", err?.message || err);
+    return false;
+  }
+}
+
 // Normaliza um número brasileiro para o formato aceito pela uazapi (DDI 55 + DDD + número).
 export function normalizeBrazilPhone(phone: string): string {
   let clean = String(phone || "").replace(/\D/g, "");
