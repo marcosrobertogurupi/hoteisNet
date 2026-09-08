@@ -13,6 +13,7 @@ import {
   createPlatformSessionToken,
   isPlatformRole,
 } from "@/lib/platformAuth";
+import { verifyTotp } from "@/lib/totp";
 import { logPlatformAction } from "@/lib/platformAudit";
 
 const GENERIC_AUTH_ERROR = "E-mail ou senha inválidos.";
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { email, password } = await req.json();
+    const { email, password, mfaCode } = await req.json();
     if (!email || !password) {
       return NextResponse.json({ success: false, error: "E-mail e senha são obrigatórios." }, { status: 400 });
     }
@@ -49,6 +50,16 @@ export async function POST(req: NextRequest) {
     // A conta existe e a senha confere, mas não é da equipe da plataforma → mesma mensagem genérica.
     if (!isPlatformRole(user.role)) {
       return NextResponse.json({ success: false, error: GENERIC_AUTH_ERROR }, { status: 401 });
+    }
+
+    // 2FA: senha correta, mas a conta exige o segundo fator.
+    if (user.mfaEnabled && user.mfaSecret) {
+      if (!mfaCode) {
+        return NextResponse.json({ success: false, mfaRequired: true, error: "Informe o código do aplicativo autenticador." }, { status: 401 });
+      }
+      if (!verifyTotp(user.mfaSecret, String(mfaCode))) {
+        return NextResponse.json({ success: false, mfaRequired: true, error: "Código de verificação inválido." }, { status: 401 });
+      }
     }
 
     if (user.failedLoginAttempts > 0) {

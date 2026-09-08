@@ -374,6 +374,10 @@ model User {
   // Proteção contra força bruta no login (ver checkAndRegisterLoginAttempt em lib/auth.ts).
   failedLoginAttempts Int             @default(0)
   lockedUntil         DateTime?
+  // 2FA (TOTP) — hoje só usado no login do painel da plataforma (/admin/login). mfaSecret guarda
+  // o segredo base32; mfaEnabled só vira true depois que a pessoa confirma um código válido.
+  mfaSecret           String?
+  mfaEnabled          Boolean         @default(false)
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   sentTickets         SupportTicket[] @relation("TicketAuthor")

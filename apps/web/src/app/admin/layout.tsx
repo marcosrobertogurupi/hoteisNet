@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, MessageSquare, Settings, ShieldCheck, UserCog } from "lucide-react";
+import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, MessageSquare, Settings, ShieldCheck, UserCog, Users } from "lucide-react";
 
 interface MeUser {
   name: string;
@@ -102,24 +102,28 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               );
             })}
             <div className="pt-3 mt-2 border-t border-slate-200">
-              <span className="px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">Financeiro</span>
+              <span className="px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">Financeiro & Plataforma</span>
               {[
-                { href: "/admin/plans", label: "Catálogo de Planos" },
-                { href: "/admin/billing", label: "Financeiro" },
-              ].map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    pathname.startsWith(item.href)
-                      ? "bg-sky-50 text-sky-700 border border-sky-200"
-                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent"
-                  }`}
-                >
-                  <DollarSign className="w-4 h-4" />
-                  <span>{item.label}</span>
-                </Link>
-              ))}
+                { href: "/admin/plans", label: "Catálogo de Planos", icon: DollarSign },
+                { href: "/admin/billing", label: "Financeiro", icon: DollarSign },
+                { href: "/admin/team", label: "Equipe & Integrações", icon: Users },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                      pathname.startsWith(item.href)
+                        ? "bg-sky-50 text-sky-700 border border-sky-200"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
             </div>
           </nav>
         </div>

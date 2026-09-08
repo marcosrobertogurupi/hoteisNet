@@ -11,6 +11,8 @@ function LoginForm() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaStep, setMfaStep] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -22,10 +24,15 @@ function LoginForm() {
       const res = await fetch("/api/admin/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, mfaCode: mfaStep ? mfaCode : undefined }),
       });
       const data = await res.json();
       if (!data?.success) {
+        if (data?.mfaRequired) {
+          setMfaStep(true);
+          setError(mfaStep ? data?.error || "Código inválido." : null);
+          return;
+        }
         setError(data?.error || "Não foi possível entrar.");
         return;
       }
@@ -74,6 +81,22 @@ function LoginForm() {
             />
           </div>
 
+          {mfaStep && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-700">Código de verificação (2FA)</label>
+              <input
+                inputMode="numeric"
+                autoFocus
+                required
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                className="w-full px-3.5 py-2 rounded-xl text-sm font-mono tracking-[0.4em] text-center bg-white border border-slate-300 text-slate-900 focus:outline-none focus:border-sky-500"
+                placeholder="000000"
+              />
+              <p className="text-[10px] text-slate-400">6 dígitos do seu app autenticador.</p>
+            </div>
+          )}
+
           {error && <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{error}</p>}
 
           <button
@@ -82,7 +105,7 @@ function LoginForm() {
             className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-sm font-bold flex items-center justify-center gap-2"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-            Entrar
+            {mfaStep ? "Confirmar código" : "Entrar"}
           </button>
         </form>
 

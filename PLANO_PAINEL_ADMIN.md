@@ -243,7 +243,15 @@ dark (convertidos nas fases seguintes).
   confirmação com contagem) + histórico. Nav "Mensagens".
 - Env: `UAZAPI_FALLBACK_SERVER_URL` / `UAZAPI_FALLBACK_INSTANCE_TOKEN`.
 
-Falta: Fase 7 (config global — status das chaves + equipe do painel com MFA).
+### Fase 7 — Config global + equipe do painel ✅ (08/09/2026)
+- `admin/team` (tema claro): equipe do painel (CRUD de `User` de plataforma, senha temporária,
+  `tokenVersion` bump ao reduzir acesso, regras de `SUPER_ADMIN`), status das integrações
+  (`GET /api/admin/integrations` — só presença da env var, nunca o valor), e **2FA (TOTP)**
+  (`lib/totp.ts` sem dependência; `POST /api/admin/auth/mfa` setup/enable/disable; `login` exige
+  `mfaCode` quando a conta tem 2FA; enroll por chave manual, sem QR externo).
+
+## PAINEL ADMIN — FASES 0 A 7 CONCLUÍDAS (08/09/2026)
+Branch `feat/painel-admin`. Ainda não mergeado na master.
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido

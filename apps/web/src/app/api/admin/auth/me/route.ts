@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { getPlatformSession } from "@/lib/auth";
 import { getImpersonation, isPlatformEditRole } from "@/lib/platformAuth";
 
@@ -10,7 +11,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
   }
 
-  const impersonation = await getImpersonation(req);
+  const [impersonation, dbUser] = await Promise.all([
+    getImpersonation(req),
+    prisma.user.findUnique({ where: { id: session.userId }, select: { mfaEnabled: true } }),
+  ]);
 
   return NextResponse.json({
     success: true,
@@ -20,6 +24,7 @@ export async function GET(req: NextRequest) {
       email: session.email,
       role: session.role,
       canEdit: isPlatformEditRole(session.role),
+      mfaEnabled: dbUser?.mfaEnabled ?? false,
     },
     impersonating: impersonation
       ? { tenantId: impersonation.tenantId, tenantName: impersonation.tenantName }
