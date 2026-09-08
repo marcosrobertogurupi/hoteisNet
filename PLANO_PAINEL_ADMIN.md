@@ -168,8 +168,14 @@ ViaCEP, senha temporária mostrada 1x). O projeto não usa shadcn/ui — reaprov
 classes `cadastroUI(false)`. `admin/page.tsx`, `admin/ai-telemetry`, `admin/support` seguem mock
 dark (convertidos nas fases seguintes).
 
-**Fase 1c (a fazer):** `/admin/login` separado com cookie próprio (D4) + **impersonation**
-"entrar como" com banner e `PlatformAuditLog`.
+**Fase 1c ✅ (08/09/2026):** sessão própria do painel (`lib/platformAuth.ts`, cookie
+`hoteisnet_platform_session`), login em `/admin/login`, middleware gateando `/admin/**` e
+`/api/admin/**` só por esse cookie (a sessão do app do hotel não abre mais o painel),
+`getPlatformSession` com revalidação no banco. **Personificação** "entrar como assinante"
+(`/api/admin/tenants/[id]/impersonate` + `/api/admin/impersonation/stop`), faixa
+`ImpersonationBanner` no topo do app do assinante, tudo auditado em `PlatformAuditLog`.
+
+**Fase 1 concluída.** Falta o resto do painel: Fase 2 (planos), Fase 3 (Asaas), etc.
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido

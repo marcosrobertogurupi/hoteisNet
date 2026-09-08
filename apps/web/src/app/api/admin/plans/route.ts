@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser, requirePlatformRole } from "@/lib/auth";
+import { getPlatformSession, requirePlatformRole } from "@/lib/auth";
 
 // GET /api/admin/plans — catálogo de planos do SaaS, para o seletor de plano no cadastro de
 // assinante. Leitura: qualquer papel de plataforma. O CRUD completo de planos é a Fase 2.
 export async function GET(req: NextRequest) {
-  const session = await getSessionUser(req);
+  const session = await getPlatformSession(req);
   const authError = requirePlatformRole(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 

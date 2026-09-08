@@ -1,13 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Building2, Plus, Search, X, Check, Loader2, Copy, KeyRound, Pencil } from "lucide-react";
+import { Building2, Plus, Search, X, Check, Loader2, Copy, KeyRound, Pencil, LogIn } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
 import { cadastroUI } from "../../app/cadastros/_ui";
 
 const c = cadastroUI(false); // painel admin: tema claro fixo
-
-const EDIT_ROLES = ["SUPER_ADMIN", "PLATFORM_ADMIN"];
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   TRIAL: { label: "Degustação", cls: "bg-sky-50 text-sky-700 border-sky-200" },
@@ -101,14 +99,34 @@ export default function AdminTenantsPage() {
 
   const pageSize = 25;
 
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
+
   useEffect(() => {
-    fetch("/api/auth/me").then((r) => r.json()).then((d) => {
-      if (d?.success) setCanEdit(EDIT_ROLES.includes(d.user.role));
+    fetch("/api/admin/auth/me").then((r) => r.json()).then((d) => {
+      if (d?.success) setCanEdit(!!d.user.canEdit);
     }).catch(() => {});
     fetch("/api/admin/plans").then((r) => r.json()).then((d) => {
       if (d?.success) setPlans(d.plans);
     }).catch(() => {});
   }, []);
+
+  const impersonate = async (id: string, label: string) => {
+    setImpersonatingId(id);
+    try {
+      const res = await fetch(`/api/admin/tenants/${id}/impersonate`, { method: "POST" });
+      const data = await res.json();
+      if (!data?.success) {
+        toast.error(data?.error || "Não foi possível personificar.");
+        return;
+      }
+      toast.success(`Entrando como ${label}…`);
+      window.location.href = data.redirectTo || "/app";
+    } catch {
+      toast.error("Falha de rede ao personificar.");
+    } finally {
+      setImpersonatingId(null);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -339,13 +357,25 @@ export default function AdminTenantsPage() {
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${sm.cls}`}>{sm.label}</span>
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      <button
-                        onClick={() => openEdit(t.id)}
-                        className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-sky-600 hover:text-white transition"
-                        title={canEdit ? "Editar" : "Ver ficha"}
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        {canEdit && t.status !== "CANCELLED" && (
+                          <button
+                            onClick={() => impersonate(t.id, t.tradeName || t.name)}
+                            disabled={impersonatingId === t.id}
+                            className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-amber-500 hover:text-white transition disabled:opacity-50"
+                            title="Entrar como este assinante"
+                          >
+                            {impersonatingId === t.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => openEdit(t.id)}
+                          className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-sky-600 hover:text-white transition"
+                          title={canEdit ? "Editar" : "Ver ficha"}
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Sidebar from "@/components/Sidebar";
+import ImpersonationBanner from "@/components/ImpersonationBanner";
 import CashRegisterGate from "@/components/CashRegisterGate";
 import InactivityLock from "@/components/InactivityLock";
 import AppVersionGate from "@/components/AppVersionGate";
@@ -149,6 +150,7 @@ export default function TenantAppLayout({
 
   return (
     <>
+    <ImpersonationBanner />
     <InactivityLock />
     <AppVersionGate />
     <CashRegisterGate>

@@ -1,6 +1,10 @@
 import { prisma } from "@/lib/prisma";
-import { getClientIp, type SessionPayload } from "@/lib/auth";
+import { getClientIp } from "@/lib/auth";
 import type { NextRequest } from "next/server";
+
+// Ator da ação — funciona tanto com a sessão do painel (PlatformSessionPayload) quanto com a
+// sessão do app (SessionPayload); ambas têm userId/name/role.
+type AuditActor = { userId: string; name: string; role: string };
 
 // Grava uma linha na trilha de auditoria GLOBAL da plataforma (painel /admin). Distinta do
 // AuditLog por-tenant — aqui fica o que a equipe do SaaS faz no back-office (trocar plano,
@@ -10,7 +14,7 @@ import type { NextRequest } from "next/server";
 // já validada (getSessionUser) e a request, para capturarmos ator e IP.
 export async function logPlatformAction(params: {
   req: NextRequest;
-  session: SessionPayload;
+  session: AuditActor;
   action: string;
   description?: string;
   targetTenantId?: string | null;

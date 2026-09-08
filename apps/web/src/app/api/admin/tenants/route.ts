@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser, requirePlatformRole, requirePlatformAdmin, hashPassword } from "@/lib/auth";
+import { getPlatformSession, requirePlatformRole, requirePlatformAdmin, hashPassword } from "@/lib/auth";
 import { logPlatformAction } from "@/lib/platformAudit";
 import { validateCNPJ } from "@/lib/documentValidation";
 import { lookupCep } from "@/lib/viaCep";
@@ -13,7 +13,7 @@ const TAX_REGIMES = ["SIMPLES_NACIONAL", "LUCRO_PRESUMIDO", "LUCRO_REAL", "MEI"]
 // (inclui PLATFORM_SUPPORT, que só visualiza). Aceita ?q= (nome/fantasia/CNPJ/cidade), ?status=,
 // ?page= e ?pageSize= (default 50, máx 100). Sem parâmetros, devolve a 1ª página.
 export async function GET(req: NextRequest) {
-  const session = await getSessionUser(req);
+  const session = await getPlatformSession(req);
   const authError = requirePlatformRole(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
 // transação: Tenant + assinatura + config de IA + 1º usuário TENANT_ADMIN. Só o painel admin
 // cria assinante (o assinante nunca se auto-cadastra). Edição: PLATFORM_ADMIN / SUPER_ADMIN.
 export async function POST(req: NextRequest) {
-  const session = await getSessionUser(req);
+  const session = await getPlatformSession(req);
   const authError = requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 

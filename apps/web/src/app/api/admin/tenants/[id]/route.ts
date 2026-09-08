@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser, requirePlatformRole, requirePlatformAdmin } from "@/lib/auth";
+import { getPlatformSession, requirePlatformRole, requirePlatformAdmin } from "@/lib/auth";
 import { logPlatformAction } from "@/lib/platformAudit";
 import { validateCNPJ } from "@/lib/documentValidation";
 import { lookupCep } from "@/lib/viaCep";
@@ -11,7 +11,7 @@ const TAX_REGIMES = ["SIMPLES_NACIONAL", "LUCRO_PRESUMIDO", "LUCRO_REAL", "MEI"]
 // GET /api/admin/tenants/[id] — ficha completa do assinante para a tela de edição do painel.
 // Leitura: qualquer papel de plataforma.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getSessionUser(req);
+  const session = await getPlatformSession(req);
   const authError = requirePlatformRole(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 // (cota de CPF, prompt/cota/bloqueio de IA, status/suspensão). Edição: só PLATFORM_ADMIN /
 // SUPER_ADMIN — PLATFORM_SUPPORT (que só visualiza) recebe 403. O assinante nunca edita isto.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getSessionUser(req);
+  const session = await getPlatformSession(req);
   const authError = requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser, requirePlatformRole, requirePlatformAdmin } from "@/lib/auth";
+import { getPlatformSession, requirePlatformRole, requirePlatformAdmin } from "@/lib/auth";
 
 // GET/POST /api/admin/release-control — restrito a SUPER_ADMIN (painel do admin master).
 //
@@ -27,7 +27,7 @@ function currentBuildId(): string {
 // Leitura: qualquer papel de plataforma. Escrita (forçar/limpar release crítico): só
 // PLATFORM_ADMIN / SUPER_ADMIN.
 async function requirePlatform(req: NextRequest, forEdit: boolean) {
-  const session = await getSessionUser(req);
+  const session = await getPlatformSession(req);
   const authError = forEdit ? requirePlatformAdmin(session) : requirePlatformRole(session);
   if (authError) return { error: NextResponse.json(authError.body, { status: authError.status }) };
   return { session: session! };

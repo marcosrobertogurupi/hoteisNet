@@ -3,15 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, ShieldCheck } from "lucide-react";
-
-// Papéis que podem EDITAR no painel (o resto — PLATFORM_SUPPORT — só visualiza).
-const EDIT_ROLES = ["SUPER_ADMIN", "PLATFORM_ADMIN"];
+import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, ShieldCheck, UserCog } from "lucide-react";
 
 interface MeUser {
   name: string;
   email: string;
   role: string;
+  canEdit: boolean;
 }
 
 const NAV = [
@@ -25,32 +23,51 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
   const [me, setMe] = useState<MeUser | null>(null);
+  const [impersonating, setImpersonating] = useState<{ tenantId: string; tenantName: string } | null>(null);
+
+  const isLoginPage = pathname === "/admin/login";
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    if (isLoginPage) return;
+    fetch("/api/admin/auth/me")
       .then((r) => r.json())
       .then((d) => {
-        if (d?.success) setMe(d.user);
+        if (d?.success) {
+          setMe(d.user);
+          setImpersonating(d.impersonating || null);
+        } else {
+          router.replace("/admin/login");
+        }
       })
       .catch(() => {});
-  }, []);
+  }, [isLoginPage, router]);
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/admin/auth/logout", { method: "POST" });
     } catch {
-      /* ignora — segue para o login mesmo assim */
+      /* segue para o login mesmo assim */
     }
-    router.push("/login");
+    router.push("/admin/login");
   };
 
-  const canEdit = me ? EDIT_ROLES.includes(me.role) : false;
+  const stopImpersonation = async () => {
+    try {
+      await fetch("/api/admin/impersonation/stop", { method: "POST" });
+    } catch {
+      /* ignora */
+    }
+    setImpersonating(null);
+  };
+
+  // A tela de login não usa o chrome do painel.
+  if (isLoginPage) return <>{children}</>;
+
   const roleLabel =
     me?.role === "SUPER_ADMIN" ? "Super Admin" : me?.role === "PLATFORM_ADMIN" ? "Admin" : me?.role === "PLATFORM_SUPPORT" ? "Suporte" : me?.role || "";
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900">
-      {/* Sidebar */}
       <aside className="w-60 shrink-0 bg-white border-r border-slate-200 flex flex-col justify-between p-4">
         <div className="space-y-6">
           <div className="flex items-center gap-3 px-2 py-1">
@@ -83,9 +100,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               );
             })}
             <div className="pt-3 mt-2 border-t border-slate-200">
-              <span className="px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
-                Financeiro
-              </span>
+              <span className="px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">Financeiro</span>
               <Link
                 href="/admin/billing"
                 className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors"
@@ -114,9 +129,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
+        {impersonating && (
+          <div className="bg-amber-500 text-amber-950 px-6 py-2 text-xs font-semibold flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2">
+              <UserCog className="w-4 h-4" /> Você tem uma personificação ativa: <b>{impersonating.tenantName}</b>
+            </span>
+            <span className="flex items-center gap-3">
+              <a href="/app" className="underline hover:no-underline">abrir o sistema do hotel</a>
+              <button onClick={stopImpersonation} className="px-2 py-0.5 rounded bg-amber-950 text-amber-50 hover:bg-amber-900">
+                encerrar
+              </button>
+            </span>
+          </div>
+        )}
         <header className="h-14 bg-white border-b border-slate-200 px-6 flex items-center justify-between">
           <h1 className="text-base font-semibold text-slate-900 tracking-tight">Console de Gestão da Plataforma</h1>
-          {!canEdit && me && (
+          {me && !me.canEdit && (
             <span className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full">
               <ShieldCheck className="w-3.5 h-3.5" /> Somente visualização
             </span>
