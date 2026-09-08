@@ -162,8 +162,11 @@ próprio (D4) e a limpeza do `admin/page.tsx` (tirar valores hardcoded, layout r
 - `GET /api/admin/plans` = catálogo para o seletor de plano.
 - 1º `SUPER_ADMIN` de plataforma semeado (`superadmin@hoteisnet.local`).
 
-**Fase 1b (a fazer) — UI:** tela `admin/tenants` real em **tema claro** (lista + busca + filtros +
-form criar/editar), usando a skill `vercel:shadcn`.
+**Fase 1b ✅ (08/09/2026) — UI:** `admin/layout.tsx` refeito em tema claro fixo com nav real;
+`admin/tenants/page.tsx` real (lista + busca + filtro + paginação + modais de cadastro/edição,
+ViaCEP, senha temporária mostrada 1x). O projeto não usa shadcn/ui — reaproveitado o helper de
+classes `cadastroUI(false)`. `admin/page.tsx`, `admin/ai-telemetry`, `admin/support` seguem mock
+dark (convertidos nas fases seguintes).
 
 **Fase 1c (a fazer):** `/admin/login` separado com cookie próprio (D4) + **impersonation**
 "entrar como" com banner e `PlatformAuditLog`.
