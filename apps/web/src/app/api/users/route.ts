@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     where: isSuperAdmin ? {} : { tenantId: { in: [tenantId, DEFAULT_TENANT_ID] } },
     orderBy: { createdAt: "asc" },
     select: {
-      id: true, name: true, email: true, role: true, active: true, createdAt: true, updatedAt: true,
+      id: true, name: true, email: true, role: true, phone: true, active: true, createdAt: true, updatedAt: true,
       tenantId: true,
       tenant: { select: { id: true, name: true } },
     },
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, email, password, role, tenantId: requestedTenantId } = body;
+    const { name, email, password, role, phone, tenantId: requestedTenantId } = body;
 
     if (!name || !email || !password) {
       return NextResponse.json({ success: false, error: "Nome, e-mail e senha são obrigatórios." }, { status: 400 });
@@ -74,6 +74,7 @@ export async function POST(req: NextRequest) {
         email: String(email).toLowerCase().trim(),
         passwordHash,
         role: finalRole,
+        phone: phone ? String(phone).trim() : null,
       },
       select: { id: true, name: true, email: true, role: true, active: true, createdAt: true, tenantId: true, tenant: { select: { id: true, name: true } } },
     });
@@ -105,7 +106,7 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { id, name, role, active, password } = body;
+    const { id, name, role, active, password, phone } = body;
 
     if (!id) {
       return NextResponse.json({ success: false, error: "ID do usuário é obrigatório." }, { status: 400 });
@@ -127,6 +128,7 @@ export async function PATCH(req: NextRequest) {
     const validRoles = ["SUPER_ADMIN", "TENANT_ADMIN", "RECEPCIONIST", "GOVERNESS", "FINANCIAL"];
     const data: Record<string, unknown> = {};
     if (name !== undefined) data.name = String(name).trim();
+    if (phone !== undefined) data.phone = phone ? String(phone).trim() : null;
     if (role !== undefined) {
       // TENANT_ADMIN não pode promover ninguém a SUPER_ADMIN nem alterar o papel de um SUPER_ADMIN.
       if (!isSuperAdmin && (role === "SUPER_ADMIN" || target.role === "SUPER_ADMIN")) {

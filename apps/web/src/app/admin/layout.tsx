@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, Settings, ShieldCheck, UserCog } from "lucide-react";
+import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, MessageSquare, Settings, ShieldCheck, UserCog } from "lucide-react";
 
 interface MeUser {
   name: string;
@@ -17,6 +17,7 @@ const NAV = [
   { href: "/admin/tenants", label: "Assinantes & Hotéis", icon: Building2 },
   { href: "/admin/ai-telemetry", label: "Telemetria & IA", icon: Cpu },
   { href: "/admin/support", label: "Suporte", icon: LifeBuoy },
+  { href: "/admin/messages", label: "Mensagens", icon: MessageSquare },
   { href: "/admin/settings", label: "Configuração", icon: Settings },
 ];
 

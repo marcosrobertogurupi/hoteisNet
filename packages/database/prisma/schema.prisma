@@ -316,6 +316,31 @@ enum SaaSInvoiceStatus {
 // RAG leve (o acervo é pequeno o suficiente para caber no prompt — sem embeddings/pgvector por
 // enquanto). Distinta do SupportKnowledgeBase, que é por-tenant e serve ao agente de atendimento
 // ao HÓSPEDE. Gerenciada só no painel /admin.
+// Log das mensagens que a plataforma (painel /admin → Mensagens) enviou aos assinantes por
+// WhatsApp — 1:1 (assinante ou pessoa) ou em massa (segmento). Sempre pela instância uazapi DA
+// PLATAFORMA (UAZAPI_FALLBACK_*), nunca pela do hotel. RLS habilitado.
+model PlatformMessageLog {
+  id            String   @id @default(uuid())
+  tenantId      String?
+  targetUserId  String?
+  targetPhone   String
+  targetLabel   String?  // nome do destinatário para a listagem
+  kind          String   @default("TEXT") // TEXT | DOCUMENT | AUDIO
+  body          String?  // texto ou legenda
+  mediaFilename String?
+  batchId       String?  // agrupa um envio em massa
+  status        String   @default("SENT") // SENT | FAILED
+  error         String?
+  sentById      String?
+  sentByName    String?
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([batchId])
+  @@index([createdAt])
+  @@map("platform_message_logs")
+}
+
 model PlatformSupportDoc {
   id        String   @id @default(uuid())
   title     String
@@ -339,6 +364,9 @@ model User {
   passwordHash        String
   role                UserRole        @default(RECEPCIONIST)
   avatarUrl           String?
+  // WhatsApp do usuário (DDD + número). Usado pela plataforma para falar direto com uma pessoa
+  // do hotel (painel /admin → Mensagens). Opcional; sem ele, a plataforma cai no telefone do tenant.
+  phone               String?
   active              Boolean         @default(true)
   // Incrementado ao desativar o usuário, trocar senha ou mudar o role — invalida instantaneamente
   // qualquer JWT de sessão já emitido antes da mudança (ver getSessionUser em lib/auth.ts).

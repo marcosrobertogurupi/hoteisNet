@@ -232,7 +232,18 @@ dark (convertidos nas fases seguintes).
   `AI_ANSWERED`; senão fica `OPEN` para a equipe (N1). Respeita bloqueio/cota; uso em `AIUsageLog`.
   "Aprendizado" = resolver com título vira `PlatformSupportDoc`. CRUD no `admin/support`.
 
-**Fase 5 concluída.** Falta: Fase 6 (comunicação), 7 (config/equipe).
+**Fase 5 concluída.**
+
+### Fase 6 — Comunicação com assinantes ✅ (08/09/2026)
+- `lib/platformWhatsApp.ts` — texto / documento / áudio pela instância uazapi DA PLATAFORMA
+  (`UAZAPI_FALLBACK_*`). Modelo `PlatformMessageLog` (RLS) + `User.phone`.
+- `POST /api/admin/messages` — escopo `user` / `tenant` / `segment` (massa: filtro por plano e
+  situação, teto 300); `dryRun` para a prévia; 1 log por destinatário + `batchId`; auditado.
+- Tela `admin/messages` (tema claro): compositor (escopo + tipo + upload → base64 5MB +
+  confirmação com contagem) + histórico. Nav "Mensagens".
+- Env: `UAZAPI_FALLBACK_SERVER_URL` / `UAZAPI_FALLBACK_INSTANCE_TOKEN`.
+
+Falta: Fase 7 (config global — status das chaves + equipe do painel com MFA).
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido
