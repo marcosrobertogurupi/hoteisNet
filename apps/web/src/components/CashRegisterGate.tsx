@@ -23,7 +23,16 @@ export default function CashRegisterGate({ children }: { children: React.ReactNo
   const [fundoTroco, setFundoTroco] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Usuários da plataforma (SuperAdmin/equipe) têm tenantId nulo e não pertencem a nenhum hotel —
+  // não podem abrir caixa (a rota /api/caixa/abrir exige tenant) e não devem ser bloqueados aqui.
+  const isPlatformUser = !!user && !user.tenantId;
+
   const checkSessao = useCallback(async () => {
+    if (isPlatformUser) {
+      setCaixaAberto(true);
+      setChecking(false);
+      return;
+    }
     try {
       const res = await fetch("/api/caixa/sessao");
       const data = await res.json();
@@ -33,7 +42,7 @@ export default function CashRegisterGate({ children }: { children: React.ReactNo
     } finally {
       setChecking(false);
     }
-  }, []);
+  }, [isPlatformUser]);
 
   useEffect(() => {
     if (user) checkSessao();

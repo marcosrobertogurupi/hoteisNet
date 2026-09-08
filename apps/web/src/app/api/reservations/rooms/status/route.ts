@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { roomsStatusMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { roomsStatusPayload } from "@/lib/mapQueries";
+import { jsonForTenant } from "@/lib/tenantResponse";
 
 // GET /api/reservations/rooms/status — versão enxuta de /api/reservations/rooms usada pelo
 // polling de 3s do Mapa de Quartos. Traz só os campos que realmente mudam em tempo real (status,
@@ -26,7 +27,8 @@ export async function GET(req: NextRequest) {
     // /api/mapa/reservas-tick.
     const { rooms, todayReservations } = await roomsStatusPayload(session.tenantId);
 
-    return NextResponse.json(
+    return jsonForTenant(
+      session.tenantId,
       { success: true, rooms, todayReservations },
       { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
     );

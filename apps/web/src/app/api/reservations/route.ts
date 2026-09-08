@@ -7,6 +7,7 @@ import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
 import { txWithRetry } from "@/lib/dbTx";
 import { processReservationDeposit, reverseReservationDeposits } from "@/lib/paymentProcessing";
+import { jsonForTenant } from "@/lib/tenantResponse";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
@@ -36,7 +37,8 @@ export async function GET(req: NextRequest) {
 
     const reservations = await reservationsMapPayload(session.tenantId);
 
-    return NextResponse.json(
+    return jsonForTenant(
+      session.tenantId,
       { success: true, reservations },
       { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } },
     );

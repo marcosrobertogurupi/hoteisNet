@@ -113,6 +113,7 @@ model Tenant {
   // quando o assinante tem CNPJ e ASAAS_API_KEY está configurado. null = cobrança manual.
   asaasCustomerId            String?
   saasInvoices               SaaSInvoice[]
+  egressDaily                 TenantEgressDaily[]
   createdAt                  DateTime                @default(now())
   updatedAt                  DateTime                @updatedAt
   dailyRolloverTime          String                  @default("14:30")
@@ -345,6 +346,25 @@ model AIUsageLog {
   tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("ai_usage_logs")
+}
+
+// Volume de dados (egress) que cada assinante puxa do banco por dia — instrumentado no cliente
+// Prisma (extensão em apps/web/src/lib/prisma.ts) que soma o tamanho dos resultados de leitura e
+// atribui ao tenant da requisição (AsyncLocalStorage, ver lib/tenantContext.ts). Serve para o
+// painel admin identificar qual hotel domina o consumo do Supabase (Shared Pooler Egress ~90%).
+// NUNCA exposto ao próprio assinante — só no painel /admin. Ver CLAUDE.md > Implementações futuras.
+model TenantEgressDaily {
+  id            String   @id @default(uuid())
+  tenantId      String
+  day           DateTime @db.Date
+  responseBytes BigInt   @default(0)
+  queryCount    Int      @default(0)
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, day])
+  @@index([day])
+  @@map("tenant_egress_daily")
 }
 
 // Trilha de auditoria: registra quem fez o quê, quando e de qual terminal/IP, para

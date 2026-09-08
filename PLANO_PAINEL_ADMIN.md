@@ -202,7 +202,18 @@ dark (convertidos nas fases seguintes).
   avulsa (`POST /api/admin/tenants/[id]/invoices`). Rotas `GET /api/admin/billing`,
   `GET /api/admin/invoices`, `PATCH /api/admin/invoices/[id]`.
 
-**Fase 3 concluída.** Falta: Fase 4 (dashboards/egress), 5 (suporte IA), 6 (comunicação), 7 (config/equipe).
+**Fase 3 concluída.**
+
+### Fase 4 — Observabilidade e dashboards (em andamento)
+- **4a ✅ (08/09/2026):** `admin/page.tsx` = dashboard real (tema claro, `GET /api/admin/dashboard`
+  — MRR/ARR, assinantes por status, IA 30d por recurso, CPF, tickets, top-5 egress).
+  **Egress por assinante:** `TenantEgressDaily` + `jsonForTenant` nas rotas de polling dos mapas
+  + `egressMeter` (buffer em memória, flush 30s). `admin/settings` (tema claro) recolhe os
+  controles reais que estavam no mock (cota CPF, IA por assinante, release crítico).
+- **4b (a fazer):** `admin/ai-telemetry` real (por assinante + por recurso) e alertas
+  determinísticos no worker (cota IA estourada, instância WhatsApp caída, pagamento falho).
+
+Falta: Fase 5 (suporte IA), 6 (comunicação), 7 (config/equipe).
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido
