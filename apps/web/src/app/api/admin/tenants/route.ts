@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
             select: { plan: { select: { name: true, aiTokenQuota: true, priceMonthly: true } }, nextBilling: true },
           },
           aiAgentSettings: {
-            select: { systemPromptExtra: true, tokenQuotaOverride: true, blocked: true },
+            select: { systemPromptExtra: true, operationalSystemPromptExtra: true, tokenQuotaOverride: true, blocked: true },
           },
           _count: { select: { users: true, rooms: true } },
         },
@@ -103,6 +103,7 @@ export async function GET(req: NextRequest) {
         cpfQueryCycleStart: t.cpfQueryCycleStart,
         cpfQueryEnabled: t.cpfQueryEnabled,
         aiSystemPromptExtra: t.aiAgentSettings?.systemPromptExtra || "",
+        aiOperationalPromptExtra: t.aiAgentSettings?.operationalSystemPromptExtra || "",
         aiTokenQuotaOverride: t.aiAgentSettings?.tokenQuotaOverride ?? null,
         aiBlocked: t.aiAgentSettings?.blocked || false,
       })),

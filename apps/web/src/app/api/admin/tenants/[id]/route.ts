@@ -163,8 +163,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
 
     // --- Config de IA (AIAgentSetting) — exclusiva do painel admin ---
-    const { aiSystemPromptExtra, aiTokenQuotaOverride, aiBlocked } = body;
-    if (aiSystemPromptExtra !== undefined || aiTokenQuotaOverride !== undefined || aiBlocked !== undefined) {
+    // aiSystemPromptExtra = persona do Agente de Atendimento; aiOperationalPromptExtra = persona
+    // do Agente Operacional. O assinante nunca edita nenhum dos dois (só presets de tom na tela dele).
+    const { aiSystemPromptExtra, aiOperationalPromptExtra, aiTokenQuotaOverride, aiBlocked } = body;
+    if (
+      aiSystemPromptExtra !== undefined ||
+      aiOperationalPromptExtra !== undefined ||
+      aiTokenQuotaOverride !== undefined ||
+      aiBlocked !== undefined
+    ) {
       if (aiTokenQuotaOverride !== undefined && aiTokenQuotaOverride !== null) {
         if (typeof aiTokenQuotaOverride !== "number" || aiTokenQuotaOverride < 0 || !Number.isInteger(aiTokenQuotaOverride)) {
           return NextResponse.json({ success: false, error: "aiTokenQuotaOverride deve ser inteiro ≥ 0 ou null." }, { status: 400 });
@@ -172,6 +179,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
       const aiData: Record<string, any> = {};
       if (aiSystemPromptExtra !== undefined) aiData.systemPromptExtra = aiSystemPromptExtra || null;
+      if (aiOperationalPromptExtra !== undefined) aiData.operationalSystemPromptExtra = aiOperationalPromptExtra || null;
       if (aiTokenQuotaOverride !== undefined) aiData.tokenQuotaOverride = aiTokenQuotaOverride;
       if (aiBlocked !== undefined) aiData.blocked = !!aiBlocked;
       await prisma.aIAgentSetting.upsert({ where: { tenantId: id }, create: { tenantId: id, ...aiData }, update: aiData });

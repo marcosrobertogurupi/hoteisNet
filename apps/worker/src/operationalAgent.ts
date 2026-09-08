@@ -417,14 +417,24 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
 // si é sempre determinística (queries acima), o LLM entra só para redigir a mensagem final.
 // autoActionNotes: ações que o próprio agente já tomou (modo AUTONOMOUS_LIMITED, ver
 // runAutonomousActions) — o resumo deve mencioná-las para a equipe saber o que já foi feito.
-async function composeAlertMessage(hotelName: string, issues: DetectedIssue[], autoActionNotes: string[] = []): Promise<string> {
+async function composeAlertMessage(
+  hotelName: string,
+  issues: DetectedIssue[],
+  autoActionNotes: string[] = [],
+  personaExtra?: string | null
+): Promise<string> {
   const bulletList = issues.map((i) => `- ${i.description}`).join("\n");
   const actionsList = autoActionNotes.length > 0 ? `\n\nAções que o agente já tomou automaticamente:\n${autoActionNotes.map((n) => `- ${n}`).join("\n")}` : "";
   const hasIssues = issues.length > 0;
+  // Instruções de estilo/personalidade definidas pelo admin da plataforma para este hotel
+  // (AIAgentSetting.operationalSystemPromptExtra). NUNCA sobrescrevem as regras de formato abaixo.
+  const personaLine = personaExtra?.trim()
+    ? `\n\nInstruções de estilo definidas para este hotel (siga sem quebrar as regras acima):\n${personaExtra.trim()}`
+    : "";
   try {
     const prompt = hasIssues
-      ? `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}${actionsList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Se houver ações já tomadas automaticamente, mencione isso brevemente. Não use markdown. Não mencione que você é uma IA.`
-      : `Você é o agente operacional do sistema do hotel "${hotelName}". Você tomou automaticamente as seguintes ações e precisa avisar a recepção/gerência:\n${autoActionNotes.map((n) => `- ${n}`).join("\n")}\n\nEscreva um aviso curto e direto em português do Brasil para WhatsApp. Não use markdown. Não mencione que você é uma IA.`;
+      ? `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}${actionsList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Se houver ações já tomadas automaticamente, mencione isso brevemente. Não use markdown. Não mencione que você é uma IA.${personaLine}`
+      : `Você é o agente operacional do sistema do hotel "${hotelName}". Você tomou automaticamente as seguintes ações e precisa avisar a recepção/gerência:\n${autoActionNotes.map((n) => `- ${n}`).join("\n")}\n\nEscreva um aviso curto e direto em português do Brasil para WhatsApp. Não use markdown. Não mencione que você é uma IA.${personaLine}`;
     const text = await generateSummaryText(prompt);
     return text.trim();
   } catch {
@@ -904,7 +914,7 @@ async function runOperationalAgentInner(): Promise<void> {
         ...kbAutoNotes, // correções que runKnowledgeDrift já aplicou (fora do fluxo de claimed)
       ];
 
-      const message = await composeAlertMessage(hotelName, toNotify, autoActionNotes);
+      const message = await composeAlertMessage(hotelName, toNotify, autoActionNotes, setting.operationalSystemPromptExtra);
       const sent = await sendUazapiText(prisma, setting.alertPhone!, message, setting.tenantId);
 
       if (toNotify.length > 0) {

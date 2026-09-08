@@ -1587,6 +1587,13 @@ model AIAgentSetting {
   tokenQuotaOverride Int? // sobrescreve SaaSPlan.aiTokenQuota para este tenant, se definido
   blocked            Boolean @default(false) // força desligar os dois agentes, independente dos toggles do assinante
 
+  // --- Agente Operacional (admin master) ---
+  // Instruções extras de estilo/personalidade aplicadas às mensagens de alerta do agente
+  // operacional (apps/worker/src/operationalAgent.ts). Só o admin da plataforma edita — o
+  // assinante nunca vê nem altera o prompt cru (ver painel /admin/settings e a memória
+  // ai-agent-control-centralized-in-admin).
+  operationalSystemPromptExtra String?
+
   // --- Agente Operacional (assinante) ---
   monitoringEnabled       Boolean                 @default(false)
   alertPhone              String? // número WhatsApp que recebe alertas do agente operacional

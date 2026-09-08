@@ -215,8 +215,19 @@ dark (convertidos nas fases seguintes).
   (`saasMonitor.ts`): cota de IA estourada → 1 alerta/mês (dedup) + WhatsApp para
   `PLATFORM_ALERT_PHONE`.
 
-**Fase 4 concluída.** Falta: Fase 5 (suporte IA + prompt dos agentes), 6 (comunicação),
-7 (config/equipe).
+**Fase 4 concluída.**
+
+### Fase 5 — Suporte com IA + prompt dos agentes (em andamento)
+- **5a ✅ (08/09/2026):** `AIAgentSetting.operationalSystemPromptExtra` (novo) + `systemPromptExtra`
+  (existente) = persona dos **dois** agentes por assinante, geridas em `admin/settings`.
+  Operacional injetado em `composeAlertMessage` (worker). Edição só admin de plataforma, auditada.
+- **5b (a fazer):** conectar `admin/support` aos modelos reais (`SupportTicket`/`TicketMessage`),
+  Central de Ajuda no app do assinante, resposta humana + resolver.
+- **5c (a fazer):** agente de IA de suporte ao assinante — Gemini via AI Gateway, RAG sobre
+  `SupportKnowledgeBase` + docs (pgvector), funil IA → N1 → N2, vetorização das resoluções.
+  *(Peça grande, com decisões de arquitetura próprias.)*
+
+Falta: Fase 6 (comunicação), 7 (config/equipe).
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido

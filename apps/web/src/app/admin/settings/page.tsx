@@ -17,6 +17,7 @@ interface TenantCfg {
   cpfQueryUsed: number;
   cpfQueryEnabled: boolean;
   aiSystemPromptExtra: string;
+  aiOperationalPromptExtra: string;
   aiTokenQuotaOverride: number | null;
   aiBlocked: boolean;
 }
@@ -30,7 +31,7 @@ export default function AdminSettingsPage() {
   const [canEdit, setCanEdit] = useState(false);
   const [tenants, setTenants] = useState<TenantCfg[]>([]);
   const [loading, setLoading] = useState(true);
-  const [drafts, setDrafts] = useState<Record<string, { cpfQuota: string; aiPrompt: string; aiOverride: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { cpfQuota: string; aiPrompt: string; aiOpPrompt: string; aiOverride: string }>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
 
   const [release, setRelease] = useState<Release | null>(null);
@@ -50,6 +51,7 @@ export default function AdminSettingsPage() {
         setDrafts(Object.fromEntries(d.tenants.map((t: TenantCfg) => [t.id, {
           cpfQuota: String(t.cpfQueryQuotaMonthly),
           aiPrompt: t.aiSystemPromptExtra || "",
+          aiOpPrompt: t.aiOperationalPromptExtra || "",
           aiOverride: t.aiTokenQuotaOverride == null ? "" : String(t.aiTokenQuotaOverride),
         }])));
       }
@@ -156,7 +158,7 @@ export default function AdminSettingsPage() {
         </div>
         <div className="divide-y divide-slate-200">
           {tenants.map((t) => {
-            const dr = drafts[t.id] || { cpfQuota: "", aiPrompt: "", aiOverride: "" };
+            const dr = drafts[t.id] || { cpfQuota: "", aiPrompt: "", aiOpPrompt: "", aiOverride: "" };
             return (
               <div key={t.id} className="p-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -198,18 +200,27 @@ export default function AdminSettingsPage() {
                     </div>
                   </div>
                   <div className="space-y-1 md:col-span-3">
-                    <label className={c.label + " flex items-center gap-1.5"}><Cpu className="w-3.5 h-3.5 text-violet-500" /> Prompt de personalidade do agente de atendimento (só o admin edita)</label>
+                    <label className={c.label + " flex items-center gap-1.5"}><Cpu className="w-3.5 h-3.5 text-violet-500" /> Prompt de personalidade do <b>Agente de Atendimento</b> (WhatsApp do hóspede)</label>
+                    <p className="text-[10px] text-slate-400">Base do sistema: responde dúvidas de hóspedes, consulta reservas/tarifas/serviços e escala para humano quando não sabe. O texto abaixo ajusta só o tom/estilo — nunca substitui as regras. O assinante não vê isto.</p>
                     <textarea rows={2} value={dr.aiPrompt} disabled={!canEdit}
                       onChange={(e) => setDrafts((p) => ({ ...p, [t.id]: { ...dr, aiPrompt: e.target.value } }))} className={c.field}
                       placeholder="Ex.: Trate os hóspedes de forma calorosa e regional, mencionando sempre o café da manhã caseiro." />
+                  </div>
+                  <div className="space-y-1 md:col-span-3">
+                    <label className={c.label + " flex items-center gap-1.5"}><Cpu className="w-3.5 h-3.5 text-amber-500" /> Prompt de personalidade do <b>Agente Operacional</b> (alertas para a equipe)</label>
+                    <p className="text-[10px] text-slate-400">Base do sistema: detecta problemas operacionais (FNRH presa, quarto sujo há horas, reserva sem quarto…) e envia um resumo por WhatsApp à gerência. O texto abaixo ajusta só o tom das mensagens de alerta.</p>
+                    <textarea rows={2} value={dr.aiOpPrompt} disabled={!canEdit}
+                      onChange={(e) => setDrafts((p) => ({ ...p, [t.id]: { ...dr, aiOpPrompt: e.target.value } }))} className={c.field}
+                      placeholder="Ex.: Seja bem objetivo e comece sempre com 'Bom dia, equipe do <hotel>'." />
                     {canEdit && (
                       <div className="flex justify-end">
                         <button disabled={savingId === t.id} onClick={() => patchTenant(t.id, {
                           aiSystemPromptExtra: dr.aiPrompt,
+                          aiOperationalPromptExtra: dr.aiOpPrompt,
                           aiTokenQuotaOverride: dr.aiOverride.trim() === "" ? null : Number(dr.aiOverride),
                         }, "Configuração de IA do assinante salva.")}
                           className="mt-1 px-4 py-1.5 rounded-lg bg-violet-500 hover:bg-violet-600 text-white text-xs font-bold disabled:opacity-50">
-                          {savingId === t.id ? "Salvando…" : "Salvar prompt + cota de IA"}
+                          {savingId === t.id ? "Salvando…" : "Salvar prompts + cota de IA"}
                         </button>
                       </div>
                     )}
