@@ -15,6 +15,7 @@ const DEFAULTS = {
   operationalAutonomyMode: "ALERT_ONLY" as OperationalAutonomyMode,
   knowledgeReviewIntervalDays: 90,
   knowledgeAutoRewriteEnabled: false,
+  waitlistAutoOfferEnabled: false,
 };
 
 // GET /api/tenant/ai-agent-settings — configuração do agente de IA que o ASSINANTE controla:
@@ -45,6 +46,7 @@ export async function GET(req: NextRequest) {
             operationalAutonomyMode: settings.operationalAutonomyMode,
             knowledgeReviewIntervalDays: settings.knowledgeReviewIntervalDays,
             knowledgeAutoRewriteEnabled: settings.knowledgeAutoRewriteEnabled,
+            waitlistAutoOfferEnabled: settings.waitlistAutoOfferEnabled,
           }
         : DEFAULTS,
     });
@@ -86,6 +88,7 @@ export async function PATCH(req: NextRequest) {
       if (Number.isFinite(n) && n >= 7 && n <= 365) data.knowledgeReviewIntervalDays = n;
     }
     if (fields.knowledgeAutoRewriteEnabled !== undefined) data.knowledgeAutoRewriteEnabled = !!fields.knowledgeAutoRewriteEnabled;
+    if (fields.waitlistAutoOfferEnabled !== undefined) data.waitlistAutoOfferEnabled = !!fields.waitlistAutoOfferEnabled;
 
     await prisma.aIAgentSetting.upsert({
       where: { tenantId: resolvedTenantId },

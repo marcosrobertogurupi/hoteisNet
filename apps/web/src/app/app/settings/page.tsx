@@ -212,6 +212,7 @@ export default function SubscriberSettingsPage() {
   const [aiAgentEnabled, setAiAgentEnabled] = useState(false);
   const [aiAgentAutoConfirm, setAiAgentAutoConfirm] = useState(false);
   const [aiAgentAllowCancel, setAiAgentAllowCancel] = useState(false);
+  const [aiAgentWaitlistAutoOffer, setAiAgentWaitlistAutoOffer] = useState(false);
   const [aiAgentDisplayName, setAiAgentDisplayName] = useState("");
   const [aiAgentAvatarUrl, setAiAgentAvatarUrl] = useState("");
   const [aiAgentAvatarUploadError, setAiAgentAvatarUploadError] = useState<string | null>(null);
@@ -560,6 +561,7 @@ export default function SubscriberSettingsPage() {
         setAiAgentEnabled(!!s.enabled);
         setAiAgentAutoConfirm(!!s.autoConfirmReservations);
         setAiAgentAllowCancel(!!s.allowAgentCancelReservation);
+        setAiAgentWaitlistAutoOffer(!!s.waitlistAutoOfferEnabled);
         setAiAgentDisplayName(s.agentDisplayName || "");
         setAiAgentAvatarUrl(s.agentAvatarUrl || "");
         setAiAgentTonePreset(s.tonePreset || "PROFISSIONAL");
@@ -752,6 +754,7 @@ export default function SubscriberSettingsPage() {
           enabled: aiAgentEnabled,
           autoConfirmReservations: aiAgentAutoConfirm,
           allowAgentCancelReservation: aiAgentAllowCancel,
+          waitlistAutoOfferEnabled: aiAgentWaitlistAutoOffer,
           agentDisplayName: aiAgentDisplayName,
           agentAvatarUrl: aiAgentAvatarUrl,
           tonePreset: aiAgentTonePreset,
@@ -2914,6 +2917,16 @@ export default function SubscriberSettingsPage() {
                 className="w-4 h-4 accent-violet-500"
               />
               Permitir que o agente cancele reservas a pedido do hóspede (cancelamento reversível — nunca de hospedagem com check-in já feito, isso sempre vai para a recepção)
+            </label>
+
+            <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiAgentWaitlistAutoOffer}
+                onChange={(e) => setAiAgentWaitlistAutoOffer(e.target.checked)}
+                className="w-4 h-4 accent-violet-500"
+              />
+              Fila de espera: quando abrir uma vaga, o agente avisa o próximo da fila pelo WhatsApp e registra a reserva sozinho quando o hóspede aceita (sem isso, só a recepção é avisada e conduz)
             </label>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

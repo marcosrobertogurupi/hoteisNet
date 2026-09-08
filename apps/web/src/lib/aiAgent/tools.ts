@@ -7,7 +7,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
-import { findConflictingReservation, findBlockingOpenStay, stayOccupiedUntil } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, busyRoomIdsForPeriod } from "@/lib/reservationHelpers";
 import { sendUazapiImage } from "@/lib/uazapi";
 import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
@@ -74,30 +74,10 @@ function floorMatches(roomFloor: string | null | undefined, query: string): bool
 }
 
 // Conjunto de ids de quartos ocupados (reserva ativa/futura ou hospedagem em aberto) que se
-// sobrepõem ao período pedido. Reaproveitado por checkAvailability e pelas tools de quarto/andar.
-async function busyRoomIdsForPeriod(roomIds: string[], checkIn: Date, checkOut: Date): Promise<Set<string>> {
-  if (roomIds.length === 0) return new Set();
-  const [overlappingReservations, openStays] = await Promise.all([
-    prisma.reservation.findMany({
-      where: {
-        roomId: { in: roomIds },
-        status: { in: ["PRE_RESERVATION", "CONFIRMED", "CHECKED_IN"] },
-        checkInDate: { lt: checkOut },
-        checkOutDate: { gt: checkIn },
-      },
-      select: { roomId: true },
-    }),
-    // Hospedagens em aberto: NUNCA filtrar por `expectedCheckOut > checkIn` — um hóspede em
-    // overstay (saída prevista no passado, hospedagem ainda não finalizada) continua ocupando o
-    // quarto. Traz as candidatas e filtra pela ocupação efetiva (stayOccupiedUntil), a mesma régua
-    // do Mapa de Reservas.
-    prisma.stayCheckin.findMany({
-      where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut } },
-      select: { roomId: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
-    }),
-  ]);
-  const busyByStay = openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId);
-  return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...busyByStay]);
+// sobrepõem ao período pedido. A lógica vive em lib/reservationHelpers.ts (compartilhada com o
+// match da fila de espera); aqui é só um wrapper que já fixa o client `prisma`.
+async function busyRoomsForPeriod(roomIds: string[], checkIn: Date, checkOut: Date): Promise<Set<string>> {
+  return busyRoomIdsForPeriod(prisma, roomIds, checkIn, checkOut);
 }
 
 async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date, adults: number) {
@@ -119,7 +99,7 @@ async function checkAvailability(tenantId: string, checkIn: Date, checkOut: Date
   if (roomIds.length === 0) return { disponibilidade: [], espacosEventos };
 
   const [busyRoomIds, tariff] = await Promise.all([
-    busyRoomIdsForPeriod(roomIds, checkIn, checkOut),
+    busyRoomsForPeriod(roomIds, checkIn, checkOut),
     resolveTariff(prisma, tenantId, adults),
   ]);
 
@@ -176,7 +156,7 @@ async function checkRoomByNumber(tenantId: string, roomNumber: string, checkIn: 
     };
   }
 
-  const busy = await busyRoomIdsForPeriod([room.id], checkIn, checkOut);
+  const busy = await busyRoomsForPeriod([room.id], checkIn, checkOut);
   const tariff = await resolveTariff(prisma, tenantId, adults);
   return {
     encontrado: true,
@@ -210,7 +190,7 @@ async function listRoomsByFloor(tenantId: string, andar: string | undefined, che
   }
 
   const [busy, tariff] = await Promise.all([
-    busyRoomIdsForPeriod(filtered.map((r) => r.id), checkIn, checkOut),
+    busyRoomsForPeriod(filtered.map((r) => r.id), checkIn, checkOut),
     resolveTariff(prisma, tenantId, adults),
   ]);
 

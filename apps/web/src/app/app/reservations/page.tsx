@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { CalendarDays, Plus, Layers, Search, Building2, CheckCircle2, Clock, LayoutGrid, List, RefreshCw } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import { CalendarDays, Plus, Layers, Search, Building2, CheckCircle2, Clock, LayoutGrid, List, RefreshCw, Hourglass } from "lucide-react";
 import ReservationGridMap from "@/components/ReservationGridMap";
 import LancarReservaModal from "@/components/LancarReservaModal";
 import ReservasMultiplasModal from "@/components/ReservasMultiplasModal";
+import WaitlistPanel from "@/components/WaitlistPanel";
 import { useTheme } from "@/context/ThemeContext";
 import { isReservationExpired } from "@/utils/reservationTolerance";
 import LoadingOverlay from "@/components/LoadingOverlay";
@@ -13,7 +14,8 @@ import { usePolling } from "@/lib/usePolling";
 
 export default function TenantReservationsPage() {
   const { defaultCheckInTime, reservationToleranceHours } = useTheme();
-  const [activeTab, setActiveTab] = useState<"GRID" | "LIST">("GRID");
+  const [activeTab, setActiveTab] = useState<"GRID" | "LIST" | "WAITLIST">("GRID");
+  const [waitlistActiveCount, setWaitlistActiveCount] = useState(0);
   const [showLancarModal, setShowLancarModal] = useState(false);
   const [showMultiplasModal, setShowMultiplasModal] = useState(false);
   const [uazapiSentSuccess, setUazapiSentSuccess] = useState<string | null>(null);
@@ -66,6 +68,18 @@ export default function TenantReservationsPage() {
   usePolling(fetchReservations, 3000, {
     paused: showLancarModal || showMultiplasModal || reservationMoveBusy,
   });
+
+  // Contagem da fila de espera para o badge da aba — uma chamada ao montar (não entra no polling
+  // de 3 s para não inflar egress). O WaitlistPanel mantém o número atualizado enquanto a aba
+  // está aberta via onActiveCountChange.
+  useEffect(() => {
+    fetch("/api/waitlist")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success && Array.isArray(d.entries)) setWaitlistActiveCount(d.entries.length);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSendUazapiLink = async (resId: string) => {
     setSendingLinkId(resId);
@@ -181,6 +195,22 @@ export default function TenantReservationsPage() {
               <List className="w-4 h-4" />
               Lista Sintética
             </button>
+            <button
+              onClick={() => setActiveTab("WAITLIST")}
+              className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${
+                activeTab === "WAITLIST"
+                  ? "bg-[#0284C7] text-white shadow-lg shadow-[#0284C7]/20"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <Hourglass className="w-4 h-4" />
+              Fila de Espera
+              {waitlistActiveCount > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold flex items-center justify-center">
+                  {waitlistActiveCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
       </div>
@@ -207,6 +237,8 @@ export default function TenantReservationsPage() {
           onRefresh={fetchReservations}
           onInteractionChange={setReservationMoveBusy}
         />
+      ) : activeTab === "WAITLIST" ? (
+        <WaitlistPanel onActiveCountChange={setWaitlistActiveCount} />
       ) : (
         <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden">
           <div className="p-4 border-b border-slate-800 flex items-center justify-between">

@@ -6,6 +6,7 @@ import { runCheckoutPrevision } from "./checkoutPrevision";
 import { runPreCheckinFnrh } from "./preCheckinFnrh";
 import { runSnrhosTransmit } from "./snrhosTransmit";
 import { runOperationalAgent } from "./operationalAgent";
+import { runWaitlistAgent } from "./waitlistAgent";
 import { runSaasDunning } from "./saasDunning";
 import { runSaasMonitor } from "./saasMonitor";
 
@@ -44,6 +45,15 @@ cron.schedule("*/5 * * * *", () => {
 cron.schedule("*/15 * * * *", () => {
   runOperationalAgent().catch((err) => {
     console.error("[worker] Erro ao rodar agente operacional:", err);
+  });
+});
+
+// Fila de espera — reavalia a fila de cada tenant e avisa o primeiro quando abre uma vaga da mesma
+// categoria no período. 10 min é frescor de sobra (a Fase 3 adiciona reavaliação imediata nos
+// pontos de cancelamento/check-out).
+cron.schedule("*/10 * * * *", () => {
+  runWaitlistAgent().catch((err) => {
+    console.error("[worker] Erro ao rodar agente da fila de espera:", err);
   });
 });
 

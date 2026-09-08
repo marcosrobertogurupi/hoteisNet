@@ -230,6 +230,7 @@ model Tenant {
   comandaDebitTransfers      ComandaDebitTransfer[]
   fiscalDocuments            FiscalDocument[]
   stockCounts                StockCount[]
+  waitlistEntries            WaitlistEntry[]
 
   @@map("tenants")
 }
@@ -628,8 +629,82 @@ model RoomCategory {
   tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rooms       Room[]
   minibarKitItems StockedRoomKitItem[]
+  waitlistEntries WaitlistEntry[]
 
   @@map("room_categories")
+}
+
+// Fila de espera para reservas/hospedagem. Quando não há disponibilidade para um período/categoria,
+// o interesse do hóspede é registrado aqui — manualmente pela recepção ou pelo agente de IA no
+// WhatsApp (source). O worker (apps/worker/src/waitlistAgent.ts) reavalia a fila periodicamente e,
+// quando abre uma vaga da MESMA categoria num período que cobre as datas pedidas, avisa o primeiro
+// da fila (createdAt ascendente). Regra travada com o usuário: a reserva tem prioridade absoluta —
+// a fila só recebe um quarto genuinamente livre no período, nunca um bloqueado por reserva
+// (PRE_RESERVATION/CONFIRMED/CHECKED_IN) ou hospedagem em aberto (ver lib/waitlistMatch.ts).
+// tenantId é o tenant real (como StayCheckin), não o literal "TNT-01" das reservas.
+model WaitlistEntry {
+  id       String @id @default(uuid())
+  tenantId String
+
+  // Hóspede — mesmo padrão de Reservation (nome/telefone soltos + guestId opcional)
+  guestName String
+  guestPhone String?
+  guestCpf  String?
+  guestId   String?
+
+  // O que ele quer
+  roomCategoryId   String
+  roomCategoryName String // denormalizado p/ exibição, igual roomCategory na Reservation
+  checkInDate      DateTime
+  checkOutDate     DateTime
+  adults           Int      @default(1)
+  children         Int      @default(0)
+  notes            String?
+
+  // Gestão da fila
+  status WaitlistStatus @default(WAITING)
+  source WaitlistSource @default(MANUAL)
+
+  // Operador que lançou (id estável + nome denormalizado) — record-operator-by-id-not-just-name.
+  // "Agente de IA" em operatorName quando source = AI_AGENT.
+  operatorId   String?
+  operatorName String?
+
+  // Estado do aviso ao primeiro da fila
+  notifiedAt      DateTime?
+  notifyExpiresAt DateTime? // prazo p/ o hóspede aceitar (modo auto); null no aviso manual
+  notifiedRoomId  String? // quarto que abriu e está em "soft hold" p/ esta entrada
+  notifyAttempts  Int       @default(0)
+  // Marca uma confirmação de aceite ainda não efetivada pelo agente de IA (mesmo padrão de dois
+  // turnos de Reservation.agentCancelRequestedAt) — ver accept_waitlist_offer na Fase 2.
+  agentAcceptRequestedAt DateTime?
+
+  // Resultado
+  convertedReservationId String?
+  // "CONVERTED" | "EXPIRED_NO_ANSWER" | "SLOT_LOST" | "CANCELLED_BY_STAFF" | "CANCELLED_BY_GUEST"
+  closedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roomCategory RoomCategory @relation(fields: [roomCategoryId], references: [id])
+
+  @@index([tenantId, status])
+  @@map("waitlist_entries")
+}
+
+enum WaitlistStatus {
+  WAITING // na fila, aguardando vaga
+  NOTIFIED // vaga encontrada, hóspede/recepção avisado, aguardando ação
+  CONVERTED // virou reserva
+  EXPIRED // perdeu a vez (não respondeu no prazo, ou a vaga foi tomada por uma reserva)
+  CANCELLED // saiu da fila (recepção ou hóspede)
+}
+
+enum WaitlistSource {
+  MANUAL
+  AI_AGENT
 }
 
 // Serviços prestados pelo hotel (lavanderia, traslado, cama extra, estacionamento etc.) —
@@ -1658,6 +1733,13 @@ model AIAgentSetting {
   // corrigir sozinho valores desatualizados (preços, horários) na base quando divergirem do cadastro.
   // Escopo restrito definido em apps/worker/src/operationalAgent.ts (Fase 3). Padrão false.
   knowledgeAutoRewriteEnabled Boolean @default(false)
+
+  // --- Fila de espera (assinante) ---
+  // Quando uma vaga abre para o primeiro da fila (WaitlistEntry): false (padrão) = só a recepção é
+  // avisada (sino + WhatsApp no alertPhone) e ela decide; true = o agente de atendimento avisa o
+  // hóspede pelo WhatsApp e registra a reserva sozinho quando ele aceita, passando ao próximo se
+  // o prazo expira. Só tem efeito com o Agente de Atendimento ligado (enabled).
+  waitlistAutoOfferEnabled Boolean @default(false)
 
   updatedAt DateTime @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
