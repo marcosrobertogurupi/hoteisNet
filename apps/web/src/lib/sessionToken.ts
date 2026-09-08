@@ -53,6 +53,19 @@ export function isAdminRole(role: string | null | undefined): boolean {
   return !!role && ADMIN_ROLES.includes(role);
 }
 
+// Papéis da equipe do SaaS que têm acesso ao painel /admin (User com tenantId nulo).
+// PLATFORM_SUPPORT só visualiza; PLATFORM_ADMIN e SUPER_ADMIN também editam (ver requirePlatformAdmin).
+const PLATFORM_ROLES = ["SUPER_ADMIN", "PLATFORM_ADMIN", "PLATFORM_SUPPORT"];
+const PLATFORM_EDIT_ROLES = ["SUPER_ADMIN", "PLATFORM_ADMIN"];
+
+export function isPlatformRole(role: string | null | undefined): boolean {
+  return !!role && PLATFORM_ROLES.includes(role);
+}
+
+export function isPlatformEditRole(role: string | null | undefined): boolean {
+  return !!role && PLATFORM_EDIT_ROLES.includes(role);
+}
+
 export function getClientIp(req: NextRequest): string {
   const forwarded = req.headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0].trim();

@@ -284,6 +284,29 @@ model AuditLog {
   @@map("tenant_activity_logs")
 }
 
+// Trilha de auditoria GLOBAL da plataforma (painel /admin) — NÃO é isolada por tenant: registra o
+// que a equipe do SaaS (SUPER_ADMIN / PLATFORM_ADMIN / PLATFORM_SUPPORT) faz no back-office —
+// trocar plano de um assinante, editar prompt de IA, suspender conta, impersonar, enviar broadcast.
+// Distinta de AuditLog, que é a trilha por-tenant das ações dentro do app do hotel.
+model PlatformAuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?
+  actorName   String?
+  actorRole   String?
+  action      String
+  description String?
+  targetTenantId String?
+  entityType  String?
+  entityId    String?
+  ipAddress   String?
+  details     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([targetTenantId])
+  @@index([createdAt])
+  @@map("platform_audit_logs")
+}
+
 model SupportTicket {
   id         String          @id @default(uuid())
   tenantId   String
@@ -2269,6 +2292,10 @@ enum UserRole {
   RECEPCIONIST
   GOVERNESS
   FINANCIAL
+  // Papéis da equipe do SaaS no painel /admin (User com tenantId nulo). PLATFORM_SUPPORT só
+  // visualiza; PLATFORM_ADMIN visualiza e edita. SUPER_ADMIN = controle total da plataforma.
+  PLATFORM_ADMIN
+  PLATFORM_SUPPORT
 }
 
 enum TicketStatus {

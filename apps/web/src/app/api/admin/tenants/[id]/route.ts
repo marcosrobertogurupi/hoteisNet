@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, requirePlatformAdmin } from "@/lib/auth";
+import { logPlatformAction } from "@/lib/platformAudit";
 
 // PATCH /api/admin/tenants/[id]
-// Ajusta a cota mensal de consultas de CPF (Hub do Desenvolvedor) de um assinante
-// específico. Restrito a SUPER_ADMIN — o próprio assinante não configura sua cota.
+// Ajusta config do assinante pelo painel (cota de CPF, prompt/cota/bloqueio de IA, dados
+// restritos do hotel). Edição: só PLATFORM_ADMIN / SUPER_ADMIN — PLATFORM_SUPPORT (que só
+// visualiza) recebe 403. O próprio assinante nunca configura isto.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSessionUser(req);
-  if (!session || session.role !== "SUPER_ADMIN") {
-    return NextResponse.json({ success: false, error: "Ação restrita ao SuperAdmin." }, { status: 403 });
-  }
+  const authError = requirePlatformAdmin(session);
+  if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   try {
     const { id } = await params;
@@ -84,6 +85,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!tenant) {
       return NextResponse.json({ success: false, error: "Assinante não encontrado" }, { status: 404 });
     }
+
+    const changedFields = Object.keys(body).filter((k) => body[k] !== undefined);
+    await logPlatformAction({
+      req,
+      session: session!,
+      action: "TENANT_SETTINGS_UPDATE",
+      description: `Config do assinante atualizada: ${changedFields.join(", ") || "—"}`,
+      targetTenantId: id,
+      entityType: "Tenant",
+      entityId: id,
+      details: Object.fromEntries(changedFields.map((k) => [k, body[k]])),
+    });
 
     return NextResponse.json({ success: true, tenant });
   } catch (error: any) {

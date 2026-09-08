@@ -1,7 +1,14 @@
 import bcrypt from "bcryptjs";
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { SESSION_COOKIE, isAdminRole, verifySessionToken, type SessionPayload } from "@/lib/sessionToken";
+import {
+  SESSION_COOKIE,
+  isAdminRole,
+  isPlatformRole,
+  isPlatformEditRole,
+  verifySessionToken,
+  type SessionPayload,
+} from "@/lib/sessionToken";
 
 // Reexporta o núcleo de sessão (que vive em lib/sessionToken.ts, sem bcrypt/Prisma, para o
 // middleware do Edge) — as rotas continuam importando tudo de "@/lib/auth".
@@ -10,6 +17,8 @@ export {
   TERMINAL_COOKIE,
   SESSION_COOKIE_MAX_AGE,
   isAdminRole,
+  isPlatformRole,
+  isPlatformEditRole,
   createSessionToken,
   verifySessionToken,
   getClientIp,
@@ -72,9 +81,15 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
 
   const user = await prisma.user.findUnique({
     where: { id: payload.userId },
-    select: { active: true, tokenVersion: true },
+    select: { active: true, tokenVersion: true, tenant: { select: { status: true } } },
   });
   if (!user || !user.active || user.tokenVersion !== payload.tokenVersion) return null;
+
+  // Assinante bloqueado (inadimplência >30d ou cancelado) não opera o sistema. Usuários da
+  // plataforma têm tenantId nulo (user.tenant === null) e não são afetados. OVERDUE ainda opera.
+  if (user.tenant && (user.tenant.status === "SUSPENDED" || user.tenant.status === "CANCELLED")) {
+    return null;
+  }
 
   return payload;
 }
@@ -84,6 +99,24 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
 export function requireAdmin(session: SessionPayload | null): { status: number; body: { success: false; error: string } } | null {
   if (!session || !isAdminRole(session.role)) {
     return { status: 403, body: { success: false, error: "Ação restrita a administradores." } };
+  }
+  return null;
+}
+
+// Painel /admin — QUALQUER papel de plataforma (inclui PLATFORM_SUPPORT, que só visualiza).
+// Usar em handlers GET / de leitura das rotas /api/admin/*.
+export function requirePlatformRole(session: SessionPayload | null): { status: number; body: { success: false; error: string } } | null {
+  if (!session || !isPlatformRole(session.role)) {
+    return { status: 403, body: { success: false, error: "Acesso restrito à equipe da plataforma." } };
+  }
+  return null;
+}
+
+// Painel /admin — só papéis que PODEM EDITAR (PLATFORM_ADMIN / SUPER_ADMIN). PLATFORM_SUPPORT
+// recebe 403. Usar em handlers POST / PATCH / PUT / DELETE das rotas /api/admin/*.
+export function requirePlatformAdmin(session: SessionPayload | null): { status: number; body: { success: false; error: string } } | null {
+  if (!session || !isPlatformEditRole(session.role)) {
+    return { status: 403, body: { success: false, error: "Ação restrita a administradores da plataforma." } };
   }
   return null;
 }

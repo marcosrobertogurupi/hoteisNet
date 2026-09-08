@@ -51,12 +51,16 @@ Também foi aplicada em produção (23/08/2026, via `supabase db push`) uma migr
 
 ### 2.3. Perfis de Usuários (User Roles)
 * **`SUPER_ADMIN`:** Administrador geral da plataforma SaaS Hoteis.Net (gestão de tenants, planos, cotas de IA e cobrança).
+* **`PLATFORM_ADMIN`:** Equipe do SaaS com acesso ao painel `/admin` — visualiza **e edita** (planos, config de assinante, prompt de IA, etc.). `User` com `tenantId` nulo. *(Fase 0 do Painel Admin, 08/09/2026.)*
+* **`PLATFORM_SUPPORT`:** Equipe do SaaS com acesso ao painel `/admin` — **somente visualização**. `User` com `tenantId` nulo. *(Fase 0 do Painel Admin.)*
 * **`TENANT_ADMIN`:** Proprietário ou gerente geral do estabelecimento (acesso total às configurações, tarifários, relatórios e usuários do hotel).
 * **`RECEPCIONIST`:** Operador da recepção (mapa de quartos, mapa de reservas, check-in, check-out, alteração de período, lançamentos de consumo e FNRH).
 * **`GOVERNESS`:** Equipe de governança e limpeza (mudança de status de limpeza dos quartos, conferência de frigobar).
 * **`FINANCIAL`:** Gestor financeiro (controle de caixa geral, contas a pagar/receber, conciliação e faturamento corporativo).
 
-`SUPER_ADMIN` e `TENANT_ADMIN` são tratados como papéis administrativos (`isAdminRole`) para efeito de liberação de telas restritas.
+`SUPER_ADMIN` e `TENANT_ADMIN` são tratados como papéis administrativos (`isAdminRole`) para efeito de liberação de telas restritas do app do hotel.
+
+**Painel da plataforma (`/admin`):** `isPlatformRole` = `SUPER_ADMIN` / `PLATFORM_ADMIN` / `PLATFORM_SUPPORT`. O `middleware.ts` barra `/admin/**` e `/api/admin/**` para quem não é papel de plataforma; cada rota faz a checagem fina com `requirePlatformRole` (leitura, inclui `PLATFORM_SUPPORT`) ou `requirePlatformAdmin` (escrita, só `PLATFORM_ADMIN`/`SUPER_ADMIN`). Toda ação de escrita no painel é registrada em `PlatformAuditLog` (trilha global, distinta do `AuditLog` por-tenant). `getSessionUser` também passou a rejeitar sessão de assinante `SUSPENDED`/`CANCELLED`.
 
 ---
 
@@ -308,6 +312,8 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   infra não traria ganho.
 
 ### 3.10. Painel Administrativo da Plataforma (Super Admin) 🟡 (parcialmente — ver ressalva)
+* **Planejamento completo:** `PLANO_PAINEL_ADMIN.md` (raiz do repo) — referência de mercado, estado atual e plano em 8 fases (0: segurança · 1: cadastro+provisionamento de assinante · 2: planos · 3: Asaas/financeiro · 4: dashboards/egress · 5: suporte IA+RAG+prompt dos agentes · 6: comunicação WhatsApp · 7: config global+equipe). Decisões travadas: mesmo app Next.js; login `/admin/login` separado; papéis reusam `User`; Asaas com recorrência nativa; planos mensal/semestral/anual (semestral e anual com desconto, pagamento único); régua de inadimplência 15d avisa / 30d suspende; tema do painel claro e fixo.
+* **Fase 0 ✅ (08/09/2026):** fundação de segurança — papéis `PLATFORM_ADMIN`/`PLATFORM_SUPPORT`, gate de `/admin/**` e `/api/admin/**` no middleware, `requirePlatformRole`/`requirePlatformAdmin`, `getSessionUser` bloqueia assinante `SUSPENDED`/`CANCELLED`, modelo `PlatformAuditLog` + migration RLS, rotas `/api/admin/tenants` e `/api/admin/release-control` na divisão leitura/escrita. UI ainda não refeita.
 * `admin/tenants` (tela separada, não usada) e `admin/support` são **mocks de UI**: dados fixos em React state, nenhuma chamada de API. `admin/ai-telemetry` também é mock (não confundir com a seção real de IA dentro de `admin/page.tsx`, ver abaixo).
 * O botão "Resolve & Vectorize RAG" em `admin/support` simula (via toast) uma vetorização no Supabase pgvector que não ocorre de fato.
 * **Cota de Consultas de CPF por Assinante ✅:** dentro de `admin/page.tsx` ("Configuração do Sistema"), a tabela de cota de CPF por hotel já é real — `api/admin/tenants` (GET) lista todos os tenants com `cpfQueryQuotaMonthly`/`cpfQueryUsed` vindos do banco, e `api/admin/tenants/[id]` (PATCH) grava a nova cota mensal editada pelo Super Admin, refletindo imediatamente no limite aplicado em `api/stay/hub-consult-cpf`.

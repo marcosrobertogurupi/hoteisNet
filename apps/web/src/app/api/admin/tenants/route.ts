@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, requirePlatformRole } from "@/lib/auth";
 
 // GET /api/admin/tenants
 // Lista todos os assinantes do SaaS com a cota mensal de consultas de CPF (Hub do
-// Desenvolvedor) que cada um tem contratada — usado no Painel SuperAdmin. Restrito
-// a SUPER_ADMIN: cada assinante não deve ver nem configurar a cota de outro.
+// Desenvolvedor) e a config de IA de cada um — usado no Painel Admin. Leitura: qualquer
+// papel de plataforma (inclusive PLATFORM_SUPPORT, que só visualiza).
 export async function GET(req: NextRequest) {
   const session = await getSessionUser(req);
-  if (!session || session.role !== "SUPER_ADMIN") {
-    return NextResponse.json({ success: false, error: "Ação restrita ao SuperAdmin." }, { status: 403 });
-  }
+  const authError = requirePlatformRole(session);
+  if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   try {
     const tenants = await prisma.tenant.findMany({

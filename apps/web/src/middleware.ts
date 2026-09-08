@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 // Importa do núcleo leve (só `jose`, sem bcrypt/Prisma) — o middleware roda no Edge Runtime,
 // que tem limite de 1 MB de bundle. Ver comentário em lib/sessionToken.ts.
-import { verifySessionToken, isAdminRole, SESSION_COOKIE } from "@/lib/sessionToken";
+import { verifySessionToken, isAdminRole, isPlatformRole, SESSION_COOKIE } from "@/lib/sessionToken";
 import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib/housekeeperAuth";
 import { verifyStockCountSessionToken, STOCK_COUNT_SESSION_COOKIE } from "@/lib/stockCountAuth";
 
@@ -44,7 +44,19 @@ export async function middleware(req: NextRequest) {
 
     const sessionToken = req.cookies.get(SESSION_COOKIE)?.value;
     const session = sessionToken ? await verifySessionToken(sessionToken) : null;
-    if (session) return NextResponse.next();
+    if (session) {
+      // Rotas do painel da plataforma: só a equipe do SaaS (SUPER_ADMIN / PLATFORM_ADMIN /
+      // PLATFORM_SUPPORT). Cada route.ts ainda faz a checagem fina view-vs-edit (requirePlatformRole
+      // / requirePlatformAdmin) — isto aqui é a primeira barreira. NÃO existe rede de segurança
+      // automática além disto (ver CLAUDE.md, Segurança §1).
+      if (pathname.startsWith("/api/admin/") && !isPlatformRole(session.role)) {
+        return NextResponse.json(
+          { success: false, error: "Acesso restrito à equipe da plataforma." },
+          { status: 403 }
+        );
+      }
+      return NextResponse.next();
+    }
 
     if (pathname.startsWith(HOUSEKEEPER_API_PREFIX)) {
       const housekeeperToken = req.cookies.get(HOUSEKEEPER_SESSION_COOKIE)?.value;
@@ -68,6 +80,13 @@ export async function middleware(req: NextRequest) {
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
+  }
+
+  // Painel da plataforma (/admin/**): só papéis de plataforma. Um TENANT_ADMIN comum não entra.
+  if (pathname.startsWith("/admin") && !isPlatformRole(session.role)) {
+    const appUrl = new URL("/app", req.url);
+    appUrl.searchParams.set("acesso_negado", "1");
+    return NextResponse.redirect(appUrl);
   }
 
   const isAdminOnlyPath = ADMIN_ONLY_PREFIXES.some((prefix) => pathname.startsWith(prefix));
