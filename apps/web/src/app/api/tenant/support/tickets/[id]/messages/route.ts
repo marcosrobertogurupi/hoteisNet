@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
+import { runSupportAgentOnTicket } from "@/lib/platformSupportAgent";
 
 // POST /api/tenant/support/tickets/[id]/messages — o hotel responde no chamado. Reabre o chamado
 // se estava resolvido/fechado.
@@ -36,6 +37,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       data: { status: ["RESOLVED", "CLOSED"].includes(ticket.status) ? "OPEN" : ticket.status, updatedAt: new Date() },
     }),
   ]);
+
+  // Deixa a IA tentar responder a nova pergunta antes da equipe humana.
+  try {
+    await runSupportAgentOnTicket(id);
+  } catch (err) {
+    console.error("[support] agente de IA falhou ao responder resposta do assinante:", err);
+  }
 
   return NextResponse.json({ success: true });
 }

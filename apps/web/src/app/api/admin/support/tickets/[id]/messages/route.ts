@@ -12,7 +12,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   const { id } = await params;
-  let body: { content?: string; resolve?: boolean };
+  let body: { content?: string; resolve?: boolean; learnTitle?: string; learnCategory?: string };
   try {
     body = await req.json();
   } catch {
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const content = String(body.content || "").trim();
   if (!content) return NextResponse.json({ success: false, error: "Mensagem vazia." }, { status: 400 });
 
-  const ticket = await prisma.supportTicket.findUnique({ where: { id }, select: { id: true, status: true, tenantId: true } });
+  const ticket = await prisma.supportTicket.findUnique({ where: { id }, select: { id: true, status: true, tenantId: true, subject: true } });
   if (!ticket) return NextResponse.json({ success: false, error: "Chamado não encontrado." }, { status: 404 });
 
   const nextStatus = body.resolve ? "RESOLVED" : ticket.status === "OPEN" ? "IN_PROGRESS" : ticket.status;
@@ -32,6 +32,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }),
     prisma.supportTicket.update({ where: { id }, data: { status: nextStatus, updatedAt: new Date() } }),
   ]);
+
+  // "Aprendizado": ao resolver, a equipe pode salvar esta resposta como artigo da base de
+  // conhecimento — o agente de IA passa a usá-la nos próximos chamados parecidos.
+  if (body.resolve && body.learnTitle?.trim()) {
+    await prisma.platformSupportDoc.create({
+      data: {
+        title: body.learnTitle.trim().slice(0, 200),
+        category: String(body.learnCategory || ticket.subject || "Geral").trim().slice(0, 60) || "Geral",
+        content: `Pergunta: ${ticket.subject}\n\nResposta: ${content}`,
+        source: "TICKET_RESOLUTION",
+      },
+    });
+  }
 
   await logPlatformAction({
     req,

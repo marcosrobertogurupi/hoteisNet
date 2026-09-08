@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
+import { runSupportAgentOnTicket } from "@/lib/platformSupportAgent";
 
 const CATEGORIES = ["FNRH / Governo", "Financeiro", "WhatsApp / IA", "Reservas & Check-in", "Fiscal / PDV", "Outro"];
 
@@ -83,6 +84,14 @@ export async function POST(req: NextRequest) {
     },
     select: { id: true },
   });
+
+  // Primeira resposta pela IA (RAG leve sobre a base do produto). Best-effort e limitada por
+  // timeout — se falhar ou não tiver confiança, o chamado fica OPEN para a equipe humana.
+  try {
+    await runSupportAgentOnTicket(ticket.id);
+  } catch (err) {
+    console.error("[support] agente de IA falhou ao responder chamado novo:", err);
+  }
 
   return NextResponse.json({ success: true, ticketId: ticket.id });
 }

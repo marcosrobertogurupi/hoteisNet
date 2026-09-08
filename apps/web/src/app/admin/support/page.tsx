@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { LifeBuoy, Send, Loader2, CheckCircle2 } from "lucide-react";
+import { LifeBuoy, Send, Loader2, CheckCircle2, BookOpen, Plus, Trash2, Power } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
 import { cadastroUI } from "../../app/cadastros/_ui";
 
@@ -38,6 +38,35 @@ export default function AdminSupportPage() {
   const [reply, setReply] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Base de conhecimento do produto (o agente de IA lê os artigos ACTIVE).
+  interface Doc { id: string; title: string; category: string; content: string; active: boolean; source: string; }
+  const [docs, setDocs] = useState<Doc[]>([]);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [newDoc, setNewDoc] = useState({ title: "", category: "", content: "" });
+
+  const loadDocs = useCallback(async () => {
+    const d = await fetch("/api/admin/support/docs").then((r) => r.json()).catch(() => null);
+    if (d?.success) setDocs(d.docs);
+  }, []);
+  useEffect(() => { loadDocs(); }, [loadDocs]);
+
+  const addDoc = async () => {
+    if (!newDoc.title.trim() || !newDoc.content.trim()) { toast.warning("Título e conteúdo são obrigatórios."); return; }
+    const res = await fetch("/api/admin/support/docs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(newDoc) });
+    const d = await res.json();
+    if (d?.success) { setNewDoc({ title: "", category: "", content: "" }); toast.success("Artigo criado."); await loadDocs(); }
+    else toast.error(d?.error || "Erro ao criar.");
+  };
+  const patchDoc = async (id: string, data: Record<string, unknown>) => {
+    const res = await fetch(`/api/admin/support/docs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    if ((await res.json())?.success) await loadDocs();
+  };
+  const deleteDoc = async (id: string) => {
+    if (!window.confirm("Excluir este artigo?")) return;
+    const res = await fetch(`/api/admin/support/docs/${id}`, { method: "DELETE" });
+    if ((await res.json())?.success) { toast.success("Artigo excluído."); await loadDocs(); }
+  };
+
   useEffect(() => {
     fetch("/api/admin/auth/me").then((r) => r.json()).then((d) => { if (d?.success) setCanEdit(!!d.user.canEdit); }).catch(() => {});
   }, []);
@@ -66,11 +95,16 @@ export default function AdminSupportPage() {
 
   const send = async (resolve = false) => {
     if (!sel || (!reply.trim() && !resolve)) return;
+    let learnTitle: string | undefined;
+    if (resolve && reply.trim()) {
+      const t = window.prompt("Salvar esta resposta como artigo da base de conhecimento? Informe um título (ou deixe vazio para não salvar):", sel.subject);
+      if (t && t.trim()) learnTitle = t.trim();
+    }
     setBusy(true);
     try {
       const res = await fetch(`/api/admin/support/tickets/${sel.id}/messages`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: reply.trim() || "Chamado resolvido pela equipe.", resolve }),
+        body: JSON.stringify({ content: reply.trim() || "Chamado resolvido pela equipe.", resolve, learnTitle }),
       });
       const d = await res.json();
       if (d?.success) { setReply(""); await open(sel.id); await load(); }
@@ -183,6 +217,50 @@ export default function AdminSupportPage() {
             </>
           )}
         </div>
+      </div>
+
+      <div className={`${c.tableCard} overflow-hidden`}>
+        <button onClick={() => setDocsOpen((v) => !v)} className="w-full p-4 flex items-center justify-between hover:bg-slate-50">
+          <span className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+            <BookOpen className="w-4 h-4 text-slate-500" /> Base de conhecimento do produto
+            <span className="text-[11px] font-normal text-slate-400">({docs.filter((d) => d.active).length} ativos — o agente de IA usa estes artigos)</span>
+          </span>
+          <span className="text-slate-400 text-xs">{docsOpen ? "fechar" : "abrir"}</span>
+        </button>
+        {docsOpen && (
+          <div className="border-t border-slate-200 p-4 space-y-4">
+            {canEdit && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <input value={newDoc.title} onChange={(e) => setNewDoc({ ...newDoc, title: e.target.value })} placeholder="Título do artigo" className={`${c.field} md:col-span-2`} />
+                  <input value={newDoc.category} onChange={(e) => setNewDoc({ ...newDoc, category: e.target.value })} placeholder="Categoria (opcional)" className={c.field} />
+                </div>
+                <textarea value={newDoc.content} onChange={(e) => setNewDoc({ ...newDoc, content: e.target.value })} rows={3} placeholder="Conteúdo — o procedimento, a explicação, o passo a passo…" className={c.field} />
+                <div className="flex justify-end">
+                  <button onClick={addDoc} className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-1.5"><Plus className="w-4 h-4" /> Adicionar artigo</button>
+                </div>
+              </div>
+            )}
+            <div className="divide-y divide-slate-200">
+              {docs.length === 0 ? (
+                <p className={`py-6 text-center ${c.empty} text-sm`}>Nenhum artigo. Sem base de conhecimento, o agente de IA sempre escala para humano.</p>
+              ) : docs.map((d) => (
+                <div key={d.id} className={`py-3 ${!d.active ? "opacity-50" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-900">{d.title} <span className="text-[10px] font-normal text-slate-400">[{d.category}]{d.source === "TICKET_RESOLUTION" ? " · de chamado" : ""}</span></span>
+                    {canEdit && (
+                      <div className="flex gap-1.5 shrink-0">
+                        <button onClick={() => patchDoc(d.id, { active: !d.active })} title={d.active ? "Desativar" : "Reativar"} className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-amber-500 hover:text-white"><Power className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => deleteDoc(d.id)} title="Excluir" className="p-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-rose-600 hover:text-white"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 whitespace-pre-wrap">{d.content}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

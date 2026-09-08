@@ -311,6 +311,26 @@ enum SaaSInvoiceStatus {
   CANCELLED
 }
 
+// Base de conhecimento GLOBAL do produto (como usar o Hoteis.Net) — não é por tenant. O agente
+// de IA de suporte ao assinante (lib/platformSupportAgent.ts) lê os artigos ACTIVE como contexto
+// RAG leve (o acervo é pequeno o suficiente para caber no prompt — sem embeddings/pgvector por
+// enquanto). Distinta do SupportKnowledgeBase, que é por-tenant e serve ao agente de atendimento
+// ao HÓSPEDE. Gerenciada só no painel /admin.
+model PlatformSupportDoc {
+  id        String   @id @default(uuid())
+  title     String
+  category  String   @default("Geral")
+  content   String
+  active    Boolean  @default(true)
+  // "MANUAL" (equipe escreveu) | "TICKET_RESOLUTION" (aprendido de um chamado resolvido).
+  source    String   @default("MANUAL")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
+  @@map("platform_support_docs")
+}
+
 model User {
   id                  String          @id @default(uuid())
   tenantId            String?

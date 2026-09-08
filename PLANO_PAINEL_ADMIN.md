@@ -225,11 +225,14 @@ dark (convertidos nas fases seguintes).
   conectados a `SupportTicket`/`TicketMessage`. Assinante abre e acompanha chamados; equipe
   responde/resolve e ajusta status/prioridade na fila global. `senderType`: TENANT / PLATFORM / AI.
   Rotas `/api/tenant/support/*` e `/api/admin/support/*`. Ações da equipe auditadas.
-- **5c (a fazer):** agente de IA de suporte ao assinante — Gemini via AI Gateway, RAG sobre
-  `SupportKnowledgeBase` + docs (pgvector), funil IA → N1 → N2, vetorização das resoluções.
-  *(Peça grande, com decisões de arquitetura próprias.)*
+- **5c ✅ (08/09/2026):** `PlatformSupportDoc` (base de conhecimento global do produto).
+  `lib/platformSupportAgent.ts` — Gemini via `@ai-sdk/google` (gemini-2.5-flash, mesmo padrão do
+  agente do hóspede — o AI Gateway exige cartão), RAG leve (artigos no prompt, sem pgvector — o
+  acervo é pequeno). Funil: roda ao abrir/responder chamado; confiança ≥ 0.7 → responde e marca
+  `AI_ANSWERED`; senão fica `OPEN` para a equipe (N1). Respeita bloqueio/cota; uso em `AIUsageLog`.
+  "Aprendizado" = resolver com título vira `PlatformSupportDoc`. CRUD no `admin/support`.
 
-Falta: Fase 6 (comunicação), 7 (config/equipe).
+**Fase 5 concluída.** Falta: Fase 6 (comunicação), 7 (config/equipe).
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido
