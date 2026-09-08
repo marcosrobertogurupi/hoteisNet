@@ -1,328 +1,207 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "@/context/ThemeContext";
-import { LifeBuoy, Sparkles, Send, CheckCircle2, Plus, ThumbsUp, ThumbsDown } from "lucide-react";
+import { useToast } from "@/context/ToastContext";
+import { LifeBuoy, Send, Plus, X, Loader2, ArrowLeft, CheckCircle2 } from "lucide-react";
+
+const STATUS_LABEL: Record<string, string> = {
+  OPEN: "Aberto", IN_PROGRESS: "Em atendimento", AI_ANSWERED: "Respondido pela IA", RESOLVED: "Resolvido", CLOSED: "Fechado",
+};
+
+interface TicketRow {
+  id: string; subject: string; category: string; status: string; authorName: string; messages: number; updatedAt: string;
+}
+interface Msg { id: string; senderType: string; senderName: string; content: string; createdAt: string; }
+interface TicketDetail {
+  id: string; subject: string; category: string; status: string; createdAt: string;
+  author: { name: string }; messages: Msg[];
+}
 
 export default function TenantSupportPage() {
   const { theme } = useTheme();
+  const isDark = theme.isDark;
+  const toast = useToast();
 
-  // Superfícies internas (bolhas da IA, campos de texto, botões secundários) seguem o tema
-  // escolhido em Configurações — claro ou escuro.
-  const innerSurface = theme.isDark
-    ? "bg-[#1E293B] border-slate-800 text-slate-200"
-    : "bg-slate-100 border-slate-200 text-slate-700";
-  const inputClass = theme.isDark
-    ? "bg-[#1E293B] border-slate-700 text-white"
-    : "bg-white border-slate-300 text-slate-900";
-  const secondaryBtn = theme.isDark
-    ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
-    : "bg-slate-100 text-slate-700 hover:bg-slate-200";
+  const card = isDark ? "bg-[#0F172A] border-slate-800" : "bg-white border-slate-200";
+  const inputCls = `w-full px-3.5 py-2 rounded-xl text-sm focus:outline-none ${isDark ? "bg-slate-950 border border-slate-800 text-white focus:border-sky-500" : "bg-white border border-slate-300 text-slate-900 focus:border-sky-500"}`;
+  const subtle = isDark ? "text-slate-400" : "text-slate-500";
 
-  const [tickets, setTickets] = useState([
-    {
-      id: "TKT-1082",
-      subject: "Dúvida na transmissão da FNRH para o SNRHos",
-      category: "FNRH / Governo",
-      status: "AI_RESOLVED",
-      aiConfidence: 94,
-      createdAt: "Há 10 minutos",
-      lastMessage: "A IA de Suporte respondeu com o procedimento de re-transmissão automática.",
-      resolvedByAi: true,
-    },
-    {
-      id: "TKT-1045",
-      subject: "Como configurar nova chave de integração da API do WhatsApp?",
-      category: "WhatsApp",
-      status: "CLOSED",
-      aiConfidence: 98,
-      createdAt: "Ontem às 14:30",
-      lastMessage: "Procedimento validado e ticket finalizado.",
-      resolvedByAi: true,
-    },
-  ]);
+  const [list, setList] = useState<TicketRow[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState<TicketDetail | null>(null);
+  const [openLoading, setOpenLoading] = useState(false);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
 
-  const [activeTicket, setActiveTicket] = useState<any>(tickets[0]);
-  const [newTicketSubject, setNewTicketSubject] = useState("");
-  const [newTicketCategory, setNewTicketCategory] = useState("FNRH / Governo");
-  const [newTicketMessage, setNewTicketMessage] = useState("");
-  const [showNewTicketModal, setShowNewTicketModal] = useState(false);
-  const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState([
-    {
-      sender: "USER",
-      senderName: "Recepcionista Carlos",
-      content: "Boa tarde! Tentei transmitir a FNRH do hóspede Marcos para o SNRHos e apareceu status pendente.",
-      time: "10:12",
-    },
-    {
-      sender: "AI_AGENT",
-      senderName: "IA de Suporte Hoteis.Net (RAG Bot)",
-      content: "Olá Carlos! Analisei nosso histórico de soluções e identificamos que o sistema SNRHos do Governo passa por janelas de manutenção às 10h. O Hoteis.Net SaaS re-enviará automaticamente a ficha em 15 minutos sem necessidade de re-digitação.",
-      time: "10:12",
-      confidence: 94,
-    },
-  ]);
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState({ subject: "", category: "", message: "" });
+  const [creating, setCreating] = useState(false);
 
-  const handleSendMessage = () => {
-    if (!chatInput.trim()) return;
-    const userMsg = {
-      sender: "USER",
-      senderName: "Recepcionista Carlos",
-      content: chatInput,
-      time: "Agora",
-    };
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await fetch("/api/tenant/support/tickets").then((r) => r.json());
+      if (d?.success) { setList(d.tickets); setCategories(d.categories); }
+    } catch {
+      toast.error("Falha ao carregar chamados.");
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
 
-    setMessages((prev) => [...prev, userMsg]);
-    setChatInput("");
+  useEffect(() => { load(); }, [load]);
 
-    // Simulate AI response based on RAG knowledge base
-    setTimeout(() => {
-      const aiReply = {
-        sender: "AI_AGENT",
-        senderName: "IA de Suporte Hoteis.Net (RAG Bot)",
-        content: "Entendido! Caso precise de auxílio imediato para faturamento corporativo ou QR Code do WhatsApp, também posso te guiar passo a passo.",
-        time: "Agora",
-        confidence: 92,
-      };
-      setMessages((prev) => [...prev, aiReply]);
-    }, 800);
+  const openTicket = async (id: string) => {
+    setOpenLoading(true);
+    try {
+      const d = await fetch(`/api/tenant/support/tickets/${id}`).then((r) => r.json());
+      if (d?.success) setOpen(d.ticket);
+      else toast.error(d?.error || "Erro ao abrir o chamado.");
+    } finally {
+      setOpenLoading(false);
+    }
   };
 
-  const handleCreateTicket = () => {
-    if (!newTicketSubject.trim()) return;
-    const newTkt = {
-      id: `TKT-${Math.floor(1000 + Math.random() * 9000)}`,
-      subject: newTicketSubject,
-      category: newTicketCategory,
-      status: "AI_RESOLVED",
-      aiConfidence: 89,
-      createdAt: "Agora",
-      lastMessage: newTicketMessage || "Novo chamado aberto.",
-      resolvedByAi: true,
-    };
+  const send = async () => {
+    if (!open || !reply.trim()) return;
+    setSending(true);
+    try {
+      const res = await fetch(`/api/tenant/support/tickets/${open.id}/messages`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: reply }),
+      });
+      const d = await res.json();
+      if (d?.success) { setReply(""); await openTicket(open.id); await load(); }
+      else toast.error(d?.error || "Não foi possível enviar.");
+    } finally {
+      setSending(false);
+    }
+  };
 
-    setTickets([newTkt, ...tickets]);
-    setActiveTicket(newTkt);
-    setShowNewTicketModal(false);
-    setNewTicketSubject("");
-    setNewTicketMessage("");
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.subject.trim() || !form.message.trim()) { toast.warning("Preencha assunto e mensagem."); return; }
+    setCreating(true);
+    try {
+      const res = await fetch("/api/tenant/support/tickets", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+      });
+      const d = await res.json();
+      if (!d?.success) { toast.error(d?.error || "Não foi possível abrir o chamado."); return; }
+      toast.success("Chamado aberto. Nossa equipe vai responder por aqui.");
+      setModal(false);
+      setForm({ subject: "", category: "", message: "" });
+      await load();
+      openTicket(d.ticketId);
+    } finally {
+      setCreating(false);
+    }
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header Banner */}
-      <div className={`p-6 rounded-2xl border shadow-lg flex flex-wrap items-center justify-between gap-4 ${theme.bgCard}`}>
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-[#F59E0B]/15 border border-[#F59E0B]/30 flex items-center justify-center text-[#F59E0B]">
-            <Sparkles className="w-6 h-6 animate-pulse" />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold flex items-center gap-2">
-              Aba de Suporte Inteligente (IA Autônoma)
-              <span className="text-xs px-2 py-0.5 rounded-full bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 font-normal">
-                Aprendizado RAG Ativo
-              </span>
-            </h2>
-            <p className={`text-xs mt-0.5 ${theme.textMuted}`}>
-              Sua dúvida é consultada em tempo real na nossa Base de Conhecimento e histórico de casos resolvidos.
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={() => setShowNewTicketModal(true)}
-          className="px-4 py-2.5 bg-[#0284C7] hover:bg-[#0369A1] text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2 shadow-lg shadow-[#0284C7]/20"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Abrir Novo Chamado</span>
-        </button>
-      </div>
-
-      {/* Main Support Grid (Tickets List + Active Chat Window) */}
-      <div className="grid md:grid-cols-3 gap-6">
-        {/* Left Column: Tickets List */}
-        <div className="space-y-3">
-          <h3 className={`text-sm font-semibold px-1 ${theme.textMuted}`}>Meus Chamados</h3>
-
-          {tickets.map((tkt) => (
-            <div
-              key={tkt.id}
-              onClick={() => setActiveTicket(tkt)}
-              className={`p-4 rounded-xl border transition-all cursor-pointer space-y-2 ${
-                activeTicket?.id === tkt.id
-                  ? "border-[#0284C7] bg-[#0284C7]/10"
-                  : `${theme.bgCard} hover:border-[#0284C7]/50`
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono font-semibold text-[#0284C7]">{tkt.id}</span>
-                <span className={`text-[10px] font-mono ${theme.textMuted}`}>{tkt.createdAt}</span>
-              </div>
-
-              <h4 className="text-sm font-medium line-clamp-1">{tkt.subject}</h4>
-
-              <div className="flex items-center justify-between pt-1 text-xs">
-                <span className={`text-[11px] ${theme.textMuted}`}>{tkt.category}</span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" /> IA {tkt.aiConfidence}% Confiança
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Right Column: Active Ticket Chat & Resolution */}
-        <div className={`md:col-span-2 rounded-2xl border flex flex-col h-[560px] overflow-hidden shadow-lg ${theme.bgCard}`}>
-          {/* Chat Header */}
-          <div className={`p-4 border-b flex items-center justify-between ${theme.borderColor} ${theme.isDark ? "bg-[#1E293B]/40" : "bg-slate-50"}`}>
+    <div className={`min-h-screen p-4 md:p-8 ${theme.bgApp} ${theme.textMain}`}>
+      <div className="max-w-4xl mx-auto space-y-5">
+        <div className={`p-6 rounded-2xl border flex items-center justify-between ${card}`}>
+          <div className="flex items-center gap-3">
+            <div className={`p-3 rounded-xl ${isDark ? "bg-sky-500/10 text-sky-400" : "bg-sky-50 text-sky-600"}`}><LifeBuoy className="w-7 h-7" /></div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-[#0284C7] font-semibold">{activeTicket?.id}</span>
-                <h3 className="text-sm font-semibold">{activeTicket?.subject}</h3>
-              </div>
-              <span className={`text-xs block mt-0.5 ${theme.textMuted}`}>Categoria: {activeTicket?.category}</span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Atendido por IA
-              </span>
+              <h1 className="text-xl font-bold">Suporte Hoteis.Net</h1>
+              <p className={`text-xs ${subtle}`}>Abra um chamado e acompanhe a resposta da nossa equipe por aqui.</p>
             </div>
           </div>
-
-          {/* Chat Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex gap-3 max-w-[85%] ${msg.sender === "USER" ? "ml-auto flex-row-reverse" : ""}`}
-              >
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                    msg.sender === "USER"
-                      ? theme.isDark
-                        ? "bg-slate-700 text-white"
-                        : "bg-slate-200 text-slate-700"
-                      : "bg-[#F59E0B]/20 border border-[#F59E0B]/40 text-[#F59E0B]"
-                  }`}
-                >
-                  {msg.sender === "USER" ? "RC" : <Sparkles className="w-4 h-4 text-[#F59E0B]" />}
-                </div>
-
-                <div
-                  className={`p-3.5 rounded-2xl text-sm space-y-1.5 border ${
-                    msg.sender === "USER"
-                      ? "bg-[#0284C7] text-white border-transparent rounded-tr-none"
-                      : `${innerSurface} rounded-tl-none`
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-4 text-[11px] opacity-80">
-                    <span className="font-semibold">{msg.senderName}</span>
-                    <span>{msg.time}</span>
-                  </div>
-                  <p className="leading-relaxed">{msg.content}</p>
-
-                  {msg.confidence && (
-                    <div className={`pt-2 border-t flex items-center justify-between text-[10px] ${theme.borderColor} ${theme.textMuted}`}>
-                      <span>Baseado em {msg.confidence}% de similaridade em tickets fechados</span>
-                      <div className="flex items-center gap-2">
-                        <span>Esta resposta ajudou?</span>
-                        <button className="hover:text-[#10B981] transition-colors"><ThumbsUp className="w-3 h-3" /></button>
-                        <button className="hover:text-red-400 transition-colors"><ThumbsDown className="w-3 h-3" /></button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Chat Input */}
-          <div className={`p-3 border-t flex items-center gap-2 ${theme.borderColor}`}>
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-              placeholder="Digite sua dúvida ou resposta..."
-              className={`flex-1 border rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
-            />
-            <button
-              onClick={handleSendMessage}
-              className="p-2.5 bg-[#0284C7] hover:bg-[#0369A1] text-white rounded-lg transition-colors"
-            >
-              <Send className="w-4 h-4" />
+          {!open && (
+            <button onClick={() => setModal(true)} className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold flex items-center gap-2">
+              <Plus className="w-4 h-4" /> Novo chamado
             </button>
-          </div>
+          )}
         </div>
+
+        {open ? (
+          <div className={`rounded-2xl border overflow-hidden ${card}`}>
+            <div className={`p-4 border-b ${isDark ? "border-slate-800" : "border-slate-200"} flex items-center gap-3`}>
+              <button onClick={() => setOpen(null)} className={`p-1.5 rounded-lg ${isDark ? "hover:bg-slate-800" : "hover:bg-slate-100"}`}><ArrowLeft className="w-4 h-4" /></button>
+              <div className="min-w-0">
+                <h2 className="text-sm font-bold truncate">{open.subject}</h2>
+                <span className={`text-[11px] ${subtle}`}>{open.category} · {STATUS_LABEL[open.status] || open.status}</span>
+              </div>
+            </div>
+            <div className="p-4 space-y-3 max-h-[52vh] overflow-y-auto">
+              {open.messages.map((m) => {
+                const mine = m.senderType === "TENANT";
+                return (
+                  <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${mine ? "bg-sky-600 text-white rounded-br-sm" : isDark ? "bg-slate-800 text-slate-100 rounded-bl-sm" : "bg-slate-100 text-slate-800 rounded-bl-sm"}`}>
+                      <div className={`text-[10px] mb-1 ${mine ? "text-sky-100" : subtle}`}>{m.senderName} · {new Date(m.createdAt).toLocaleString("pt-BR")}</div>
+                      <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!["RESOLVED", "CLOSED"].includes(open.status) ? (
+              <div className={`p-3 border-t ${isDark ? "border-slate-800" : "border-slate-200"} flex items-center gap-2`}>
+                <input value={reply} onChange={(e) => setReply(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Escreva sua mensagem…" className={inputCls} />
+                <button onClick={send} disabled={sending} className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </button>
+              </div>
+            ) : (
+              <div className={`p-3 border-t ${isDark ? "border-slate-800" : "border-slate-200"} text-xs ${subtle} flex items-center gap-2`}>
+                <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Chamado {STATUS_LABEL[open.status].toLowerCase()}. Responda para reabrir se precisar.
+                <input value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reabrir com uma mensagem…" className={`${inputCls} ml-auto max-w-xs`} />
+                <button onClick={send} disabled={sending || !reply.trim()} className="px-3 py-1.5 bg-slate-600 text-white rounded-lg text-xs disabled:opacity-40">enviar</button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className={`rounded-2xl border overflow-hidden ${card}`}>
+            {loading ? (
+              <div className={`py-16 text-center ${subtle}`}><Loader2 className="w-5 h-5 animate-spin inline" /> Carregando…</div>
+            ) : list.length === 0 ? (
+              <div className={`py-16 text-center ${subtle} text-sm`}>Nenhum chamado ainda. Abra o primeiro no botão acima.</div>
+            ) : (
+              <div className={`divide-y ${isDark ? "divide-slate-800" : "divide-slate-200"}`}>
+                {list.map((t) => (
+                  <button key={t.id} onClick={() => openTicket(t.id)} disabled={openLoading}
+                    className={`w-full text-left p-4 flex items-center justify-between gap-3 ${isDark ? "hover:bg-slate-800/50" : "hover:bg-slate-50"}`}>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold truncate">{t.subject}</div>
+                      <div className={`text-[11px] ${subtle}`}>{t.category} · {t.messages} mensagem(ns) · {new Date(t.updatedAt).toLocaleDateString("pt-BR")}</div>
+                    </div>
+                    <span className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      t.status === "RESOLVED" || t.status === "CLOSED" ? "bg-emerald-500/15 text-emerald-500"
+                      : t.status === "IN_PROGRESS" ? "bg-sky-500/15 text-sky-500" : "bg-amber-500/15 text-amber-500"
+                    }`}>{STATUS_LABEL[t.status] || t.status}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Modal for Creating New Ticket */}
-      {showNewTicketModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className={`border rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl ${theme.bgCard}`}>
-            <div className={`flex items-center justify-between border-b pb-3 ${theme.borderColor}`}>
-              <h3 className="text-base font-semibold flex items-center gap-2">
-                <LifeBuoy className="w-4 h-4 text-[#0284C7]" />
-                Abrir Chamado de Suporte
-              </h3>
-              <button onClick={() => setShowNewTicketModal(false)} className={`text-sm ${theme.textMuted} hover:opacity-80`}>✕</button>
+      {modal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className={`w-full max-w-lg rounded-2xl border ${card} p-6 space-y-4`}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold">Abrir chamado</h2>
+              <button onClick={() => setModal(false)} className={`p-1.5 rounded-lg ${isDark ? "hover:bg-slate-800" : "hover:bg-slate-100"}`}><X className="w-5 h-5" /></button>
             </div>
-
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className={`text-xs font-medium ${theme.textMuted}`}>Assunto / Dúvida</label>
-                <input
-                  type="text"
-                  value={newTicketSubject}
-                  onChange={(e) => setNewTicketSubject(e.target.value)}
-                  placeholder="Ex: Como faturar diárias para empresa?"
-                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
-                />
+            <form onSubmit={create} className="space-y-3">
+              <input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="Assunto" required className={inputCls} />
+              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className={inputCls}>
+                <option value="">Categoria…</option>
+                {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <textarea value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} rows={4} placeholder="Descreva o que está acontecendo…" required className={inputCls} />
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setModal(false)} className={`px-4 py-2 rounded-lg text-xs font-semibold ${isDark ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-700"}`}>Cancelar</button>
+                <button type="submit" disabled={creating} className="px-5 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-bold disabled:opacity-50">
+                  {creating ? "Enviando…" : "Abrir chamado"}
+                </button>
               </div>
-
-              <div className="space-y-1">
-                <label className={`text-xs font-medium ${theme.textMuted}`}>Categoria</label>
-                <select
-                  value={newTicketCategory}
-                  onChange={(e) => setNewTicketCategory(e.target.value)}
-                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
-                >
-                  <option>FNRH / Governo</option>
-                  <option>WhatsApp</option>
-                  <option>Faturamento Corporativo</option>
-                  <option>Mapa de Quartos / Reservas</option>
-                  <option>PDV & Consumo</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className={`text-xs font-medium ${theme.textMuted}`}>Descrição Detalhada</label>
-                <textarea
-                  rows={3}
-                  value={newTicketMessage}
-                  onChange={(e) => setNewTicketMessage(e.target.value)}
-                  placeholder="Descreva o que ocorreu para a IA analisar a solução..."
-                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0284C7] ${inputClass}`}
-                />
-              </div>
-            </div>
-
-            <div className={`flex justify-end gap-3 pt-3 border-t ${theme.borderColor}`}>
-              <button
-                onClick={() => setShowNewTicketModal(false)}
-                className={`px-4 py-2 text-sm rounded-lg ${secondaryBtn}`}
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleCreateTicket}
-                className="px-4 py-2 bg-[#0284C7] text-white text-sm rounded-lg font-medium hover:bg-[#0369A1]"
-              >
-                Enviar para Análise da IA
-              </button>
-            </div>
+            </form>
           </div>
         </div>
       )}

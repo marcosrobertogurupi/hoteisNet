@@ -221,8 +221,10 @@ dark (convertidos nas fases seguintes).
 - **5a ✅ (08/09/2026):** `AIAgentSetting.operationalSystemPromptExtra` (novo) + `systemPromptExtra`
   (existente) = persona dos **dois** agentes por assinante, geridas em `admin/settings`.
   Operacional injetado em `composeAlertMessage` (worker). Edição só admin de plataforma, auditada.
-- **5b (a fazer):** conectar `admin/support` aos modelos reais (`SupportTicket`/`TicketMessage`),
-  Central de Ajuda no app do assinante, resposta humana + resolver.
+- **5b ✅ (08/09/2026):** `admin/support` (tema claro) + `/app/support` (tema do assinante)
+  conectados a `SupportTicket`/`TicketMessage`. Assinante abre e acompanha chamados; equipe
+  responde/resolve e ajusta status/prioridade na fila global. `senderType`: TENANT / PLATFORM / AI.
+  Rotas `/api/tenant/support/*` e `/api/admin/support/*`. Ações da equipe auditadas.
 - **5c (a fazer):** agente de IA de suporte ao assinante — Gemini via AI Gateway, RAG sobre
   `SupportKnowledgeBase` + docs (pgvector), funil IA → N1 → N2, vetorização das resoluções.
   *(Peça grande, com decisões de arquitetura próprias.)*
