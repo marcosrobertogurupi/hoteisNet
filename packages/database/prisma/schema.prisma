@@ -90,6 +90,15 @@ model Tenant {
   website                    String?
   interestRate               Decimal?                @db.Decimal(5, 2)
   logoUrl                    String?
+  // Data de validade do acesso ("data_Reset" no cadastro do assinante; Hot_DTReset do WinDev, onde
+  // era o kill-switch de licença: passou da data → sistema bloqueado). No SaaS é a data-limite
+  // "pago até" — atualizada pelos webhooks de pagamento do Asaas (Fase 3) e ajustável manualmente
+  // pelo admin da plataforma (cortesia, negociação). A régua de inadimplência (cron, Fase 3) usa
+  // esta data para virar o status: +15d → OVERDUE + aviso, +30d → SUSPENDED.
+  accessValidUntil           DateTime?
+  // Anotações internas da equipe do SaaS sobre o assinante (negociação, histórico de suporte,
+  // observações comerciais). NUNCA exposto ao próprio assinante — só no painel /admin.
+  internalNotes              String?
   createdAt                  DateTime                @default(now())
   updatedAt                  DateTime                @updatedAt
   dailyRolloverTime          String                  @default("14:30")

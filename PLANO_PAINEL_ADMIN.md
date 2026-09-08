@@ -149,18 +149,24 @@ próprio (D4) e a limpeza do `admin/page.tsx` (tirar valores hardcoded, layout r
 > claude.ai de tema; usar a skill de plugin `vercel:shadcn` no trabalho de UI.
 
 ### Fase 1 — Cadastro de assinante + provisionamento
-- `Tenant`: adicionar `dataReset` (dia/data de reset de cobrança — campo `data_Reset` do WinDev),
-  `internalNotes`, `accountOwnerId` (responsável), tags. Todos os demais campos que você listou
-  (CNPJ, IE, Razão, Fantasia, endereço estruturado, telefone, e-mail, site, juros, regime, logo,
-  plano) **já existem** no schema.
-- Tela `admin/tenants` real: lista + busca + filtros (status, plano, inadimplência), paginada e enxuta
-  (`select` explícito — ⚡ Performance §1).
-- Form de criação completo: ViaCEP para cidade/UF, validação de CNPJ, escolha do plano e ciclo.
-  Ao salvar, **uma transação** cria: `Tenant` + `SaASSubscription` + `AIAgentSetting` +
-  settings default + 1º usuário `TENANT_ADMIN` (com envio das credenciais por e-mail/WhatsApp).
-- Editar assinante (campos restritos ao admin: CNPJ, cidade/UF — o resto o assinante edita no portal dele).
-- Suspender / reativar / cancelar com efeito real (integra com a Fase 0).
-- **Impersonation** "entrar como" + banner + `PlatformAuditLog`.
+
+**Fase 1a ✅ (08/09/2026) — backend:**
+- `Tenant` ganhou `accessValidUntil` (data-limite "pago até" = `data_Reset` / `Hot_DTReset` do
+  WinDev) e `internalNotes`. Demais campos (CNPJ, IE, Razão, Fantasia, endereço, telefone, e-mail,
+  site, juros, regime, logo, plano) já existiam.
+- `GET /api/admin/tenants` = lista real (busca `?q=`, filtro `?status=`, paginação, `_count`).
+- `POST /api/admin/tenants` = criação + provisionamento transacional (`Tenant` + `SaASSubscription`
+  + `AIAgentSetting` + 1º `TENANT_ADMIN` com senha temporária devolvida uma vez).
+- `GET/PATCH /api/admin/tenants/[id]` = ficha completa + edição (inclui `status` para suspender/
+  reativar/cancelar; CEP re-resolve cidade/UF via `lib/viaCep.ts`).
+- `GET /api/admin/plans` = catálogo para o seletor de plano.
+- 1º `SUPER_ADMIN` de plataforma semeado (`superadmin@hoteisnet.local`).
+
+**Fase 1b (a fazer) — UI:** tela `admin/tenants` real em **tema claro** (lista + busca + filtros +
+form criar/editar), usando a skill `vercel:shadcn`.
+
+**Fase 1c (a fazer):** `/admin/login` separado com cookie próprio (D4) + **impersonation**
+"entrar como" com banner e `PlatformAuditLog`.
 
 ### Fase 2 — Catálogo de planos
 - `SaaSPlan`: adicionar preço por ciclo já com o desconto embutido
