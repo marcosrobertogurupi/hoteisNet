@@ -13,7 +13,7 @@ import { CAIXA_CHANGED_EVENT } from "@/lib/caixaEvents";
 // próprio aberto. Reavalia a cada navegação e sempre que o evento CAIXA_CHANGED_EVENT é disparado
 // (abertura, fechamento ou impressão do fechamento do caixa).
 export default function CashRegisterGate({ children }: { children: React.ReactNode }) {
-  const { user, loading: sessionLoading } = useSession();
+  const { user, loading: sessionLoading, sessionInvalid } = useSession();
   const toast = useToast();
   const { theme, hotelName } = useTheme();
   const pathname = usePathname();
@@ -47,6 +47,18 @@ export default function CashRegisterGate({ children }: { children: React.ReactNo
   useEffect(() => {
     if (user) checkSessao();
   }, [user, checkSessao, pathname]);
+
+  // O middleware do Edge libera as páginas de /app enquanto o JWT do cookie tem assinatura
+  // válida e não expirou, mas /api/auth/me revalida no banco (usuário ainda ativo, tokenVersion
+  // do token igual ao atual, assinante não suspenso — ver getSessionUser). Quando essa
+  // revalidação nega (401), sem este redirecionamento a tela abaixo ("checking") ficaria
+  // girando para sempre. Manda para o login preservando o destino.
+  useEffect(() => {
+    if (sessionInvalid) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.href = `/login?next=${next}`;
+    }
+  }, [sessionInvalid]);
 
   useEffect(() => {
     window.addEventListener(CAIXA_CHANGED_EVENT, checkSessao);
