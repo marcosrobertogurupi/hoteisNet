@@ -10,6 +10,7 @@ const WAITLIST_SELECT = {
   id: true,
   guestName: true,
   guestPhone: true,
+  guestEmail: true,
   guestCpf: true,
   guestId: true,
   roomCategoryId: true,
@@ -71,6 +72,7 @@ export async function POST(req: NextRequest) {
     const {
       guestName,
       guestPhone,
+      guestEmail,
       guestCpf,
       guestId,
       roomCategoryId,
@@ -126,6 +128,7 @@ export async function POST(req: NextRequest) {
         tenantId: session.tenantId,
         guestName: guestName.trim(),
         guestPhone: guestPhone?.trim() || null,
+        guestEmail: guestEmail?.trim().toLowerCase() || null,
         guestCpf: guestCpf?.replace(/\D/g, "") || null,
         guestId: realGuestId,
         roomCategoryId: category.id,

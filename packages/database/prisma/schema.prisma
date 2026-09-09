@@ -649,6 +649,7 @@ model WaitlistEntry {
   // Hóspede — mesmo padrão de Reservation (nome/telefone soltos + guestId opcional)
   guestName String
   guestPhone String?
+  guestEmail String? // aviso de vaga é disparado por e-mail (e por WhatsApp quando há telefone)
   guestCpf  String?
   guestId   String?
 

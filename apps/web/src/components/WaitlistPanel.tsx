@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Hourglass,
   Plus,
@@ -11,6 +11,10 @@ import {
   X,
   Bot,
   UserRound,
+  Search,
+  Loader2,
+  XCircle,
+  AlertTriangle,
 } from "lucide-react";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
 import { useTheme } from "@/context/ThemeContext";
@@ -19,6 +23,7 @@ interface WaitlistEntry {
   id: string;
   guestName: string;
   guestPhone: string | null;
+  guestEmail: string | null;
   guestCpf: string | null;
   roomCategoryId: string;
   roomCategoryName: string;
@@ -228,7 +233,10 @@ export default function WaitlistPanel({ onActiveCountChange }: { onActiveCountCh
                         )}
                         {e.guestName}
                       </div>
-                      <span className={`text-[10px] ${muted}`}>{e.guestPhone || "sem telefone"}</span>
+                      <span className={`text-[10px] ${muted}`}>{e.guestEmail || e.guestPhone || "sem contato"}</span>
+                      {e.guestEmail && e.guestPhone && (
+                        <span className={`block text-[10px] ${muted}`}>{e.guestPhone}</span>
+                      )}
                       {e.notes && <span className={`block text-[10px] mt-0.5 ${faint}`}>{e.notes}</span>}
                     </td>
                     <td className={`p-3.5 ${cellStrong}`}>{e.roomCategoryName}</td>
@@ -259,8 +267,12 @@ export default function WaitlistPanel({ onActiveCountChange }: { onActiveCountCh
                       <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => notify(e.id)}
-                          disabled={busyId === e.id || !e.guestPhone}
-                          title={e.guestPhone ? "Avisar o hóspede pelo WhatsApp" : "Entrada sem telefone"}
+                          disabled={busyId === e.id || (!e.guestPhone && !e.guestEmail)}
+                          title={
+                            e.guestEmail || e.guestPhone
+                              ? "Avisar o hóspede (e-mail e WhatsApp)"
+                              : "Entrada sem e-mail nem telefone"
+                          }
                           className="px-2 py-1 bg-[#25D366]/15 hover:bg-[#25D366]/30 disabled:opacity-40 disabled:cursor-not-allowed text-[#128C7E] border border-[#25D366]/30 rounded text-[11px] transition-colors flex items-center gap-1 font-medium"
                         >
                           <WhatsAppIcon className="w-3 h-3" /> Avisar
@@ -313,6 +325,7 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
   const [form, setForm] = useState({
     guestName: "",
     guestPhone: "",
+    guestEmail: "",
     guestCpf: "",
     roomCategoryId: "",
     checkInDate: "",
@@ -323,6 +336,14 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Consulta de CPF (cadastro local → Hub do Desenvolvedor) para preencher os dados do hóspede.
+  const [hubLoading, setHubLoading] = useState(false);
+  const [hubFeedback, setHubFeedback] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  // Validação de WhatsApp do telefone informado.
+  const [wppStatus, setWppStatus] = useState<"idle" | "loading" | "ok" | "no" | "failed">("idle");
+  // Último CPF já consultado — evita repetir a busca ao editar outros campos ou reabrir o teclado.
+  const lastLookedUpCpf = useRef<string>("");
 
   useEffect(() => {
     fetch("/api/cadastros/categorias-apartamento")
@@ -358,6 +379,101 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
 
   const set = (k: keyof typeof form, v: string | number) => setForm((f) => ({ ...f, [k]: v }));
 
+  const fmtCpf = (val: string) => {
+    const c = val.replace(/\D/g, "").slice(0, 11);
+    if (c.length > 9) return `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9)}`;
+    if (c.length > 6) return `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6)}`;
+    if (c.length > 3) return `${c.slice(0, 3)}.${c.slice(3)}`;
+    return c;
+  };
+
+  // Ao informar o CPF (11 dígitos), busca os dados do hóspede: primeiro no cadastro local do
+  // assinante (não gasta cota); se não encontrar, na Hub do Desenvolvedor. Preenche nome, telefone
+  // e e-mail automaticamente. Dispara sozinho ao completar o CPF e também pelo botão "Buscar".
+  const lookupCpf = async (cpfArg?: string) => {
+    const cleanCpf = (cpfArg ?? form.guestCpf).replace(/\D/g, "");
+    if (cleanCpf.length !== 11) {
+      setHubFeedback({ type: "err", text: "Digite um CPF válido com 11 dígitos para consultar." });
+      return;
+    }
+    lastLookedUpCpf.current = cleanCpf;
+    setHubLoading(true);
+    setHubFeedback(null);
+    try {
+      const localRes = await fetch(`/api/cadastros/hospedes?q=${cleanCpf}`);
+      const localData = await localRes.json().catch(() => ({}));
+      const existing = (localData.guests || []).find(
+        (g: any) => g.cpf?.replace(/\D/g, "") === cleanCpf,
+      );
+      if (existing) {
+        setForm((f) => ({
+          ...f,
+          guestName: existing.fullName || f.guestName,
+          guestPhone: existing.whatsappPhone || existing.phone || f.guestPhone,
+          guestEmail: existing.email || f.guestEmail,
+        }));
+        setWppStatus(existing.hasWhatsapp ? "ok" : "idle");
+        setHubFeedback({ type: "ok", text: `Hóspede localizado no cadastro do hotel: ${existing.fullName}.` });
+        return;
+      }
+
+      const res = await fetch(`/api/stay/hub-consult-cpf?cpf=${cleanCpf}`);
+      const result = await res.json().catch(() => ({}));
+      if (result.success && result.data) {
+        const d = result.data;
+        setForm((f) => ({
+          ...f,
+          guestName: d.nome || f.guestName,
+          guestPhone: (Array.isArray(d.telefones) && d.telefones[0]) || f.guestPhone,
+          guestEmail: (Array.isArray(d.emails) && d.emails[0]) || f.guestEmail,
+        }));
+        setWppStatus("idle");
+        setHubFeedback({ type: "ok", text: `Dados de "${d.nome}" localizados.` });
+      } else if (result.quotaExceeded) {
+        setHubFeedback({
+          type: "err",
+          text: result.message || "O limite de consultas de CPF do hotel foi atingido neste mês.",
+        });
+      } else if (result.requiresToken || result.serviceDisabled) {
+        setHubFeedback({
+          type: "err",
+          text: "A consulta automática de dados não está disponível no momento.",
+        });
+      } else {
+        // Mensagens curtas/técnicas da Hub (ex.: "NOK") não ajudam o operador.
+        const msg = typeof result.message === "string" && result.message.trim().length > 8 ? result.message : "";
+        setHubFeedback({ type: "err", text: msg || "Nenhum registro localizado para este CPF." });
+      }
+    } catch {
+      setHubFeedback({ type: "err", text: "Erro ao consultar o CPF." });
+    } finally {
+      setHubLoading(false);
+    }
+  };
+
+  // Verifica se o telefone informado tem WhatsApp ativo (via instância uazapi do hotel).
+  const verifyWhatsapp = async () => {
+    const clean = form.guestPhone.replace(/\D/g, "");
+    if (clean.length < 10) {
+      setWppStatus("no");
+      return;
+    }
+    setWppStatus("loading");
+    try {
+      const res = await fetch("/api/uazapi/profile-picture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: form.guestPhone }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success && data.hasWhatsapp) setWppStatus("ok");
+      else if (data.checkFailed) setWppStatus("failed");
+      else setWppStatus("no");
+    } catch {
+      setWppStatus("failed");
+    }
+  };
+
   const overlay = isDark ? "bg-slate-950/85 backdrop-blur-md" : "bg-slate-900/50 backdrop-blur-sm";
   const box = isDark ? "bg-[#0F172A] border-slate-800" : "bg-white border-slate-200";
   const border = isDark ? "border-slate-800" : "border-slate-200";
@@ -390,6 +506,52 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
           )}
 
           <div className="space-y-1">
+            <label className={`text-xs font-semibold ${label}`}>CPF do hóspede</label>
+            <div className="flex gap-2">
+              <input
+                value={form.guestCpf}
+                onChange={(e) => {
+                  const clean = e.target.value.replace(/\D/g, "").slice(0, 11);
+                  set("guestCpf", fmtCpf(e.target.value));
+                  if (clean.length === 11) {
+                    if (clean !== lastLookedUpCpf.current && !hubLoading) lookupCpf(clean);
+                  } else {
+                    lastLookedUpCpf.current = "";
+                    setHubFeedback(null);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    lookupCpf();
+                  }
+                }}
+                placeholder="000.000.000-00"
+                className={`${inputCls} min-w-0`}
+              />
+              <button
+                type="button"
+                onClick={() => lookupCpf()}
+                disabled={hubLoading}
+                className="shrink-0 px-3 py-1.5 rounded-lg bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5"
+                title="Buscar dados do hóspede pelo CPF"
+              >
+                {hubLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                Buscar
+              </button>
+            </div>
+            {hubFeedback && (
+              <p
+                className={`text-[11px] font-semibold ${
+                  hubFeedback.type === "ok" ? "text-[#10B981]" : "text-[#EF4444]"
+                }`}
+              >
+                {hubFeedback.text}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1">
             <label className={`text-xs font-semibold ${label}`}>Nome do hóspede *</label>
             <input
               value={form.guestName}
@@ -398,24 +560,59 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className={`text-xs font-semibold ${label}`}>Telefone (WhatsApp)</label>
+          <div className="space-y-1">
+            <label className={`text-xs font-semibold ${label}`}>Telefone (WhatsApp)</label>
+            <div className="flex gap-2">
               <input
                 value={form.guestPhone}
-                onChange={(e) => set("guestPhone", e.target.value)}
+                onChange={(e) => {
+                  set("guestPhone", e.target.value);
+                  setWppStatus("idle");
+                }}
                 placeholder="(00) 90000-0000"
-                className={inputCls}
+                className={`${inputCls} min-w-0`}
               />
+              <button
+                type="button"
+                onClick={verifyWhatsapp}
+                disabled={wppStatus === "loading" || form.guestPhone.replace(/\D/g, "").length < 10}
+                className="shrink-0 px-3 py-1.5 rounded-lg bg-[#25D366]/15 hover:bg-[#25D366]/30 disabled:opacity-40 disabled:cursor-not-allowed text-[#128C7E] border border-[#25D366]/30 text-xs font-bold flex items-center gap-1.5"
+                title="Verificar se o número tem WhatsApp ativo"
+              >
+                {wppStatus === "loading" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <WhatsAppIcon className="w-3.5 h-3.5" />
+                )}
+                Validar
+              </button>
             </div>
-            <div className="space-y-1">
-              <label className={`text-xs font-semibold ${label}`}>CPF</label>
-              <input
-                value={form.guestCpf}
-                onChange={(e) => set("guestCpf", e.target.value)}
-                className={inputCls}
-              />
-            </div>
+            {wppStatus === "ok" && (
+              <p className="text-[11px] font-semibold text-[#10B981] flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Número com WhatsApp ativo.
+              </p>
+            )}
+            {wppStatus === "no" && (
+              <p className="text-[11px] font-semibold text-[#EF4444] flex items-center gap-1">
+                <XCircle className="w-3.5 h-3.5" /> Este número não tem WhatsApp.
+              </p>
+            )}
+            {wppStatus === "failed" && (
+              <p className="text-[11px] font-semibold text-amber-500 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" /> Não foi possível verificar agora — tente novamente.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <label className={`text-xs font-semibold ${label}`}>E-mail (para o aviso de vaga)</label>
+            <input
+              type="email"
+              value={form.guestEmail}
+              onChange={(e) => set("guestEmail", e.target.value)}
+              placeholder="hospede@email.com"
+              className={inputCls}
+            />
           </div>
 
           <div className="space-y-1">
