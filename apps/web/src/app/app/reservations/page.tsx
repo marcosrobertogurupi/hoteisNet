@@ -13,7 +13,30 @@ import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
 import { usePolling } from "@/lib/usePolling";
 
 export default function TenantReservationsPage() {
-  const { defaultCheckInTime, reservationToleranceHours } = useTheme();
+  const { defaultCheckInTime, reservationToleranceHours, theme } = useTheme();
+  const isDark = theme.isDark;
+  const cardCls = isDark ? "bg-[#0F172A] border-slate-800" : "bg-white border-slate-200 shadow-sm";
+  const borderCls = isDark ? "border-slate-800" : "border-slate-200";
+  const headingCls = isDark ? "text-white" : "text-slate-900";
+  const mutedCls = isDark ? "text-slate-400" : "text-slate-500";
+  const faintCls = isDark ? "text-slate-500" : "text-slate-400";
+  const tabWrapCls = isDark ? "bg-[#1E293B] border-slate-700" : "bg-slate-100 border-slate-200";
+  const tabInactiveCls = isDark
+    ? "text-slate-400 hover:text-slate-200"
+    : "text-slate-500 hover:text-slate-800";
+  const theadCls = isDark
+    ? "bg-[#1E293B]/60 text-slate-400 border-slate-800"
+    : "bg-slate-100 text-slate-500 border-slate-200";
+  const rowDivideCls = isDark ? "divide-slate-800/60" : "divide-slate-200";
+  const rowHoverCls = isDark ? "hover:bg-slate-800/40" : "hover:bg-slate-50";
+  const cellStrongCls = isDark ? "text-slate-200" : "text-slate-700";
+  const cellMedCls = isDark ? "text-slate-300" : "text-slate-600";
+  const inputCls = isDark
+    ? "bg-[#1E293B] border-slate-700 text-white"
+    : "bg-white border-slate-300 text-slate-900";
+  const multiBtnCls = isDark
+    ? "bg-slate-800 hover:bg-slate-700 border-slate-700 text-white"
+    : "bg-white hover:bg-slate-100 border-slate-300 text-slate-800";
   const [activeTab, setActiveTab] = useState<"GRID" | "LIST" | "WAITLIST">("GRID");
   const [waitlistActiveCount, setWaitlistActiveCount] = useState(0);
   const [showLancarModal, setShowLancarModal] = useState(false);
@@ -136,13 +159,13 @@ export default function TenantReservationsPage() {
       <LoadingOverlay show={isLoadingReservations} message="Buscando reservas..." submessage="Estamos carregando as reservas mais recentes do hotel." />
 
       {/* Banner & Tab Selector */}
-      <div className="p-6 rounded-2xl bg-[#0F172A] border border-slate-800 flex flex-wrap items-center justify-between gap-4">
+      <div className={`p-6 rounded-2xl border flex flex-wrap items-center justify-between gap-4 ${cardCls}`}>
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <h2 className={`text-lg font-bold flex items-center gap-2 ${headingCls}`}>
             <CalendarDays className="w-5 h-5 text-[#0284C7]" />
             Mapa de Reserva dos Quartos
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className={`text-xs mt-1 ${mutedCls}`}>
             Matriz interativa de reservas, drag & drop de datas, duplo clique para reservar/editar e remoção por tecla Delete.
           </p>
         </div>
@@ -159,14 +182,14 @@ export default function TenantReservationsPage() {
 
           <button
             onClick={() => setShowMultiplasModal(true)}
-            className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold flex items-center gap-2 shadow-lg transition-all"
+            className={`px-4 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 shadow-lg transition-all ${multiBtnCls}`}
             title="Lançar várias reservas de uma vez, salvando tudo no final"
           >
             <Layers className="w-4 h-4 text-[#00b4d8]" />
             Reservas Múltiplas
           </button>
 
-          <div className="flex items-center rounded-xl bg-[#1E293B] border border-slate-700 p-1">
+          <div className={`flex items-center rounded-xl border p-1 ${tabWrapCls}`}>
             <button
               onClick={() => {
                 setActiveTab("GRID");
@@ -175,7 +198,7 @@ export default function TenantReservationsPage() {
               className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${
                 activeTab === "GRID"
                   ? "bg-[#0284C7] text-white shadow-lg shadow-[#0284C7]/20"
-                  : "text-slate-400 hover:text-slate-200"
+                  : tabInactiveCls
               }`}
             >
               <LayoutGrid className="w-4 h-4" />
@@ -189,7 +212,7 @@ export default function TenantReservationsPage() {
               className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${
                 activeTab === "LIST"
                   ? "bg-[#0284C7] text-white shadow-lg shadow-[#0284C7]/20"
-                  : "text-slate-400 hover:text-slate-200"
+                  : tabInactiveCls
               }`}
             >
               <List className="w-4 h-4" />
@@ -200,7 +223,7 @@ export default function TenantReservationsPage() {
               className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${
                 activeTab === "WAITLIST"
                   ? "bg-[#0284C7] text-white shadow-lg shadow-[#0284C7]/20"
-                  : "text-slate-400 hover:text-slate-200"
+                  : tabInactiveCls
               }`}
             >
               <Hourglass className="w-4 h-4" />
@@ -240,13 +263,13 @@ export default function TenantReservationsPage() {
       ) : activeTab === "WAITLIST" ? (
         <WaitlistPanel onActiveCountChange={setWaitlistActiveCount} />
       ) : (
-        <div className="rounded-2xl bg-[#0F172A] border border-slate-800 overflow-hidden">
-          <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div className={`rounded-2xl border overflow-hidden ${cardCls}`}>
+          <div className={`p-4 border-b flex items-center justify-between ${borderCls}`}>
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-white">Lista de Reservas Ativas</h3>
+              <h3 className={`text-sm font-semibold ${headingCls}`}>Lista de Reservas Ativas</h3>
               <button
                 onClick={fetchReservations}
-                className="p-1 text-slate-400 hover:text-white transition-colors"
+                className={`p-1 transition-colors ${mutedCls} ${isDark ? "hover:text-white" : "hover:text-slate-900"}`}
                 title="Atualizar lista"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-[#0284C7]" : ""}`} />
@@ -258,15 +281,15 @@ export default function TenantReservationsPage() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Buscar por hóspede, quarto ou reserva..."
-                className="w-full bg-[#1E293B] border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#0284C7]"
+                className={`w-full border rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:border-[#0284C7] ${inputCls}`}
               />
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+              <Search className={`w-3.5 h-3.5 absolute left-2.5 top-2.5 ${mutedCls}`} />
             </div>
           </div>
 
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-[#1E293B]/60 text-slate-400 text-xs font-mono border-b border-slate-800">
+              <tr className={`text-xs font-mono border-b ${theadCls}`}>
                 <th className="p-3.5">CÓDIGO / HÓSPEDE</th>
                 <th className="p-3.5">ACOMODAÇÃO</th>
                 <th className="p-3.5">PERÍODO</th>
@@ -275,10 +298,10 @@ export default function TenantReservationsPage() {
                 <th className="p-3.5">AÇÕES</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 text-xs">
+            <tbody className={`divide-y text-xs ${rowDivideCls}`}>
               {filteredReservations.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-500 text-xs">
+                  <td colSpan={6} className={`p-8 text-center text-xs ${faintCls}`}>
                     {loading ? "Carregando reservas..." : "Nenhuma reserva encontrada."}
                   </td>
                 </tr>
@@ -291,24 +314,24 @@ export default function TenantReservationsPage() {
                     : r.roomDescription || "Acomodação";
 
                   return (
-                    <tr key={r.id} className="hover:bg-slate-800/40 transition-colors">
+                    <tr key={r.id} className={`transition-colors ${rowHoverCls}`}>
                       <td className="p-3.5">
-                        <div className="font-semibold text-white">{r.guestName}</div>
+                        <div className={`font-semibold ${headingCls}`}>{r.guestName}</div>
                         <span className="font-mono text-[10px] text-[#0284C7]">
                           {r.reservationNumber || r.id} • CPF: {r.guestCpf || r.cpf || "—"}
                         </span>
                         {r.tariffName && (
-                          <span className="text-[10px] text-slate-400 block mt-0.5">
+                          <span className={`text-[10px] block mt-0.5 ${mutedCls}`}>
                             Tarifa: {r.tariffName}
                           </span>
                         )}
                       </td>
-                      <td className="p-3.5 text-slate-200 font-medium">{roomName}</td>
-                      <td className="p-3.5 font-mono text-slate-300">
+                      <td className={`p-3.5 font-medium ${cellStrongCls}`}>{roomName}</td>
+                      <td className={`p-3.5 font-mono ${cellMedCls}`}>
                         {checkInFmt} a {checkOutFmt}
                       </td>
                       <td className="p-3.5 font-mono">
-                        <div className="font-semibold text-white">
+                        <div className={`font-semibold ${headingCls}`}>
                           R$ {(parseFloat(r.totalAmount) || 0).toFixed(2)}
                         </div>
                         <span className="text-[10px] text-[#10B981]">
@@ -321,7 +344,7 @@ export default function TenantReservationsPage() {
                             <CheckCircle2 className="w-3 h-3" /> Preenchido / FNRH OK
                           </span>
                         ) : r.preCheckinSent ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] bg-[#38BDF8]/15 text-[#38BDF8] border border-[#38BDF8]/30 flex items-center gap-1 w-fit">
+                          <span className="px-2 py-0.5 rounded text-[10px] bg-[#38BDF8]/15 text-[#0284C7] border border-[#38BDF8]/30 flex items-center gap-1 w-fit">
                             <Clock className="w-3 h-3" /> Aguardando Preenchimento
                           </span>
                         ) : (
@@ -334,7 +357,7 @@ export default function TenantReservationsPage() {
                         <button
                           onClick={() => handleSendUazapiLink(r.id)}
                           disabled={sendingLinkId === r.id}
-                          className="px-3 py-1 bg-[#38BDF8]/15 hover:bg-[#38BDF8]/30 disabled:opacity-50 disabled:cursor-not-allowed text-[#38BDF8] border border-[#38BDF8]/30 rounded text-xs transition-colors flex items-center gap-1 font-medium"
+                          className="px-3 py-1 bg-[#38BDF8]/15 hover:bg-[#38BDF8]/30 disabled:opacity-50 disabled:cursor-not-allowed text-[#0284C7] border border-[#38BDF8]/30 rounded text-xs transition-colors flex items-center gap-1 font-medium"
                         >
                           <WhatsAppIcon className="w-3 h-3 text-[#25D366]" /> {sendingLinkId === r.id ? "Enviando..." : r.preCheckinSent ? "Reenviar Link" : "Enviar FNRH"}
                         </button>
