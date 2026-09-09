@@ -54,22 +54,83 @@ export async function findWaitlistVacancy(
   if (rooms.length === 0) return null;
   const roomIds = rooms.map((r) => r.id);
 
-  const [busy, heldEntries] = await Promise.all([
+  const [busy, held] = await Promise.all([
     busyRoomIdsForPeriod(tx, roomIds, checkIn, checkOut),
-    tx.waitlistEntry.findMany({
-      where: {
-        tenantId: params.tenantId,
-        status: "NOTIFIED",
-        notifiedRoomId: { in: roomIds },
-        id: params.excludeWaitlistId ? { not: params.excludeWaitlistId } : undefined,
-        checkInDate: { lt: checkOut },
-        checkOutDate: { gt: checkIn },
-      },
-      select: { notifiedRoomId: true },
+    roomIdsHeldByOtherWaitlist(tx, {
+      tenantId: params.tenantId,
+      roomIds,
+      checkIn: params.checkIn,
+      checkOut: params.checkOut,
+      excludeWaitlistId: params.excludeWaitlistId,
     }),
   ]);
 
-  const held = new Set(heldEntries.map((e) => e.notifiedRoomId).filter(Boolean) as string[]);
   const free = roomIds.find((id) => !busy.has(id) && !held.has(id));
   return free ? { roomId: free } : null;
+}
+
+// Quartos (dentre os informados) em "soft hold" por OUTRA entrada da fila já avisada (status
+// NOTIFIED, `notifiedRoomId` preenchido, período sobreposto) — ou seja, um quarto já prometido a
+// outro hóspede da fila. `excludeWaitlistId` tira a própria entrada da conta (o hold dela não
+// compete consigo mesma). Usado por `findWaitlistVacancy` e pela conversão, para a recepção nunca
+// converter uma entrada usando o quarto reservado para quem já foi avisado antes.
+export async function roomIdsHeldByOtherWaitlist(
+  tx: PrismaClientOrTx,
+  params: {
+    tenantId: string;
+    roomIds: string[];
+    checkIn: Date;
+    checkOut: Date;
+    excludeWaitlistId?: string;
+  }
+): Promise<Set<string>> {
+  if (params.roomIds.length === 0) return new Set();
+  const checkIn = waitlistCheckInAt(params.checkIn);
+  const checkOut = waitlistCheckOutAt(params.checkOut);
+  const heldEntries = await tx.waitlistEntry.findMany({
+    where: {
+      tenantId: params.tenantId,
+      status: "NOTIFIED",
+      notifiedRoomId: { in: params.roomIds },
+      id: params.excludeWaitlistId ? { not: params.excludeWaitlistId } : undefined,
+      checkInDate: { lt: checkOut },
+      checkOutDate: { gt: checkIn },
+    },
+    select: { notifiedRoomId: true },
+  });
+  return new Set(heldEntries.map((e) => e.notifiedRoomId).filter(Boolean) as string[]);
+}
+
+// Quantas entradas da fila estão À FRENTE desta para a mesma categoria e um período sobreposto —
+// isto é, entradas ainda `WAITING` criadas antes (`createdAt` menor) que disputam a mesma vaga.
+// A regra travada com o usuário é "avisar o primeiro da fila (createdAt asc)"; avisar/converter
+// alguém com gente na frente é "furar a fila" e só deve acontecer com confirmação explícita da
+// recepção (e fica registrado na trilha de auditoria). Uma entrada à frente já `NOTIFIED` não
+// entra nesta conta — ela é protegida pelo soft hold (`roomIdsHeldByOtherWaitlist`), não pela
+// ordem.
+export async function countWaitlistAhead(
+  tx: PrismaClientOrTx,
+  entry: {
+    id: string;
+    tenantId: string;
+    roomCategoryId: string;
+    checkInDate: Date;
+    checkOutDate: Date;
+    createdAt: Date;
+  }
+): Promise<{ count: number; nextGuestName: string | null }> {
+  const ahead = await tx.waitlistEntry.findMany({
+    where: {
+      tenantId: entry.tenantId,
+      status: "WAITING",
+      roomCategoryId: entry.roomCategoryId,
+      id: { not: entry.id },
+      createdAt: { lt: entry.createdAt },
+      checkInDate: { lt: entry.checkOutDate },
+      checkOutDate: { gt: entry.checkInDate },
+    },
+    orderBy: { createdAt: "asc" },
+    select: { guestName: true },
+  });
+  return { count: ahead.length, nextGuestName: ahead[0]?.guestName ?? null };
 }
