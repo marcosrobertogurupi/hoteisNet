@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { supabaseAdmin } from "@/utils/supabaseClient";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 
@@ -247,15 +246,10 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: `Quarto ${target} não encontrado.` }, { status: 404 });
     }
 
-    // 2. Fallback / Sincronizar via Supabase Admin
-    try {
-      await supabaseAdmin
-        .from("rooms")
-        .update(data)
-        .or(`number.eq.${target},id.eq.${target}`);
-    } catch (sbErr) {
-      console.warn("[PATCH /api/reservations/rooms] Supabase sync notice:", sbErr);
-    }
+    // Prisma e o PostgREST do Supabase apontam para o MESMO banco — o updateMany acima já gravou.
+    // O "sync" antigo via supabaseAdmin (service role, sem RLS) casava por `number.eq.<target>` sem
+    // filtro de tenant: com dois hotéis tendo o quarto "101", editar um sobrescrevia o do outro
+    // (e `${target}` ia cru no filtro PostgREST). Removido — era redundante e vazava entre tenants.
 
     const room = await withDbRetry(() =>
       prisma.room.findFirst({
@@ -326,11 +320,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: `Quarto ${id} não encontrado.` }, { status: 404 });
     }
 
-    try {
-      await supabaseAdmin.from("rooms").delete().eq("id", id);
-    } catch (sbErr) {
-      console.warn("[DELETE /api/reservations/rooms] Supabase sync notice:", sbErr);
-    }
+    // (sem "sync" via supabaseAdmin — Prisma e PostgREST usam o mesmo banco; o deleteMany já apagou)
 
     await logActivity({
       tenantId: session!.tenantId!,
