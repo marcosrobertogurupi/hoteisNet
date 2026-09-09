@@ -64,10 +64,18 @@ export async function findBlockingOpenStay(
   tx: PrismaClientOrTx,
   roomId: string,
   checkInDate: Date,
-  checkOutDate: Date
+  checkOutDate: Date,
+  // Ao editar/prorrogar uma reserva que já teve check-in, a hospedagem dela mesma não pode
+  // "bloquear" a própria edição — informe o id da reserva para ignorar a StayCheckin vinculada.
+  excludeReservationId?: string
 ) {
   const stays = await tx.stayCheckin.findMany({
-    where: { roomId, isClosed: false, checkInDate: { lt: checkOutDate } },
+    where: {
+      roomId,
+      isClosed: false,
+      checkInDate: { lt: checkOutDate },
+      ...(excludeReservationId ? { reservationId: { not: excludeReservationId } } : {}),
+    },
     select: { id: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
   });
   return stays.find((s) => stayOccupiedUntil(s) > checkInDate) ?? null;

@@ -3,7 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
-import { resolveRoomId, findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
+import {
+  resolveRoomId,
+  findConflictingReservation,
+  findBlockingOpenStay,
+  lockRoomsForReservation,
+} from "@/lib/reservationHelpers";
 import { processReservationDeposit } from "@/lib/paymentProcessing";
 
 // POST /api/reservations/batch — cria várias reservas de uma só vez, dentro de uma única
@@ -91,6 +96,13 @@ export async function POST(req: NextRequest) {
         if (conflict) {
           throw new Error(
             `Conflito de reserva: o quarto ${r.roomId} já possui a reserva de "${conflict.guestName}" sobrepondo o período informado para "${r.guestName}". Nenhuma reserva do lote foi salva.`
+          );
+        }
+
+        const blockingStay = await findBlockingOpenStay(tx as any, realRoomId, checkInDate, checkOutDate);
+        if (blockingStay) {
+          throw new Error(
+            `Conflito de reserva: o quarto ${r.roomId} está ocupado por uma hospedagem em aberto que se estende sobre o período informado para "${r.guestName}". Nenhuma reserva do lote foi salva.`
           );
         }
 

@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
-import { resolveRoomId, findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
+import {
+  resolveRoomId,
+  findConflictingReservation,
+  findBlockingOpenStay,
+  lockRoomsForReservation,
+} from "@/lib/reservationHelpers";
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
 import { txWithRetry } from "@/lib/dbTx";
@@ -108,6 +113,17 @@ export async function POST(req: NextRequest) {
       if (conflict) {
         throw new ReservationConflictError(
           `Já existe uma reserva confirmada para este quarto neste período (reserva de "${conflict.guestName}").`
+        );
+      }
+
+      // Além da tabela de reservas, bloqueia quando o quarto está fisicamente ocupado por uma
+      // hospedagem em aberto cuja ocupação efetiva (inclui overstay) alcança o período pedido —
+      // sem isso dá para reservar/pré-check-in um quarto de onde o hóspede anterior ainda não saiu
+      // (a reserva de origem dele já tem checkOutDate no passado e não gera conflito).
+      const blockingStay = await findBlockingOpenStay(tx as any, realRoomId, checkIn, checkOut);
+      if (blockingStay) {
+        throw new ReservationConflictError(
+          "Este quarto está ocupado por uma hospedagem em aberto que se estende sobre o período informado. Finalize o check-out antes de reservar."
         );
       }
 
@@ -312,6 +328,21 @@ export async function PATCH(req: NextRequest) {
         if (conflict) {
           throw new ReservationConflictError(
             `Já existe uma reserva confirmada para este quarto neste período (reserva de "${conflict.guestName}").`
+          );
+        }
+
+        // Hospedagem em aberto de OUTRA reserva ocupando o quarto no período (a própria hospedagem
+        // desta reserva é ignorada via excludeReservationId, para não travar a própria prorrogação).
+        const blockingStay = await findBlockingOpenStay(
+          tx as any,
+          realRoomId ?? existing.roomId,
+          effectiveCheckIn,
+          effectiveCheckOut,
+          id
+        );
+        if (blockingStay) {
+          throw new ReservationConflictError(
+            "Este quarto está ocupado por uma hospedagem em aberto que se estende sobre o período informado."
           );
         }
       }
