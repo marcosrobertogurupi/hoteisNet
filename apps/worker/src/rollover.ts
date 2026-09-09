@@ -68,8 +68,8 @@ export async function runDailyRollover(): Promise<void> {
       const isExtra = referenceDate >= stay.expectedCheckOut;
 
       try {
-        await prisma.$transaction([
-          prisma.stayCharge.create({
+        await prisma.$transaction(async (tx) => {
+          await tx.stayCharge.create({
             data: {
               stayCheckinId: stay.id,
               referenceDate,
@@ -77,8 +77,8 @@ export async function runDailyRollover(): Promise<void> {
               chargeType: "DAILY",
               amount: rate,
             },
-          }),
-          prisma.stayCheckin.update({
+          });
+          await tx.stayCheckin.update({
             where: { id: stay.id },
             data: {
               dailiesCount: { increment: 1 },
@@ -86,8 +86,28 @@ export async function runDailyRollover(): Promise<void> {
               totalDaily: { increment: rate },
               lastRolloverDate: new Date(),
             },
-          }),
-        ]);
+          });
+          // Só a diária ALÉM da previsão de saída (overstay) entra como débito novo no saldo do
+          // hóspede — as diárias do período combinado já foram debitadas de uma vez no check-in
+          // (guestDebitTotal). Debitá-las de novo aqui contaria em dobro; não debitar as de overstay
+          // deixaria sobrar crédito fantasma quando o hóspede paga a diária extra no check-out.
+          if (isExtra && rate > 0) {
+            await tx.guest.update({
+              where: { id: stay.primaryGuestId },
+              data: { balance: { decrement: rate } },
+            });
+            await tx.guestBalanceEntry.create({
+              data: {
+                tenantId: stay.tenantId,
+                guestId: stay.primaryGuestId,
+                stayCheckinId: stay.id,
+                type: "DEBITO",
+                amount: rate,
+                description: `Diária extra por overstay — ${description}`,
+              },
+            });
+          }
+        });
         console.log(`[rollover] +1 diária — tenant=${tenant.name} stay=${stay.id}`);
       } catch (err: any) {
         // P2002 = unique constraint (stayCheckinId, referenceDate) já satisfeita: virada já lançada.

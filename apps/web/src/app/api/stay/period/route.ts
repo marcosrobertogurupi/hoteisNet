@@ -4,6 +4,15 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { findConflictingReservation } from "@/lib/reservationHelpers";
+import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
+import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+
+function nightsBetween(from: Date, to: Date): number {
+  return Math.max(
+    0,
+    Math.round((dateOnlyBrasilia(to).getTime() - dateOnlyBrasilia(from).getTime()) / 86_400_000)
+  );
+}
 
 // PATCH /api/stay/period — grava no banco a previsão de saída (e, se informada, a tarifa da
 // diária corrente) escolhida no modal "Alterar Período da Hospedagem". Esta é a ÚNICA fonte de
@@ -63,6 +72,8 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      const prevExpectedCheckOut = stay.expectedCheckOut;
+
       await tx.stayCheckin.update({
         where: { id: stayCheckinId },
         data: { expectedCheckOut: newExpectedCheckOut },
@@ -71,21 +82,24 @@ export async function PATCH(req: NextRequest) {
       // Se a tarifa da diária corrente mudou, reflete o novo valor na última diária já lançada
       // (a "diária corrente" da hospedagem) e recalcula o total — diárias passadas já cobradas
       // permanecem intocadas.
-      if (ratePerNight !== undefined && Number.isFinite(Number(ratePerNight)) && Number(ratePerNight) >= 0) {
-        const currentCharge = await tx.stayCharge.findFirst({
-          where: { stayCheckinId, chargeType: "DAILY" },
-          orderBy: { referenceDate: "desc" },
-        });
+      const currentCharge = await tx.stayCharge.findFirst({
+        where: { stayCheckinId, chargeType: "DAILY" },
+        orderBy: { referenceDate: "desc" },
+      });
+      const hasNewRate =
+        ratePerNight !== undefined && Number.isFinite(Number(ratePerNight)) && Number(ratePerNight) >= 0;
+      const effectiveRate = hasNewRate ? Number(ratePerNight) : Number(currentCharge?.amount ?? 0);
 
-        if (currentCharge && Number(currentCharge.amount) !== Number(ratePerNight)) {
-          await tx.stayCharge.update({
-            where: { id: currentCharge.id },
-            data: {
-              amount: Number(ratePerNight),
-              description: tariffName || currentCharge.description,
-            },
-          });
-        }
+      let dailyRateDelta = 0;
+      if (hasNewRate && currentCharge && Number(currentCharge.amount) !== Number(ratePerNight)) {
+        dailyRateDelta = Number(ratePerNight) - Number(currentCharge.amount);
+        await tx.stayCharge.update({
+          where: { id: currentCharge.id },
+          data: {
+            amount: Number(ratePerNight),
+            description: tariffName || currentCharge.description,
+          },
+        });
       }
 
       // Inclui a cobrança de chegada de madrugada/antecipada (EARLY_ARRIVAL) no acumulado —
@@ -100,6 +114,32 @@ export async function PATCH(req: NextRequest) {
         data: { totalDaily: Number(chargesAgg._sum.amount || 0) },
         include: { charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } } },
       });
+
+      // Ajuste no saldo do hóspede para acompanhar o novo valor devido pela hospedagem:
+      //  • mudança da tarifa da diária corrente (uma noite): delta direto.
+      //  • prorrogação da previsão de saída: as noites a mais são pré-debitadas agora (mesmo que o
+      //    check-in fez com o período original), senão a virada automática não as debita — ela só
+      //    debita o que passa da previsão de saída, que já é a nova — e sobraria crédito no
+      //    check-out. Encurtar a previsão NÃO credita nada automaticamente: reduzir a conta de uma
+      //    hospedagem é ato deliberado (desconto/estorno pelo operador), não efeito colateral.
+      const addedNights = Math.max(
+        0,
+        nightsBetween(stay.checkInDate, newExpectedCheckOut) - nightsBetween(stay.checkInDate, prevExpectedCheckOut)
+      );
+      const periodDelta = addedNights * effectiveRate;
+      const totalBalanceDelta = dailyRateDelta + periodDelta;
+      if (totalBalanceDelta !== 0) {
+        await adjustGuestStayDebit(tx, {
+          tenantId: stay.tenantId,
+          guestId: stay.primaryGuestId,
+          stayCheckinId,
+          delta: totalBalanceDelta,
+          description:
+            addedNights > 0
+              ? `Ajuste de período/tarifa da hospedagem (+${addedNights} diária(s)) — ${stayCheckinId}`
+              : `Ajuste de tarifa da diária corrente — hospedagem ${stayCheckinId}`,
+        });
+      }
 
       return updatedStay;
     });

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
+import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
 
 // PATCH /api/stay/tariff — grava no banco a tarifa escolhida pelo usuário no modal "Alterar Tarifa
 // da Hospedagem" (aplicar em toda hospedagem / hoje em diante / apenas nos selecionados). O front
@@ -47,14 +48,16 @@ export async function PATCH(req: NextRequest) {
         throw new Error("Esta hospedagem já foi encerrada e não pode mais ter a tarifa alterada.");
       }
 
+      let totalDelta = 0;
       for (const item of dailyRates) {
+        const ref = new Date(item.referenceDate);
+        const before = await tx.stayCharge.findUnique({
+          where: { stayCheckinId_referenceDate: { stayCheckinId, referenceDate: ref } },
+          select: { amount: true },
+        });
+        if (before) totalDelta += Number(item.rateValue) - Number(before.amount);
         await tx.stayCharge.update({
-          where: {
-            stayCheckinId_referenceDate: {
-              stayCheckinId,
-              referenceDate: new Date(item.referenceDate),
-            },
-          },
+          where: { stayCheckinId_referenceDate: { stayCheckinId, referenceDate: ref } },
           data: {
             description: item.tariffName,
             amount: Number(item.rateValue),
@@ -77,6 +80,18 @@ export async function PATCH(req: NextRequest) {
         data: { totalDaily },
         include: { charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } } },
       });
+
+      // A troca de tarifa mudou o valor devido pela hospedagem — o saldo do hóspede acompanha o
+      // delta (positivo = passou a dever mais → DEBITO; negativo → CREDITO).
+      if (totalDelta !== 0) {
+        await adjustGuestStayDebit(tx, {
+          tenantId: stay.tenantId,
+          guestId: stay.primaryGuestId,
+          stayCheckinId,
+          delta: totalDelta,
+          description: `Ajuste por troca de tarifa (${dailyRates.length} diária(s)) — hospedagem ${stayCheckinId}`,
+        });
+      }
 
       return updatedStay;
     });
