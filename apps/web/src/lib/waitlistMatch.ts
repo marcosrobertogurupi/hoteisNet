@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { busyRoomIdsForPeriod } from "@/lib/reservationHelpers";
+import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
@@ -21,6 +22,53 @@ export function waitlistCheckInAt(date: Date): Date {
 }
 export function waitlistCheckOutAt(date: Date): Date {
   return atBrasiliaTime(date.toISOString().slice(0, 10), DEFAULT_CHECK_OUT_TIME);
+}
+
+// Normaliza adults/children vindos do cliente: inteiros, adults >= 1, children >= 0. Sem isso um
+// `children: -3` (truthy) ou `adults: 2.7` era gravado cru.
+export function sanitizeParty(adults: unknown, children: unknown): { adults: number; children: number } {
+  const a = Math.trunc(Number(adults));
+  const c = Math.trunc(Number(children));
+  return {
+    adults: Number.isFinite(a) && a >= 1 ? a : 1,
+    children: Number.isFinite(c) && c >= 0 ? c : 0,
+  };
+}
+
+// A data de chegada não pode estar no passado — ancorada em Brasília, porque em produção o "hoje"
+// do processo roda em UTC (3h à frente da meia-noite BRT). Retorna a mensagem de erro, ou null.
+export function pastCheckInError(checkIn: Date): string | null {
+  return dateOnlyBrasilia(checkIn) < dateOnlyBrasilia(new Date())
+    ? "A data de chegada não pode estar no passado."
+    : null;
+}
+
+// Maior número de hóspedes que alguma tarifa ativa do tenant consegue precificar (Tariff.adults é
+// tratado como capacidade da tarifa, igual ao check-in). `null` quando o hotel ainda não tem
+// nenhuma tarifa cadastrada — aí a validação de capacidade não roda aqui (o convert cobra isso).
+export async function maxTariffOccupancy(tx: PrismaClientOrTx, tenantId: string): Promise<number | null> {
+  const t = await tx.tariff.findFirst({
+    where: { tenantId, active: true },
+    orderBy: { adults: "desc" },
+    select: { adults: true },
+  });
+  return t ? t.adults : null;
+}
+
+// Valida o nº de pessoas contra a capacidade máxima das tarifas do tenant. Retorna a mensagem de
+// erro, ou null se ok (ou se não há tarifa cadastrada para comparar).
+export async function partyOverCapacityError(
+  tx: PrismaClientOrTx,
+  tenantId: string,
+  adults: number,
+  children: number
+): Promise<string | null> {
+  const max = await maxTariffOccupancy(tx, tenantId);
+  if (max == null) return null;
+  const occupants = adults + children;
+  return occupants > max
+    ? `Nenhuma tarifa cadastrada acomoda ${occupants} hóspede(s) (máximo ${max}). Ajuste o número de pessoas ou cadastre uma tarifa adequada.`
+    : null;
 }
 
 // Procura um quarto ATIVO da categoria pedida que esteja genuinamente livre para todo o período
