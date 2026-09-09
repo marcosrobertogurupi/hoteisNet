@@ -114,36 +114,46 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
       const cpf = cpfDigits;
 
-      let guest = await tx.guest.findFirst({ where: { tenantId, cpf } });
+      const guest = await tx.guest.findFirst({ where: { tenantId, cpf } });
+
+      // O hóspede está preenchendo a própria FNRH — o que ele digita é autoritativo. Mas um campo
+      // deixado EM BRANCO no formulário nunca deve APAGAR um valor que a recepção já cadastrou:
+      // `keep` mantém o valor existente quando o formulário veio vazio (só sobrescreve com o que
+      // o hóspede de fato informou), e no cadastro novo cai no default.
+      const keep = <T,>(submitted: T | null | undefined, existing: T | null | undefined): T | null => {
+        if (submitted !== undefined && submitted !== null && submitted !== ("" as unknown as T)) return submitted;
+        return existing ?? null;
+      };
 
       const guestData = {
         tenantId,
-        fullName: String(body.fullName || link.reservation.guestName || "").toUpperCase(),
+        fullName: String(body.fullName || guest?.fullName || link.reservation.guestName || "").toUpperCase(),
         cpf,
-        passport: body.passport || null,
-        birthDate: body.birthDate ? new Date(body.birthDate) : null,
-        gender: body.gender || null,
-        email: body.email || null,
-        phone: body.phone || null,
-        whatsappPhone: body.phone || null,
-        hasWhatsapp: !!body.phone,
-        zipCode: body.zipCode || null,
-        street: body.street || null,
-        number: body.number || null,
-        neighborhood: body.neighborhood || null,
-        city: body.city || null,
-        state: body.state || null,
-        country: body.country || "Brasil",
-        rgNumber: body.rgNumber || null,
-        rgIssuer: body.rgIssuer || null,
-        rgIssuerState: body.rgIssuerState || null,
-        nationality: body.nationality || "BR",
-        raceColor: body.raceColor || "NAOINFORMAR",
-        disability: body.disability || "NAOINFORMAR",
-        occupation: body.occupation || null,
+        passport: keep<string>(body.passport, guest?.passport),
+        birthDate: body.birthDate ? new Date(body.birthDate) : (guest?.birthDate ?? null),
+        gender: keep<string>(body.gender, guest?.gender),
+        email: keep<string>(body.email, guest?.email),
+        phone: keep<string>(body.phone, guest?.phone),
+        whatsappPhone: keep<string>(body.phone, guest?.whatsappPhone),
+        hasWhatsapp: body.phone ? true : (guest?.hasWhatsapp ?? false),
+        zipCode: keep<string>(body.zipCode, guest?.zipCode),
+        street: keep<string>(body.street, guest?.street),
+        number: keep<string>(body.number, guest?.number),
+        neighborhood: keep<string>(body.neighborhood, guest?.neighborhood),
+        city: keep<string>(body.city, guest?.city),
+        state: keep<string>(body.state, guest?.state),
+        // Colunas não-nulas (têm default no schema): nunca podem virar null.
+        country: body.country || guest?.country || "Brasil",
+        rgNumber: keep<string>(body.rgNumber, guest?.rgNumber),
+        rgIssuer: keep<string>(body.rgIssuer, guest?.rgIssuer),
+        rgIssuerState: keep<string>(body.rgIssuerState, guest?.rgIssuerState),
+        nationality: body.nationality || guest?.nationality || "BR",
+        raceColor: body.raceColor || guest?.raceColor || "NAOINFORMAR",
+        disability: body.disability || guest?.disability || "NAOINFORMAR",
+        occupation: keep<string>(body.occupation, guest?.occupation),
       };
 
-      guest = guest
+      const savedGuest = guest
         ? await tx.guest.update({ where: { id: guest.id }, data: guestData })
         : await tx.guest.create({ data: guestData });
 
@@ -173,12 +183,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // linha de "ficha pendente" 4-5x no alerta e no sino. Remove só rascunhos ainda não
       // transmitidos; uma ficha já enviada ao SNRHos é registro legal e nunca é apagada aqui.
       await tx.fNRHRecord.deleteMany({
-        where: { reservationId: link.reservation.id, guestId: guest.id, transmittedSNRHos: false },
+        where: { reservationId: link.reservation.id, guestId: savedGuest.id, transmittedSNRHos: false },
       });
 
       const fnrhRecord = await tx.fNRHRecord.create({
         data: {
-          guestId: guest.id,
+          guestId: savedGuest.id,
           reservationId: link.reservation.id,
           travelReason: String(body.travelReason || "NEGOCIOS"),
           transportMode: String(body.transportMode || "AVIAO"),
@@ -193,7 +203,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       });
 
       if (!link.reservation.guestId) {
-        await tx.reservation.update({ where: { id: link.reservation.id }, data: { guestId: guest.id } });
+        await tx.reservation.update({ where: { id: link.reservation.id }, data: { guestId: savedGuest.id } });
       }
 
       await tx.preCheckinLink.update({

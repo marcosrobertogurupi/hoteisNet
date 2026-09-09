@@ -94,17 +94,22 @@ export async function POST(req: NextRequest) {
     );
     const movimento = { id: cashTransactionId! };
 
-    // Saldo devedor atualizado da hospedagem, se localizada no banco
+    // Saldo devedor atualizado da hospedagem, se localizada no banco. Mesma fórmula de
+    // /api/caixa/pagamento-lote e do check-out — inclui outros débitos e desconto, senão o valor
+    // exibido ao operador diverge das outras telas.
     let saldoContaQuarto: number | null = null;
     if (stay) {
-      const [charges, payments] = await Promise.all([
+      const [charges, payments, stayAfter] = await Promise.all([
         prisma.stayCharge.aggregate({ where: { stayCheckinId: stay.id }, _sum: { amount: true } }),
         prisma.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+        prisma.stayCheckin.findUnique({ where: { id: stay.id }, select: { discount: true, otherDebits: true } }),
       ]);
       const totalDiarias = Number(charges._sum.amount || 0);
       const totalConsumo = Number(stay.totalConsumption);
       const totalPago = Number(payments._sum.amount || 0);
-      saldoContaQuarto = Math.max(0, totalDiarias + totalConsumo - totalPago);
+      const totalDesconto = Number(stayAfter?.discount || 0);
+      const totalOutrosDebitos = Number(stayAfter?.otherDebits || 0);
+      saldoContaQuarto = Math.max(0, totalDiarias + totalConsumo + totalOutrosDebitos - totalPago - totalDesconto);
     }
 
     await logActivity({

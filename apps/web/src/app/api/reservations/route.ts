@@ -19,6 +19,9 @@ import { resolveOperator } from "@/lib/operator";
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
 class ReservationConflictError extends Error {}
 
+// Reserva inexistente / de outro tenant — o catch mapeia para 404 (não 500).
+class ReservationNotFoundError extends Error {}
+
 // Toda Reservation vive sob este tenantId fixo por convenção histórica deste projeto — o
 // isolamento real por hotel é sempre via Reservation.room.tenantId (ver comentário em
 // lib/preCheckinSender.ts). Nunca usar o tenantId do cliente/sessão como valor deste campo.
@@ -298,7 +301,7 @@ export async function PATCH(req: NextRequest) {
     await txWithRetry(async (tx) => {
       const existing = await tx.reservation.findFirst({ where: { id, room: { tenantId: session.tenantId! } } });
       if (!existing) {
-        throw new Error(`Reserva ${id} não encontrada.`);
+        throw new ReservationNotFoundError(`Reserva ${id} não encontrada.`);
       }
 
       const realRoomId = roomId ? await resolveRoomId(tx as any, String(roomId), session.tenantId!) : undefined;
@@ -364,7 +367,7 @@ export async function PATCH(req: NextRequest) {
       });
 
       if (updated.count === 0) {
-        throw new Error(`Reserva ${id} não encontrada.`);
+        throw new ReservationNotFoundError(`Reserva ${id} não encontrada.`);
       }
 
       // ── Reconciliação de adiantamentos editados na tela de edição da reserva ──────────────
@@ -456,7 +459,8 @@ export async function PATCH(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("[PATCH /api/reservations] Erro:", error);
-    const status = error instanceof ReservationConflictError ? 409 : 500;
+    const status =
+      error instanceof ReservationConflictError ? 409 : error instanceof ReservationNotFoundError ? 404 : 500;
     return NextResponse.json({ success: false, error: error.message }, { status });
   }
 }
