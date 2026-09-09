@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { X, Eye, Printer, Filter, Search, ChevronDown, Check } from "lucide-react";
 import { INITIAL_TARIFFS, TariffItem } from "./CadastroTarifasModal";
 import { useToast } from "@/context/ToastContext";
+import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
 
 function parseBRDate(dateStr: string): Date | null {
   const [datePart] = dateStr.split(" ");
@@ -71,6 +72,13 @@ export default function AlterarTarifaHospedagemModal({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [customDailyValue, setCustomDailyValue] = useState<number>(selectedTariff.price);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Autorização de administrador para redução de tarifa acima do limite (Tenant.maxDiscountPercent).
+  // O servidor (/api/stay/tariff) é a autoridade: se recusar com precisaAutorizacao, abrimos este
+  // modal e reenviamos a gravação com as credenciais para o servidor revalidar (verifyAdminStepUp).
+  const [adminAuth, setAdminAuth] = useState<{ email: string; password: string } | null>(null);
+  const [showAdminAuth, setShowAdminAuth] = useState(false);
+  const [adminAuthLimit, setAdminAuthLimit] = useState<number | null>(null);
 
   // Initialize daily rates table based on stay date range or provided dailyRates
   const [dailyRates, setDailyRates] = useState<DailyRateItem[]>(() => {
@@ -179,7 +187,7 @@ export default function AlterarTarifaHospedagemModal({
     );
   };
 
-  const handleSave = async () => {
+  const handleSave = async (auth?: { email: string; password: string }) => {
     if (isSaving) return;
 
     const missingReference = dailyRates.some((item) => !item.referenceDate);
@@ -187,6 +195,8 @@ export default function AlterarTarifaHospedagemModal({
       toast.error("Não foi possível identificar as diárias desta hospedagem no banco de dados.", "Erro ao Salvar");
       return;
     }
+
+    const credentials = auth ?? adminAuth;
 
     setIsSaving(true);
     try {
@@ -200,10 +210,20 @@ export default function AlterarTarifaHospedagemModal({
             tariffName: item.tariffName,
             rateValue: item.rateValue,
           })),
+          adminEmail: credentials?.email,
+          adminPassword: credentials?.password,
         }),
       });
       const data = await res.json();
       if (!data.success) {
+        if (data.precisaAutorizacao) {
+          // Redução acima do limite: pede autorização de admin e reenvia com as credenciais.
+          setAdminAuth(null);
+          setAdminAuthLimit(typeof data.limitePercent === "number" ? data.limitePercent : null);
+          setShowAdminAuth(true);
+          setIsSaving(false);
+          return;
+        }
         throw new Error(data.error || "Falha ao gravar a nova tarifa no banco de dados.");
       }
 
@@ -605,7 +625,7 @@ export default function AlterarTarifaHospedagemModal({
             {/* Bottom Right Save Button matching Print 1 & 2 */}
             <div className="pt-4 flex items-center justify-end">
               <button
-                onClick={handleSave}
+                onClick={() => handleSave()}
                 disabled={isSaving}
                 className="px-6 py-3 bg-[#00b4d8] hover:bg-[#0096c7] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xs shadow-md active:scale-95 transition-all"
               >
@@ -617,6 +637,21 @@ export default function AlterarTarifaHospedagemModal({
 
         </div>
       </div>
+
+      <AdminAuthorizationModal
+        isOpen={showAdminAuth}
+        onClose={() => setShowAdminAuth(false)}
+        reason={
+          adminAuthLimit != null
+            ? `Redução de tarifa acima do limite de ${adminAuthLimit}% permitido para a recepção`
+            : "Redução de tarifa acima do limite permitido para a recepção"
+        }
+        onAuthorized={(_admin, credentials) => {
+          setAdminAuth(credentials);
+          setShowAdminAuth(false);
+          void handleSave(credentials);
+        }}
+      />
     </div>
   );
 }

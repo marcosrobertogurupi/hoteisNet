@@ -6,6 +6,7 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { findConflictingReservation } from "@/lib/reservationHelpers";
 import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { verifyAdminStepUp } from "@/lib/adminAuth";
 
 function nightsBetween(from: Date, to: Date): number {
   return Math.max(
@@ -45,6 +46,44 @@ export async function PATCH(req: NextRequest) {
     const newExpectedCheckOut = new Date(expectedCheckOut);
     if (Number.isNaN(newExpectedCheckOut.getTime())) {
       return NextResponse.json({ success: false, error: "expectedCheckOut inválido." }, { status: 400 });
+    }
+
+    // ── Controle de desconto (autoritativo no servidor) ────────────────────────────────────
+    // Baixar a tarifa da diária corrente é um desconto implícito — sem esta trava dava para
+    // driblar o Tenant.maxDiscountPercent por aqui. Se a nova diária ficar mais barata que o
+    // limite do tenant permite, exige autorização de administrador (mesmo verifyAdminStepUp do
+    // check-in / pagamento-lote / stay/tariff).
+    if (ratePerNight !== undefined && Number.isFinite(Number(ratePerNight)) && Number(ratePerNight) >= 0) {
+      const staySc = await prisma.stayCheckin.findFirst({
+        where: { id: stayCheckinId, tenantId: session.tenantId },
+        select: { id: true },
+      });
+      if (!staySc) {
+        return NextResponse.json({ success: false, error: `Hospedagem ${stayCheckinId} não encontrada.` }, { status: 404 });
+      }
+      const currentCharge = await prisma.stayCharge.findFirst({
+        where: { stayCheckinId, chargeType: "DAILY" },
+        orderBy: { referenceDate: "desc" },
+        select: { amount: true },
+      });
+      const antes = Number(currentCharge?.amount ?? 0);
+      const reducaoPercent = antes > 0 ? ((antes - Number(ratePerNight)) / antes) * 100 : 0;
+      if (reducaoPercent > 0.001) {
+        const tenantForDiscount = await prisma.tenant.findUnique({
+          where: { id: session.tenantId },
+          select: { maxDiscountPercent: true },
+        });
+        const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
+        if (reducaoPercent > limite + 0.001) {
+          const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+          if (!auth.ok) {
+            return NextResponse.json(
+              { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
+              { status: auth.status }
+            );
+          }
+        }
+      }
     }
 
     const result = await txWithRetry(async (tx) => {
