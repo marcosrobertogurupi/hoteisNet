@@ -261,7 +261,10 @@ export default function TenantReservationsPage() {
           onInteractionChange={setReservationMoveBusy}
         />
       ) : activeTab === "WAITLIST" ? (
-        <WaitlistPanel onActiveCountChange={setWaitlistActiveCount} />
+        <WaitlistPanel
+          onActiveCountChange={setWaitlistActiveCount}
+          onOpenReserva={() => setShowLancarModal(true)}
+        />
       ) : (
         <div className={`rounded-2xl border overflow-hidden ${cardCls}`}>
           <div className={`p-4 border-b flex items-center justify-between ${borderCls}`}>

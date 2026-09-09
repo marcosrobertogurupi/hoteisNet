@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
-import { waitlistCheckInAt, waitlistCheckOutAt } from "@/lib/waitlistMatch";
+import { waitlistCheckInAt, waitlistCheckOutAt, findWaitlistVacancy } from "@/lib/waitlistMatch";
 
 // Campos que a tela de gestão da fila de espera desenha — select explícito, sem `include`, sem
 // spread do registro na resposta (CLAUDE.md, Performance §1–§3).
@@ -83,6 +83,7 @@ export async function POST(req: NextRequest) {
       notes,
       operatorId,
       operatorName,
+      force, // "adicionar mesmo assim" quando já há quarto livre no período
     } = body;
 
     if (!guestName?.trim() || !roomCategoryId || !checkInDate || !checkOutDate) {
@@ -121,6 +122,25 @@ export async function POST(req: NextRequest) {
     const checkOut = waitlistCheckOutAt(new Date(checkOutDate));
     if (isNaN(checkIn.getTime()) || isNaN(checkOut.getTime()) || checkOut <= checkIn) {
       return NextResponse.json({ success: false, error: "Datas inválidas." }, { status: 400 });
+    }
+
+    // A fila de espera só faz sentido quando NÃO há vaga. Se já existe um quarto livre da categoria
+    // no período, o operador deve lançar a reserva direto — a menos que confirme "adicionar mesmo
+    // assim" (force). Mesma régua de disponibilidade do resto do sistema (a reserva tem prioridade).
+    if (!force) {
+      const vacancy = await findWaitlistVacancy(prisma, {
+        tenantId: session.tenantId,
+        roomCategoryId: category.id,
+        checkIn,
+        checkOut,
+      });
+      if (vacancy) {
+        return NextResponse.json({
+          success: false,
+          hasVacancy: true,
+          error: `Há quarto livre da categoria ${category.name} nesse período. A fila de espera é para quando não há vaga — lance a reserva diretamente ou confirme para adicionar mesmo assim.`,
+        });
+      }
     }
 
     const entry = await prisma.waitlistEntry.create({

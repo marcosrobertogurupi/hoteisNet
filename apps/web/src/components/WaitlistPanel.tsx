@@ -59,7 +59,13 @@ function timeInQueue(iso: string): string {
   return `${Math.max(1, Math.floor(ms / (60 * 1000)))}min`;
 }
 
-export default function WaitlistPanel({ onActiveCountChange }: { onActiveCountChange?: (n: number) => void }) {
+export default function WaitlistPanel({
+  onActiveCountChange,
+  onOpenReserva,
+}: {
+  onActiveCountChange?: (n: number) => void;
+  onOpenReserva?: () => void;
+}) {
   const { theme } = useTheme();
   const isDark = theme.isDark;
 
@@ -306,6 +312,14 @@ export default function WaitlistPanel({ onActiveCountChange }: { onActiveCountCh
       {showAdd && (
         <AddToWaitlistModal
           onClose={() => setShowAdd(false)}
+          onOpenReserva={
+            onOpenReserva
+              ? () => {
+                  setShowAdd(false);
+                  onOpenReserva();
+                }
+              : undefined
+          }
           onSaved={() => {
             setShowAdd(false);
             setFeedback({ type: "ok", text: "Hóspede adicionado à fila de espera." });
@@ -317,7 +331,15 @@ export default function WaitlistPanel({ onActiveCountChange }: { onActiveCountCh
   );
 }
 
-function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function AddToWaitlistModal({
+  onClose,
+  onSaved,
+  onOpenReserva,
+}: {
+  onClose: () => void;
+  onSaved: () => void;
+  onOpenReserva?: () => void;
+}) {
   const { theme } = useTheme();
   const isDark = theme.isDark;
 
@@ -336,6 +358,8 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Aviso "há quarto livre nesse período" — a fila só faz sentido sem vaga.
+  const [vacancyWarning, setVacancyWarning] = useState<string | null>(null);
 
   // Consulta de CPF (cadastro local → Hub do Desenvolvedor) para preencher os dados do hóspede.
   const [hubLoading, setHubLoading] = useState(false);
@@ -354,8 +378,9 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
       .catch(() => {});
   }, []);
 
-  const save = async () => {
+  const save = async (force = false) => {
     setError(null);
+    if (!force) setVacancyWarning(null);
     if (!form.guestName.trim() || !form.roomCategoryId || !form.checkInDate || !form.checkOutDate) {
       setError("Preencha hóspede, categoria, chegada e saída.");
       return;
@@ -365,10 +390,11 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
       const res = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, force }),
       });
       const data = await res.json();
       if (data.success) onSaved();
+      else if (data.hasVacancy) setVacancyWarning(data.error || "Há quarto livre nesse período.");
       else setError(data.error || "Erro ao adicionar à fila.");
     } catch {
       setError("Erro de conexão.");
@@ -377,7 +403,10 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
     }
   };
 
-  const set = (k: keyof typeof form, v: string | number) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k: keyof typeof form, v: string | number) => {
+    if (k === "roomCategoryId" || k === "checkInDate" || k === "checkOutDate") setVacancyWarning(null);
+    setForm((f) => ({ ...f, [k]: v }));
+  };
 
   const fmtCpf = (val: string) => {
     const c = val.replace(/\D/g, "").slice(0, 11);
@@ -686,6 +715,31 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
           </div>
         </div>
 
+        {vacancyWarning && (
+          <div className="px-4 py-3 border-t border-amber-500/30 bg-amber-500/10 shrink-0 space-y-2">
+            <p className="text-[11px] font-semibold text-amber-600 flex items-start gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {vacancyWarning}
+            </p>
+            <div className="flex justify-end gap-2">
+              {onOpenReserva && (
+                <button
+                  onClick={onOpenReserva}
+                  className="px-3 py-1.5 rounded-lg bg-[#0284C7] hover:bg-[#0369A1] text-white text-xs font-bold"
+                >
+                  Lançar reserva
+                </button>
+              )}
+              <button
+                onClick={() => save(true)}
+                disabled={saving}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${cancelBtn}`}
+              >
+                {saving ? "Salvando…" : "Adicionar mesmo assim"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className={`p-4 border-t flex justify-end gap-2 shrink-0 ${border}`}>
           <button
             onClick={onClose}
@@ -694,8 +748,8 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
             Cancelar
           </button>
           <button
-            onClick={save}
-            disabled={saving}
+            onClick={() => save()}
+            disabled={saving || !!vacancyWarning}
             className="px-4 py-1.5 rounded-lg bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-50 text-white text-xs font-bold"
           >
             {saving ? "Salvando…" : "Adicionar"}
