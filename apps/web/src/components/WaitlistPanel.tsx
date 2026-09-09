@@ -489,9 +489,9 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
   const inputCls = `w-full rounded-lg border px-3 py-1.5 text-xs focus:outline-none focus:border-[#0284C7] ${field}`;
 
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${overlay}`}>
-      <div className={`w-full max-w-lg rounded-2xl border shadow-2xl ${box}`}>
-        <div className={`p-4 border-b flex items-center justify-between ${border}`}>
+    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto ${overlay}`}>
+      <div className={`w-full max-w-lg rounded-2xl border shadow-2xl flex flex-col my-auto max-h-[calc(100vh-4rem)] ${box}`}>
+        <div className={`p-4 border-b flex items-center justify-between shrink-0 ${border}`}>
           <h3 className={`text-sm font-bold flex items-center gap-2 ${heading}`}>
             <Hourglass className="w-4 h-4 text-amber-400" /> Adicionar à fila de espera
           </h3>
@@ -500,7 +500,7 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
           </button>
         </div>
 
-        <div className="p-4 space-y-3">
+        <div className="p-4 space-y-3 overflow-y-auto flex-1 min-h-0">
           {error && (
             <div className="px-3 py-2 rounded-lg bg-[#EF4444]/15 text-[#EF4444] text-xs font-semibold">{error}</div>
           )}
@@ -686,7 +686,7 @@ function AddToWaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved
           </div>
         </div>
 
-        <div className={`p-4 border-t flex justify-end gap-2 ${border}`}>
+        <div className={`p-4 border-t flex justify-end gap-2 shrink-0 ${border}`}>
           <button
             onClick={onClose}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${cancelBtn}`}
