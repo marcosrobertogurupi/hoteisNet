@@ -4,7 +4,13 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { findConflictingReservation, findBlockingOpenStay, lockRoomsForReservation } from "@/lib/reservationHelpers";
-import { waitlistCheckInAt, waitlistCheckOutAt, countWaitlistAhead, roomIdsHeldByOtherWaitlist } from "@/lib/waitlistMatch";
+import {
+  waitlistCheckInAt,
+  waitlistCheckOutAt,
+  countWaitlistAhead,
+  roomIdsHeldByOtherWaitlist,
+  pastCheckInError,
+} from "@/lib/waitlistMatch";
 
 // Toda Reservation vive sob este tenantId fixo por convenção histórica do projeto — o isolamento
 // real por hotel é via Reservation.room.tenantId (ver apps/web/src/app/api/reservations/route.ts).
@@ -49,6 +55,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       });
       if (!entry) return { code: 404 as const, error: "Entrada não encontrada ou já encerrada." };
+
+      // Datas no passado: a entrada pode ter envelhecido na fila até a chegada pedida já ter
+      // passado. Não dá para criar uma reserva CONFIRMED no passado — a recepção edita o período
+      // da entrada antes de converter.
+      const pastErr = pastCheckInError(entry.checkInDate);
+      if (pastErr) {
+        return { code: 409 as const, error: `${pastErr} Edite o período da entrada antes de converter.` };
+      }
 
       // Ordem da fila: uma entrada já NOTIFIED (a recepção/worker já a colocou na frente) passa
       // direto; caso contrário, se há entradas WAITING mais antigas para a mesma categoria/período,
@@ -118,15 +132,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         return { code: 409 as const, error: `Não há quarto livre da categoria ${entry.roomCategoryName} no período.` };
       }
 
-      // Tarifa pelo nº de adultos (Tariff não tem categoryId — mesma regra do sistema legado).
-      const tariff =
-        (await tx.tariff.findFirst({
-          where: { tenantId, active: true, adults: { gte: entry.adults } },
-          orderBy: { adults: "asc" },
-        })) ||
-        (await tx.tariff.findFirst({ where: { tenantId, active: true }, orderBy: { price: "asc" } }));
+      // Tarifa pela ocupação (adultos + crianças), igual ao check-in — Tariff.adults é a capacidade
+      // da tarifa. A menor tarifa que cobre a ocupação. NUNCA cair na "mais barata" quando nenhuma
+      // cobre: isso subfaturava (família grande pagando tarifa single). Sem tarifa que cubra → a
+      // recepção ajusta o cadastro de tarifas ou o nº de pessoas.
+      const occupants = entry.adults + entry.children;
+      const tariff = await tx.tariff.findFirst({
+        where: { tenantId, active: true, adults: { gte: occupants } },
+        orderBy: [{ adults: "asc" }, { price: "asc" }],
+      });
       if (!tariff) {
-        return { code: 409 as const, error: "Hotel sem tarifa cadastrada — cadastre uma tarifa antes de converter." };
+        const anyTariff = await tx.tariff.findFirst({ where: { tenantId, active: true }, select: { id: true } });
+        return {
+          code: 409 as const,
+          error: anyTariff
+            ? `Nenhuma tarifa cadastrada cobre ${occupants} hóspede(s). Cadastre uma tarifa adequada ou ajuste o número de pessoas da entrada antes de converter.`
+            : "Hotel sem tarifa cadastrada — cadastre uma tarifa antes de converter.",
+        };
       }
 
       // guestId revalidado contra o tenant.

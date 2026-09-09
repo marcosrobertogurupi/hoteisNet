@@ -373,6 +373,9 @@ function AddToWaitlistModal({
   const { theme } = useTheme();
   const isDark = theme.isDark;
 
+  // "Hoje" no fuso do hotel (Brasília) — trava o mínimo dos campos de data; o servidor revalida.
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+
   const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState({
     guestName: "",
@@ -695,6 +698,7 @@ function AddToWaitlistModal({
               <label className={`text-xs font-semibold ${label}`}>Chegada *</label>
               <input
                 type="date"
+                min={todayStr}
                 value={form.checkInDate}
                 onChange={(e) => set("checkInDate", e.target.value)}
                 className={inputCls}
@@ -704,6 +708,7 @@ function AddToWaitlistModal({
               <label className={`text-xs font-semibold ${label}`}>Saída *</label>
               <input
                 type="date"
+                min={form.checkInDate || todayStr}
                 value={form.checkOutDate}
                 onChange={(e) => set("checkOutDate", e.target.value)}
                 className={inputCls}
