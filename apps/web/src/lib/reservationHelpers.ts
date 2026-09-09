@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 // Aceita tanto o client Prisma completo quanto o client de dentro de uma `prisma.$transaction`
 // (que não expõe $connect/$disconnect/$transaction/$extends) — as duas formas são usadas nas
@@ -104,6 +104,28 @@ export async function busyRoomIdsForPeriod(
   ]);
   const busyByStay = openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId);
   return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...busyByStay]);
+}
+
+// Serializa por quarto toda operação que cria/move uma reserva ou abre uma hospedagem: trava as
+// linhas de `rooms` informadas pelo resto da transação (`SELECT ... FOR UPDATE`). Chame SEMPRE
+// dentro da transação, ANTES de checar conflito e gravar.
+//
+// Por quê: o Postgres roda em READ COMMITTED. Sem esta trava, duas transações concorrentes para o
+// mesmo quarto/período leem `findConflictingReservation` → nenhuma enxerga o `reservation.create`
+// ainda não commitado da outra → as duas passam e as duas inserem = overbooking. Não é erro de
+// serialização, então o `txWithRetry` não reexecuta. Com a trava, a segunda transação espera aqui
+// até a primeira terminar (commit/rollback) e então revê o conflito já com a reserva da primeira
+// visível. Mesmo padrão já usado em `stay/checkin` (linha do quarto travada no início da tx).
+//
+// Os ids são ordenados antes de travar: duas transações que precisem do mesmo conjunto de quartos
+// adquirem as linhas na mesma ordem e nunca formam deadlock cruzado.
+export async function lockRoomsForReservation(
+  tx: PrismaClientOrTx,
+  roomIds: (string | null | undefined)[]
+): Promise<void> {
+  const ids = [...new Set(roomIds.filter((x): x is string => !!x))].sort();
+  if (ids.length === 0) return;
+  await tx.$queryRaw`SELECT id FROM rooms WHERE id IN (${Prisma.join(ids)}) ORDER BY id FOR UPDATE`;
 }
 
 // Verifica se existe alguma reserva ativa (não CANCELLED/CHECKED_OUT) sobrepondo o período

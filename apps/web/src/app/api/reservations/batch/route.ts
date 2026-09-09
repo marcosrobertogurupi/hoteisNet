@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
-import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
+import { resolveRoomId, findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { processReservationDeposit } from "@/lib/paymentProcessing";
 
 // POST /api/reservations/batch — cria várias reservas de uma só vez, dentro de uma única
@@ -72,8 +72,18 @@ export async function POST(req: NextRequest) {
         realCashRegisterId = caixa.id;
       }
 
+      // Pré-resolve os quartos e trava todas as linhas de uma vez, em ordem de id, ANTES de checar
+      // conflito e gravar — assim dois lotes concorrentes que compartilham quartos serializam sem
+      // deadlock (mesma ordem de aquisição), em vez de ambos lerem "livre" e gravarem sobreposto.
+      const resolvedRoomIds: string[] = [];
       for (const r of reservations) {
-        const realRoomId = await resolveRoomId(tx as any, String(r.roomId), session.tenantId!);
+        resolvedRoomIds.push(await resolveRoomId(tx as any, String(r.roomId), session.tenantId!));
+      }
+      await lockRoomsForReservation(tx as any, resolvedRoomIds);
+
+      for (let idx = 0; idx < reservations.length; idx++) {
+        const r = reservations[idx];
+        const realRoomId = resolvedRoomIds[idx];
         const checkInDate = new Date(r.checkInDate);
         const checkOutDate = new Date(r.checkOutDate);
 

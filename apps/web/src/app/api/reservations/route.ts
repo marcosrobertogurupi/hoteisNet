@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
-import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
+import { resolveRoomId, findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
 import { txWithRetry } from "@/lib/dbTx";
@@ -96,6 +96,11 @@ export async function POST(req: NextRequest) {
       const realRoomId = await resolveRoomId(tx as any, String(roomId), session.tenantId!);
       const checkIn = new Date(checkInDate);
       const checkOut = new Date(checkOutDate);
+
+      // Trava a linha do quarto pelo resto da transação ANTES de checar conflito: sem isso, duas
+      // criações concorrentes para o mesmo quarto/período leem "livre" ao mesmo tempo e ambas
+      // gravam (READ COMMITTED não enxerga o INSERT não commitado da outra).
+      await lockRoomsForReservation(tx as any, [realRoomId]);
 
       // Bloqueia overbooking: mesmo padrão já usado em /api/reservations/batch e /api/stay/period —
       // a checagem roda dentro da própria transação para ser atômica (nunca só uma validação de UI).
@@ -293,6 +298,10 @@ export async function PATCH(req: NextRequest) {
       // Só precisa checar quando quarto e/ou datas realmente mudam; edições de outros campos
       // (nome, notas, etc.) não afetam ocupação e não precisam revalidar o período.
       if (realRoomId !== undefined || checkInDate || checkOutDate) {
+        // Trava o(s) quarto(s) envolvidos (o atual e o de destino, se mudou) antes de revalidar o
+        // período — impede que uma edição/movimentação concorrente para o mesmo quarto crie
+        // sobreposição.
+        await lockRoomsForReservation(tx as any, [existing.roomId, realRoomId]);
         const conflict = await findConflictingReservation(
           tx as any,
           realRoomId ?? existing.roomId,

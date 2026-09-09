@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
-import { findConflictingReservation, findBlockingOpenStay } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { waitlistCheckInAt, waitlistCheckOutAt } from "@/lib/waitlistMatch";
 
 // Toda Reservation vive sob este tenantId fixo por convenção histórica do projeto — o isolamento
@@ -53,6 +53,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         where: { tenantId, categoryId: entry.roomCategoryId, active: true },
         select: { id: true, number: true, floor: true },
       });
+
+      // Serializa a conversão por quarto: sem isso, duas conversões concorrentes (recepção + worker,
+      // ou dois terminais) escolhem o mesmo quarto livre e criam duas reservas sobrepostas.
+      await lockRoomsForReservation(tx, rooms.map((r) => r.id));
+
       const ordered = entry.notifiedRoomId
         ? [...rooms].sort((a, b) => (a.id === entry.notifiedRoomId ? -1 : b.id === entry.notifiedRoomId ? 1 : 0))
         : rooms;
