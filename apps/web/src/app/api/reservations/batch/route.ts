@@ -10,6 +10,7 @@ import {
   lockRoomsForReservation,
 } from "@/lib/reservationHelpers";
 import { processReservationDeposit } from "@/lib/paymentProcessing";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/reservations/batch — cria várias reservas de uma só vez, dentro de uma única
 // transação Prisma (equivalente ao botão "Salvar Reservas" da tela de Reservas Múltiplas do
@@ -28,11 +29,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const {
-      operatorId,
-      operatorName,
-      reservations = [],
-    } = body;
+    const { reservations = [] } = body;
 
     if (!Array.isArray(reservations) || reservations.length === 0) {
       return NextResponse.json({
@@ -55,10 +52,9 @@ export async function POST(req: NextRequest) {
       const created: { reservationId: string; reservationNumber: string; roomId: string; guestName: string }[] = [];
 
       // O sinal (adiantamento) de cada reserva entra no caixa ABERTO do operador da sessão —
-      // nunca um cashRegisterId vindo do cliente. Só resolve/cria o caixa quando o lote tem de
-      // fato algum adiantamento a lançar.
-      const opId = operatorId || "USR-001";
-      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      // nunca um cashRegisterId nem um operatorId vindos do cliente (ver lib/operator.ts).
+      // Só resolve/cria o caixa quando o lote tem de fato algum adiantamento a lançar.
+      const { operatorId: opId, operatorName: opName } = resolveOperator(session);
       const loteTemAdiantamento = reservations.some(
         (r: any) => Array.isArray(r?.payments) && r.payments.some((p: any) => Number(p?.amount) > 0)
       );
@@ -137,8 +133,8 @@ export async function POST(req: NextRequest) {
             hasWhatsapp: !!r.hasWhatsapp,
             wppSent: false,
             cashRegisterId: realCashRegisterId,
-            operatorId: operatorId || null,
-            operatorName: operatorName || null,
+            operatorId: opId,
+            operatorName: opName,
             notes: r.notes || null,
             roomDescription: r.roomDescription || null,
             roomCategory: r.roomCategory || null,

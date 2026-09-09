@@ -13,6 +13,7 @@ import { reservationsMapPayload } from "@/lib/mapQueries";
 import { txWithRetry } from "@/lib/dbTx";
 import { processReservationDeposit, reverseReservationDeposits } from "@/lib/paymentProcessing";
 import { jsonForTenant } from "@/lib/tenantResponse";
+import { resolveOperator } from "@/lib/operator";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
@@ -80,8 +81,6 @@ export async function POST(req: NextRequest) {
       adults = 1,
       children = 0,
       hasWhatsapp = false,
-      operatorId,
-      operatorName,
       notes,
       roomDescription,
       roomCategory,
@@ -138,10 +137,9 @@ export async function POST(req: NextRequest) {
       const validPayments = (payments as any[]).filter((p) => Number(p?.amount) > 0);
 
       // O sinal (adiantamento) entra no caixa ABERTO do operador da sessão — nunca um
-      // cashRegisterId vindo do cliente (que permitiria lançar no caixa de outro hotel/operador).
+      // cashRegisterId nem um operatorId vindos do cliente (ver lib/operator.ts).
       // Só resolve/cria o caixa quando há de fato um adiantamento a lançar.
-      const opId = operatorId || "USR-001";
-      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      const { operatorId: opId, operatorName: opName } = resolveOperator(session);
       let realCashRegisterId: string | null = null;
       if (validPayments.length > 0) {
         let caixa = await tx.cashRegister.findFirst({
@@ -182,8 +180,8 @@ export async function POST(req: NextRequest) {
           hasWhatsapp: !!hasWhatsapp,
           wppSent: false,
           cashRegisterId: realCashRegisterId,
-          operatorId: operatorId || null,
-          operatorName: operatorName || null,
+          operatorId: opId,
+          operatorName: opName,
           notes: notes || null,
           roomDescription: roomDescription || null,
           roomCategory: roomCategory || null,
@@ -282,8 +280,6 @@ export async function PATCH(req: NextRequest) {
       totalAmount,
       status,
       notes,
-      operatorId,
-      operatorName,
       // Reconciliação de adiantamentos feita pela tela de edição da reserva: novos adiantamentos
       // a lançar e ids de reservation_payments a estornar. Quando qualquer um dos dois é enviado,
       // o depositPaid é recalculado no servidor a partir da soma real (o valor do cliente é ignorado).
@@ -375,8 +371,8 @@ export async function PATCH(req: NextRequest) {
       // Igual à criação: o valor entra/estorna no caixa ABERTO do operador da sessão, na mesma
       // transação. Regra do usuário: "qualquer pagamento deve cair no caixa do operador".
       if (reconcilesPayments) {
-        const opId = operatorId || "USR-001";
-        const opName = (operatorName || session.name || "OPERADOR RECEPÇÃO").toUpperCase();
+        // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+        const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
         const removedIds = (Array.isArray(removedPaymentIds) ? removedPaymentIds : []).map(String).filter(Boolean);
         if (removedIds.length > 0) {

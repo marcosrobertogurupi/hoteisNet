@@ -4,6 +4,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/caixa/pagamento-checkin — lança um crédito/pagamento na hospedagem ativa do quarto
 // E, ao mesmo tempo, registra o movimento no caixa aberto do operador ativo (equivalente ao
@@ -17,8 +18,6 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      operatorId,
-      operatorName,
       roomId,
       stayCheckinId,
       guestName,
@@ -32,8 +31,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Valor do pagamento deve ser maior que zero." }, { status: 400 });
     }
 
-    const opId = operatorId || "USR-001";
-    const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+    const { operatorId: opId, operatorName: opName } = resolveOperator(session);
     const fpg = formaPagamento || "DINHEIRO";
     const roomTarget = String(roomId || "");
 

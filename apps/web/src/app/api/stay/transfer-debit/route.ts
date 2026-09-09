@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
+import { resolveOperator } from "@/lib/operator";
 
 // Forma de pagamento pré-cadastrada usada para "quitar" no quarto de origem o valor que está
 // sendo movido para outro quarto — já existia na lista de PRE_REGISTERED_PAYMENT_METHODS do
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { operatorId, operatorName, fromStayCheckinId, toStayCheckinId, amount } = body;
+    const { fromStayCheckinId, toStayCheckinId, amount } = body;
 
     const valorTransferir = Number(amount);
     if (!fromStayCheckinId || !toStayCheckinId) {
@@ -45,8 +46,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const opId = operatorId || "USR-001";
-    const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+    const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
     const result = await txWithRetry(async (tx) => {
       const [fromStay, toStay] = await Promise.all([

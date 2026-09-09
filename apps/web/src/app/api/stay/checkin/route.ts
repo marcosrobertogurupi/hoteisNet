@@ -9,6 +9,7 @@ import { processPaymentLine } from "@/lib/paymentProcessing";
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { resolveOperator } from "@/lib/operator";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -242,8 +243,6 @@ export async function POST(req: NextRequest) {
       totalAmount,
       tariffId,
       tariffName,
-      operatorId,
-      operatorName,
       initialPayments,
       discount,
       secondaryGuests,
@@ -663,8 +662,8 @@ export async function POST(req: NextRequest) {
         (p: any) => Number(p?.valor) > 0
       );
 
-      const opId = operatorId || "USR-001";
-      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+      const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
       // Caixa do operador — resolvido só quando há algo a lançar (pagamento no balcão ou sinal
       // de reserva antiga ainda não lançado). Reutiliza a mesma instância entre os dois blocos.
@@ -846,10 +845,9 @@ export async function PATCH(req: NextRequest) {
 
     const body = await req.json();
     const { stayCheckinId } = body;
-    // Operador ativo no terminal (OperatorContext) — usado só para saber em qual caixa registrar
-    // o lançamento de controle do check-out com valor zerado (ver abaixo). Nunca define tenant.
-    const opId: string = body.operatorId || "USR-001";
-    const opName: string = String(body.operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado (ver lib/operator.ts) — usado só para saber em qual caixa
+    // registrar o lançamento de controle do check-out com valor zerado (ver abaixo).
+    const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
     if (!stayCheckinId) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });

@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth";
 import { applyMinibarCheck } from "@/lib/minibarCheck";
 import { logActivity } from "@/lib/audit";
 import { getClientIp, getTerminalName } from "@/lib/auth";
+import { resolveOperator } from "@/lib/operator";
 
 // Conferência do frigobar do quarto abastecido feita pela recepção no check-out.
 //
@@ -94,8 +95,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const stayCheckinId = String(body.stayCheckinId || "");
     const items: { productId: string; foundQty: number }[] = Array.isArray(body.items) ? body.items : [];
-    const operatorId: string | null = body.operatorId ? String(body.operatorId) : session.userId || null;
-    const operatorName: string = String(body.operatorName || session.name || "RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado, nunca o operatorId do body (ver lib/operator.ts).
+    const { operatorId, operatorName } = resolveOperator(session);
 
     if (!stayCheckinId) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });

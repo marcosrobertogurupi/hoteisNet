@@ -5,6 +5,7 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/caixa/pagamento-lote — grava, em uma única transação, todos os lançamentos de
 // crédito/pagamento pendentes da hospedagem no caixa do operador ativo. Espelha o comportamento
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { operatorId, operatorName, roomId, stayCheckinId, guestName, payments, discount } = body;
+    const { roomId, stayCheckinId, guestName, payments, discount } = body;
 
     const hasPayments = Array.isArray(payments) && payments.length > 0;
     const hasDiscountUpdate = discount !== undefined && discount !== null;
@@ -28,8 +29,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, movimentos: [], saldoContaQuarto: null });
     }
 
-    const opId = operatorId || "USR-001";
-    const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+    const { operatorId: opId, operatorName: opName } = resolveOperator(session);
     const roomTarget = String(roomId || "");
 
     let stay = stayCheckinId
