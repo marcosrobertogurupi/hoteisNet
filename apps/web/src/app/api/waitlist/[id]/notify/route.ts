@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
-import { findWaitlistVacancy } from "@/lib/waitlistMatch";
+import { findWaitlistVacancy, countWaitlistAhead } from "@/lib/waitlistMatch";
 import { lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { sendUazapiText } from "@/lib/uazapi";
 import { sendTenantEmail } from "@/lib/tenantEmail";
@@ -52,6 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const { id } = await params;
+    const body = await req.json().catch(() => ({} as any));
+    // "furar a fila": avisar mesmo havendo entradas WAITING mais antigas para a categoria/período.
+    const overrideQueue = body?.override === true;
 
     const outcome = await txWithRetry(async (tx) => {
       const entry = await tx.waitlistEntry.findFirst({
@@ -65,11 +68,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           roomCategoryName: true,
           checkInDate: true,
           checkOutDate: true,
+          status: true,
+          createdAt: true,
         },
       });
       if (!entry) return { code: 404 as const, error: "Entrada não encontrada ou já encerrada." };
       if (!entry.guestPhone && !entry.guestEmail) {
         return { code: 400 as const, error: "A entrada não tem e-mail nem telefone para avisar o hóspede." };
+      }
+
+      // Ordem da fila: reavisar uma entrada já NOTIFIED é sempre permitido; avisar uma WAITING com
+      // gente mais antiga na frente só com override explícito da recepção.
+      let jumpedQueue = false;
+      if (entry.status !== "NOTIFIED") {
+        const ahead = await countWaitlistAhead(tx, { ...entry, tenantId: session.tenantId! });
+        if (ahead.count > 0) {
+          if (!overrideQueue) {
+            return {
+              code: 409 as const,
+              needsQueueOverride: true as const,
+              aheadCount: ahead.count,
+              nextGuestName: ahead.nextGuestName,
+              error:
+                `Há ${ahead.count} hóspede(s) na frente na fila para ${entry.roomCategoryName} nesse período` +
+                (ahead.nextGuestName ? ` (o próximo é ${ahead.nextGuestName})` : "") +
+                `. Avise esse primeiro ou confirme para furar a fila.`,
+            };
+          }
+          jumpedQueue = true;
+        }
       }
 
       // Trava os quartos da categoria pelo resto da transação: dois avisos concorrentes (ou um aviso
@@ -103,11 +130,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       });
 
-      return { code: 200 as const, entry };
+      return { code: 200 as const, entry, jumpedQueue };
     });
 
     if (outcome.code !== 200) {
-      return NextResponse.json({ success: false, error: outcome.error }, { status: outcome.code });
+      return NextResponse.json(
+        {
+          success: false,
+          error: outcome.error,
+          ...("needsQueueOverride" in outcome
+            ? { needsQueueOverride: true, aheadCount: outcome.aheadCount, nextGuestName: outcome.nextGuestName }
+            : {}),
+        },
+        { status: outcome.code },
+      );
     }
 
     const { entry } = outcome;
@@ -137,7 +173,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       userId: session.userId,
       userName: session.name,
       action: "WAITLIST_NOTIFY_MANUAL",
-      description: `${session.name || "Usuário"} avisou ${entry.guestName} sobre vaga na fila de espera (${entry.roomCategoryName}).`,
+      description:
+        `${session.name || "Usuário"} avisou ${entry.guestName} sobre vaga na fila de espera (${entry.roomCategoryName}).` +
+        (outcome.jumpedQueue ? " [furou a fila — havia entradas mais antigas para a categoria/período]" : ""),
       entityType: "WAITLIST_ENTRY",
       entityId: entry.id,
       terminal: getTerminalName(req),
