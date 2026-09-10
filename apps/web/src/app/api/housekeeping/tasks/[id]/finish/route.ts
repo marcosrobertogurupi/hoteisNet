@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHousekeeperSession } from "@/lib/housekeeperAuth";
+import { getHousekeeperUser } from "@/lib/housekeeperSession";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { applyMinibarCheck } from "@/lib/minibarCheck";
@@ -18,7 +18,7 @@ import { logActivity } from "@/lib/audit";
 // frigobar é reabastecido ao kit cheio logo após a arrumação.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getHousekeeperSession(req);
+    const session = await getHousekeeperUser(req);
     if (!session) {
       return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
     }

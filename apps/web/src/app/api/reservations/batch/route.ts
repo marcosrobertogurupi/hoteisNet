@@ -19,9 +19,7 @@ import { checkDiscountAuthorization, reservationDiscountBase } from "@/lib/disco
 // projeto WinDev original: o usuário vai incluindo reservas em uma grade local, sem gravar nada,
 // e só quando clica em "Salvar Reservas" tudo é persistido de uma vez). Se qualquer reserva do
 // lote apresentar conflito de quarto/data ou falhar, NENHUMA reserva do lote é gravada.
-// Ver comentário RESERVATION_TENANT_ID em ../route.ts — Reservation.tenantId é sempre este valor
-// fixo por convenção histórica; o isolamento real por hotel é via Reservation.room.tenantId.
-const RESERVATION_TENANT_ID = "TNT-01";
+// Reservation.tenantId é o tenant real da sessão (ver comentário em ../route.ts).
 
 export async function POST(req: NextRequest) {
   try {
@@ -140,7 +138,7 @@ export async function POST(req: NextRequest) {
 
         const reservation = await tx.reservation.create({
           data: {
-            tenantId: RESERVATION_TENANT_ID,
+            tenantId: session.tenantId!,
             roomId: realRoomId,
             guestName: r.guestName,
             guestCpf: r.guestCpf || null,
@@ -192,7 +190,7 @@ export async function POST(req: NextRequest) {
             data: {
               id: crypto.randomUUID(),
               reservationId: reservation.id,
-              tenantId: RESERVATION_TENANT_ID,
+              tenantId: session.tenantId!,
               cashRegisterId: realCashRegisterId,
               cashTransactionId,
               amount: pmt.amount,

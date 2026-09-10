@@ -74,9 +74,7 @@ export async function POST(req: NextRequest) {
         })
       : await prisma.reservation.create({
           data: {
-            // Reservas sempre vivem sob o tenant "TNT-01" nesta base, independente do tenant do
-            // quarto (convenção histórica dos demais endpoints — ver POST /api/stay/checkin).
-            tenantId: "TNT-01",
+            tenantId: session.tenantId!,
             roomId: room.id,
             guestName: String(guestName).toUpperCase(),
             guestCpf: cpf,

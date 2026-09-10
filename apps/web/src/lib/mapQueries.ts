@@ -9,11 +9,6 @@ import { stayOccupiedUntil } from "@/lib/reservationHelpers";
 // consolidadas (/api/mapa/quartos-tick, /api/mapa/reservas-tick) todas chamam estas funções, para
 // não duplicar (e deixar divergir) a lógica de isolamento por tenant e o formato de saída.
 
-// Convenção histórica: toda Reservation vive sob este tenantId fixo; o isolamento real por hotel é
-// sempre via Reservation.room.tenantId. Nunca usar o tenantId do cliente/sessão como valor deste
-// campo (é só um rótulo devolvido no payload sintético, para compatibilidade com o front).
-const RESERVATION_TENANT_ID = "TNT-01";
-
 // Até quando o quarto está efetivamente ocupado, considerando diárias já lançadas na hospedagem
 // (StayCheckin.dailiesCount, incrementado pelo rollover automático). Retorna o maior valor entre a
 // data prevista de saída e checkInDate + dailiesCount — a barra do Mapa de Reservas acompanha
@@ -154,7 +149,7 @@ export async function reservationsMapPayload(tenantId: string) {
     .filter((s) => !roomIdsAlreadyCheckedIn.has(s.roomId))
     .map((s) => ({
       id: `stay-${s.id}`,
-      tenantId: RESERVATION_TENANT_ID,
+      tenantId,
       roomId: s.roomId,
       guestName: s.primaryGuest.fullName,
       guestCpf: s.primaryGuest.cpf,

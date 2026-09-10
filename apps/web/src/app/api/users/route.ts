@@ -3,8 +3,6 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, hashPassword, getClientIp, getTerminalName } from "@/lib/auth";
 
-const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
-
 // GET /api/users — lista usuários (SUPER_ADMIN vê todos os hotéis; TENANT_ADMIN só o seu)
 export async function GET(req: NextRequest) {
   const session = await getSessionUser(req);
@@ -12,10 +10,16 @@ export async function GET(req: NextRequest) {
   if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
   const isSuperAdmin = session!.role === "SUPER_ADMIN";
-  const tenantId = session!.tenantId || DEFAULT_TENANT_ID;
+  // Usuário sem tenant é da equipe da plataforma e opera pelo painel /admin — nunca deve listar
+  // usuários por aqui. Até 09/09/2026 o filtro incluía também o tenant de demonstração, então todo
+  // administrador de todo hotel enxergava nome, e-mail, telefone e papel dos usuários dele
+  // (CLAUDE.md, Segurança §2).
+  if (!isSuperAdmin && !session!.tenantId) {
+    return NextResponse.json({ success: false, error: "Sessão sem hotel associado." }, { status: 403 });
+  }
 
   const users = await prisma.user.findMany({
-    where: isSuperAdmin ? {} : { tenantId: { in: [tenantId, DEFAULT_TENANT_ID] } },
+    where: isSuperAdmin ? {} : { tenantId: session!.tenantId! },
     orderBy: { createdAt: "asc" },
     select: {
       id: true, name: true, email: true, role: true, phone: true, active: true, createdAt: true, updatedAt: true,
@@ -56,13 +60,21 @@ export async function POST(req: NextRequest) {
     }
 
     // Só SUPER_ADMIN pode escolher o hotel de destino; TENANT_ADMIN sempre cria no próprio tenant.
-    let tenantId = session!.tenantId || DEFAULT_TENANT_ID;
+    if (!isSuperAdmin && !session!.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão sem hotel associado." }, { status: 403 });
+    }
+    let tenantId = session!.tenantId!;
     if (isSuperAdmin && requestedTenantId) {
       const targetTenant = await prisma.tenant.findUnique({ where: { id: requestedTenantId }, select: { id: true } });
       if (!targetTenant) {
         return NextResponse.json({ success: false, error: "Hotel de destino inválido." }, { status: 400 });
       }
       tenantId = targetTenant.id;
+    }
+    // SUPER_ADMIN sem hotel próprio precisa dizer em qual hotel o usuário será criado — antes o
+    // destino caía silenciosamente no tenant de demonstração.
+    if (!tenantId) {
+      return NextResponse.json({ success: false, error: "Informe o hotel de destino do usuário." }, { status: 400 });
     }
 
     const passwordHash = await hashPassword(password);
@@ -118,7 +130,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Usuário não encontrado." }, { status: 404 });
     }
     // TENANT_ADMIN só pode alterar usuários do próprio hotel.
-    if (!isSuperAdmin && target.tenantId !== (session!.tenantId || DEFAULT_TENANT_ID)) {
+    if (!isSuperAdmin && (!session!.tenantId || target.tenantId !== session!.tenantId)) {
       return NextResponse.json({ success: false, error: "Você não tem permissão para alterar esse usuário." }, { status: 403 });
     }
     if (id === session!.userId && active === false) {
@@ -150,23 +162,37 @@ export async function PATCH(req: NextRequest) {
       data.tokenVersion = { increment: 1 };
     }
 
-    const updated = await prisma.user.update({
-      where: { id },
-      select: { id: true, name: true, email: true, role: true, active: true, tenantId: true, tenant: { select: { id: true, name: true } } },
+    // O filtro de tenant é repetido na PRÓPRIA escrita (não só na checagem de leitura acima) —
+    // assim um refactor futuro que mexa na checagem não deixa a escrita desprotegida
+    // (CLAUDE.md, Segurança §3).
+    const changed = await prisma.user.updateMany({
+      where: isSuperAdmin ? { id } : { id, tenantId: session!.tenantId! },
       data,
     });
-
-    await logActivity({
-      tenantId: session!.tenantId || DEFAULT_TENANT_ID,
-      userId: session!.userId,
-      userName: session!.name,
-      action: "USER_UPDATE",
-      description: `${session!.name} atualizou o usuário ${updated.name}.`,
-      entityType: "USER",
-      entityId: updated.id,
-      terminal: getTerminalName(req),
-      ipAddress: getClientIp(req),
+    if (changed.count === 0) {
+      return NextResponse.json({ success: false, error: "Usuário não encontrado." }, { status: 404 });
+    }
+    const updated = await prisma.user.findUniqueOrThrow({
+      where: { id },
+      select: { id: true, name: true, email: true, role: true, active: true, tenantId: true, tenant: { select: { id: true, name: true } } },
     });
+
+    // AuditLog.tenantId tem FK para Tenant, então a trilha fica no hotel do usuário alterado
+    // quando quem alterou é da equipe da plataforma (sessão sem tenant próprio).
+    const auditTenantId = session!.tenantId || updated.tenantId;
+    if (auditTenantId) {
+      await logActivity({
+        tenantId: auditTenantId,
+        userId: session!.userId,
+        userName: session!.name,
+        action: "USER_UPDATE",
+        description: `${session!.name} atualizou o usuário ${updated.name}.`,
+        entityType: "USER",
+        entityId: updated.id,
+        terminal: getTerminalName(req),
+        ipAddress: getClientIp(req),
+      });
+    }
 
     return NextResponse.json({ success: true, user: updated });
   } catch (error: any) {

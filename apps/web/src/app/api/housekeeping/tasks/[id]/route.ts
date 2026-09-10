@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHousekeeperSession } from "@/lib/housekeeperAuth";
+import { getHousekeeperUser } from "@/lib/housekeeperSession";
 import { prisma } from "@/lib/prisma";
 
 // PATCH /api/housekeeping/tasks/[id] — a governanta atualiza a observação da limpeza em
 // andamento (ex.: "Hóspede fumou no quarto", "Faltando uma toalha").
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getHousekeeperSession(req);
+    const session = await getHousekeeperUser(req);
     if (!session) {
       return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
     }

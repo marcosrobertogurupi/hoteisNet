@@ -24,10 +24,12 @@ class ReservationConflictError extends Error {}
 // Reserva inexistente / de outro tenant — o catch mapeia para 404 (não 500).
 class ReservationNotFoundError extends Error {}
 
-// Toda Reservation vive sob este tenantId fixo por convenção histórica deste projeto — o
-// isolamento real por hotel é sempre via Reservation.room.tenantId (ver comentário em
-// lib/preCheckinSender.ts). Nunca usar o tenantId do cliente/sessão como valor deste campo.
-const RESERVATION_TENANT_ID = "TNT-01";
+// Reservation.tenantId é o tenant REAL do hotel (session.tenantId) desde 09/09/2026. Até então
+// toda reserva era gravada com o rótulo fixo "TNT-01" e o isolamento vinha só de
+// Reservation.room.tenantId — um campo de isolamento que não isolava, e no qual o filtro "óbvio"
+// acertava a sintaxe e errava a semântica. O histórico foi acertado pela migration
+// supabase/migrations/20260910130000_backfill_reservation_tenant_id.sql. As consultas que isolam
+// por `room: { tenantId }` continuam corretas e valem como defesa em profundidade.
 
 // GET /api/reservations — lista reservas do tenant da sessão (Mapa de Reservas / lista sintética).
 // A montagem do payload vive em lib/mapQueries.ts (reservationsMapPayload), compartilhada com a
@@ -180,7 +182,7 @@ export async function POST(req: NextRequest) {
 
       const reservation = await tx.reservation.create({
         data: {
-          tenantId: RESERVATION_TENANT_ID,
+          tenantId: session.tenantId!,
           roomId: realRoomId,
           guestName,
           guestCpf: guestCpf || null,
@@ -236,7 +238,7 @@ export async function POST(req: NextRequest) {
             data: {
               id: crypto.randomUUID(),
               reservationId: reservation.id,
-              tenantId: RESERVATION_TENANT_ID,
+              tenantId: session.tenantId!,
               cashRegisterId: realCashRegisterId,
               cashTransactionId,
               amount: pmt.amount,
@@ -485,7 +487,7 @@ export async function PATCH(req: NextRequest) {
               data: {
                 id: crypto.randomUUID(),
                 reservationId: id,
-                tenantId: RESERVATION_TENANT_ID,
+                tenantId: session.tenantId!,
                 cashRegisterId: caixa.id,
                 cashTransactionId,
                 amount: pmt.amount,

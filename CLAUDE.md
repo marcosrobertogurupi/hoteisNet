@@ -6,7 +6,7 @@ Este projeto é um SaaS multi-tenant (cada hotel/pousada é um tenant isolado no
 
 ### 1. Toda rota de API autentica explicitamente — não existe rede de segurança automática
 
-`apps/web/src/middleware.ts` só protege páginas (`/app/**`, `/admin/**`). **Rotas de API não passam por nenhum middleware central** — cada `route.ts` é responsável por checar a própria sessão. Nunca assuma que uma rota está protegida "porque fica atrás do login" da tela que a chama.
+`apps/web/src/middleware.ts` hoje cobre também `/api/:path*`, com uma whitelist explícita das rotas legitimamente públicas — mas isso é **defesa em profundidade, não a sua rede de segurança**. Cada `route.ts` continua responsável por checar a própria sessão, porque só o handler sabe qual tenant, papel e recurso a requisição pode tocar: o middleware confirma que existe *uma* sessão válida, nunca que ela pode ver *aqueles* dados. Nunca assuma que uma rota está protegida "porque fica atrás do login" da tela que a chama nem "porque o middleware pega".
 
 Padrão obrigatório no início de todo handler que não seja explicitamente público (login, webhook, link de pré-check-in por token):
 
