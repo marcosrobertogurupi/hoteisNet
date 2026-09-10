@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
@@ -6,9 +6,11 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { sendUazapiText } from "@/lib/uazapi";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 import { processPaymentLine } from "@/lib/paymentProcessing";
+import { nextReservationNumber } from "@/lib/reservationHelpers";
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { resolveOperator } from "@/lib/operator";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -242,8 +244,6 @@ export async function POST(req: NextRequest) {
       totalAmount,
       tariffId,
       tariffName,
-      operatorId,
-      operatorName,
       initialPayments,
       discount,
       secondaryGuests,
@@ -550,7 +550,7 @@ export async function POST(req: NextRequest) {
               tariffId: tariffId || "TAR-001",
               tariffName: tariffName || "APTO ESPECIAL DUPLO",
               status: "CHECKED_IN",
-              reservationNumber: "RES-" + String(Math.floor(500 + Math.random() * 9000)),
+              reservationNumber: await nextReservationNumber(tx),
             },
           })
         ).id;
@@ -663,8 +663,8 @@ export async function POST(req: NextRequest) {
         (p: any) => Number(p?.valor) > 0
       );
 
-      const opId = operatorId || "USR-001";
-      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+      const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
       // Caixa do operador — resolvido só quando há algo a lançar (pagamento no balcão ou sinal
       // de reserva antiga ainda não lançado). Reutiliza a mesma instância entre os dois blocos.
@@ -802,10 +802,11 @@ export async function POST(req: NextRequest) {
       ipAddress: getClientIp(req),
     });
 
-    // Mensagem de boas-vindas via WhatsApp — dispara em segundo plano, sem bloquear a resposta
-    // do check-in nem falhar a operação caso o envio dê erro.
+    // Mensagem de boas-vindas via WhatsApp — dispara depois da resposta (after()), sem bloquear o
+    // check-in nem falhar a operação caso o envio dê erro. `after` garante que a função serverless
+    // não é congelada antes do envio terminar (um IIFE não-aguardado podia ser cortado no meio).
     if (result.guestPhone) {
-      (async () => {
+      after(async () => {
         try {
           const [waSettings, tenant] = await Promise.all([
             prisma.whatsappMessageSetting.findUnique({ where: { tenantId: result.tenantId } }),
@@ -825,7 +826,7 @@ export async function POST(req: NextRequest) {
         } catch (err) {
           console.error("[POST /api/stay/checkin] Falha ao enviar boas-vindas por WhatsApp:", err);
         }
-      })();
+      });
     }
 
     return NextResponse.json({ success: true, ...result });
@@ -846,10 +847,9 @@ export async function PATCH(req: NextRequest) {
 
     const body = await req.json();
     const { stayCheckinId } = body;
-    // Operador ativo no terminal (OperatorContext) — usado só para saber em qual caixa registrar
-    // o lançamento de controle do check-out com valor zerado (ver abaixo). Nunca define tenant.
-    const opId: string = body.operatorId || "USR-001";
-    const opName: string = String(body.operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado (ver lib/operator.ts) — usado só para saber em qual caixa
+    // registrar o lançamento de controle do check-out com valor zerado (ver abaixo).
+    const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
     if (!stayCheckinId) {
       return NextResponse.json({ success: false, error: "stayCheckinId é obrigatório." }, { status: 400 });
@@ -1024,10 +1024,10 @@ export async function PATCH(req: NextRequest) {
       ipAddress: getClientIp(req),
     });
 
-    // Mensagem de checkout via WhatsApp — dispara em segundo plano, sem bloquear a resposta
-    // do checkout nem falhar a operação caso o envio dê erro.
+    // Mensagem de checkout via WhatsApp — dispara depois da resposta (after()), sem bloquear o
+    // checkout nem falhar a operação caso o envio dê erro.
     const tenantIdForWa = room?.tenantId || DEFAULT_TENANT_ID;
-    (async () => {
+    after(async () => {
       try {
         const [waSettings, tenant, guest] = await Promise.all([
           prisma.whatsappMessageSetting.findUnique({ where: { tenantId: tenantIdForWa } }),
@@ -1047,7 +1047,7 @@ export async function PATCH(req: NextRequest) {
       } catch (err) {
         console.error("[PATCH /api/stay/checkin] Falha ao enviar mensagem de checkout por WhatsApp:", err);
       }
-    })();
+    });
 
     return NextResponse.json({ success: true, stayCheckinId: stay.id });
   } catch (error: any) {

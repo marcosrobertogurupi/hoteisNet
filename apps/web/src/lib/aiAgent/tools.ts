@@ -7,7 +7,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
-import { findConflictingReservation, findBlockingOpenStay, busyRoomIdsForPeriod } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, busyRoomIdsForPeriod, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
 import { sendUazapiImage } from "@/lib/uazapi";
 import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
@@ -457,6 +457,10 @@ async function createReservationForAgent(
       ? await tx.room.findMany({ where: { tenantId, id: requestedRoom.id, active: true } })
       : await tx.room.findMany({ where: { tenantId, categoryId: category.id, active: true } });
 
+    // Serializa a escolha do quarto: sem isso, o agente e a recepção (ou dois atendimentos do
+    // agente) podem escolher o mesmo quarto livre ao mesmo tempo e criar reservas sobrepostas.
+    await lockRoomsForReservation(tx, rooms.map((r) => r.id));
+
     // Preferência de andar do hóspede: filtra os candidatos ANTES de escolher — nunca reservar em
     // outro andar quando ele deixou claro que quer um específico (caso real: hóspede pediu "segundo
     // andar" três vezes e o agente reservou no 109, 1º andar, porque a tool só recebia a categoria).
@@ -523,7 +527,7 @@ async function createReservationForAgent(
     const nights = Math.max(1, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / (24 * 60 * 60 * 1000)));
     const totalAmount = Number(tariff.price) * nights;
     const status = agentSetting?.autoConfirmReservations ? "CONFIRMED" : "PRE_RESERVATION";
-    const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+    const reservationNumber = await nextReservationNumber(tx);
 
     const created = await tx.reservation.create({
       data: {

@@ -3,8 +3,15 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
-import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
+import {
+  resolveRoomId,
+  findConflictingReservation,
+  findBlockingOpenStay,
+  lockRoomsForReservation,
+  nextReservationNumber,
+} from "@/lib/reservationHelpers";
 import { processReservationDeposit } from "@/lib/paymentProcessing";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/reservations/batch — cria várias reservas de uma só vez, dentro de uma única
 // transação Prisma (equivalente ao botão "Salvar Reservas" da tela de Reservas Múltiplas do
@@ -23,11 +30,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const {
-      operatorId,
-      operatorName,
-      reservations = [],
-    } = body;
+    const { reservations = [] } = body;
 
     if (!Array.isArray(reservations) || reservations.length === 0) {
       return NextResponse.json({
@@ -50,10 +53,9 @@ export async function POST(req: NextRequest) {
       const created: { reservationId: string; reservationNumber: string; roomId: string; guestName: string }[] = [];
 
       // O sinal (adiantamento) de cada reserva entra no caixa ABERTO do operador da sessão —
-      // nunca um cashRegisterId vindo do cliente. Só resolve/cria o caixa quando o lote tem de
-      // fato algum adiantamento a lançar.
-      const opId = operatorId || "USR-001";
-      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      // nunca um cashRegisterId nem um operatorId vindos do cliente (ver lib/operator.ts).
+      // Só resolve/cria o caixa quando o lote tem de fato algum adiantamento a lançar.
+      const { operatorId: opId, operatorName: opName } = resolveOperator(session);
       const loteTemAdiantamento = reservations.some(
         (r: any) => Array.isArray(r?.payments) && r.payments.some((p: any) => Number(p?.amount) > 0)
       );
@@ -72,8 +74,18 @@ export async function POST(req: NextRequest) {
         realCashRegisterId = caixa.id;
       }
 
+      // Pré-resolve os quartos e trava todas as linhas de uma vez, em ordem de id, ANTES de checar
+      // conflito e gravar — assim dois lotes concorrentes que compartilham quartos serializam sem
+      // deadlock (mesma ordem de aquisição), em vez de ambos lerem "livre" e gravarem sobreposto.
+      const resolvedRoomIds: string[] = [];
       for (const r of reservations) {
-        const realRoomId = await resolveRoomId(tx as any, String(r.roomId), session.tenantId!);
+        resolvedRoomIds.push(await resolveRoomId(tx as any, String(r.roomId), session.tenantId!));
+      }
+      await lockRoomsForReservation(tx as any, resolvedRoomIds);
+
+      for (let idx = 0; idx < reservations.length; idx++) {
+        const r = reservations[idx];
+        const realRoomId = resolvedRoomIds[idx];
         const checkInDate = new Date(r.checkInDate);
         const checkOutDate = new Date(r.checkOutDate);
 
@@ -84,13 +96,20 @@ export async function POST(req: NextRequest) {
           );
         }
 
+        const blockingStay = await findBlockingOpenStay(tx as any, realRoomId, checkInDate, checkOutDate);
+        if (blockingStay) {
+          throw new Error(
+            `Conflito de reserva: o quarto ${r.roomId} está ocupado por uma hospedagem em aberto que se estende sobre o período informado para "${r.guestName}". Nenhuma reserva do lote foi salva.`
+          );
+        }
+
         let realGuestId: string | null = null;
         if (r.guestId) {
           const guest = await tx.guest.findFirst({ where: { id: r.guestId, tenantId: session.tenantId! }, select: { id: true } });
           realGuestId = guest?.id || null;
         }
 
-        const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+        const reservationNumber = await nextReservationNumber(tx);
         const finalTotal = r.totalAmount ?? r.totalDiarias ?? 0;
 
         const reservation = await tx.reservation.create({
@@ -115,8 +134,8 @@ export async function POST(req: NextRequest) {
             hasWhatsapp: !!r.hasWhatsapp,
             wppSent: false,
             cashRegisterId: realCashRegisterId,
-            operatorId: operatorId || null,
-            operatorName: operatorName || null,
+            operatorId: opId,
+            operatorName: opName,
             notes: r.notes || null,
             roomDescription: r.roomDescription || null,
             roomCategory: r.roomCategory || null,

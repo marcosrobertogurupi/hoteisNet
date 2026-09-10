@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
+import { resolveOperator } from "@/lib/operator";
 
 function mapConsumption(c: {
   id: string;
@@ -85,9 +86,10 @@ export async function POST(req: NextRequest) {
       quantity,
       unitPrice,
       posLocationId,
-      operatorId,
-      operatorName,
     } = body;
+
+    // Operador = usuário autenticado, nunca o operatorId do body (ver lib/operator.ts).
+    const { operatorId, operatorName } = resolveOperator(session);
 
     const qty = Number(quantity) || 0;
     const price = Number(unitPrice) || 0;

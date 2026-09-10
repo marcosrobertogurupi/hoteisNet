@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { dateOnlyBrasilia as dateOnly } from "@/lib/brasiliaDate";
 import { getSessionUser } from "@/lib/auth";
+import { txWithRetry } from "@/lib/dbTx";
+import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
 
 function parseLimitTime(limitTime?: string | null) {
   const [h, m] = (limitTime || "14:30").split(":").map(Number);
@@ -71,45 +73,72 @@ export async function POST(req: NextRequest) {
       const rate = Number(lastCharge?.amount ?? stay.totalDaily ?? 0);
       const description = lastCharge?.description || "Diária";
 
-      let addedCount = 0;
-      let addedAmount = 0;
-      let addedExtraCount = 0;
-      for (let i = 1; i <= daysLate; i++) {
-        const refDate = new Date(lastRollover);
-        refDate.setUTCDate(refDate.getUTCDate() + i);
-        try {
-          await prisma.stayCharge.create({
+      const newLastRollover = new Date(lastRollover);
+      newLastRollover.setUTCDate(newLastRollover.getUTCDate() + daysLate);
+
+      // Cada hospedagem é processada numa transação própria (idempotente pela constraint única
+      // stayCheckinId+referenceDate): o lançamento das diárias, o incremento de totalDaily/contagem
+      // e o débito equivalente no saldo do hóspede caem juntos ou nada cai — sem isso, uma queda no
+      // meio deixava StayCharge gravado sem totalDaily/saldo correspondentes.
+      const { addedCount, addedAmount } = await txWithRetry(async (tx) => {
+        let count = 0;
+        let amount = 0;
+        let extraCount = 0;
+        let extraAmount = 0;
+        for (let i = 1; i <= daysLate; i++) {
+          const refDate = new Date(lastRollover);
+          refDate.setUTCDate(refDate.getUTCDate() + i);
+          try {
+            await tx.stayCharge.create({
+              data: {
+                stayCheckinId: stay.id,
+                referenceDate: refDate,
+                description,
+                chargeType: "DAILY",
+                amount: rate,
+              },
+            });
+            count++;
+            amount += rate;
+            // Diária lançada em data igual/posterior à previsão original de saída = estadia
+            // ultrapassou o combinado no check-in (equivalente a hpd_qtddiariasextras do legado).
+            if (refDate >= stay.expectedCheckOut) {
+              extraCount++;
+              extraAmount += rate;
+            }
+          } catch {
+            // Já existe lançamento para esse dia (constraint única) — ignora
+          }
+        }
+
+        if (count > 0) {
+          await tx.stayCheckin.update({
+            where: { id: stay.id },
             data: {
-              stayCheckinId: stay.id,
-              referenceDate: refDate,
-              description,
-              chargeType: "DAILY",
-              amount: rate,
+              dailiesCount: { increment: count },
+              ...(extraCount > 0 ? { extraDailiesCount: { increment: extraCount } } : {}),
+              totalDaily: { increment: amount },
+              lastRolloverDate: newLastRollover,
             },
           });
-          addedCount++;
-          addedAmount += rate;
-          // Diária lançada em data igual/posterior à previsão original de saída = estadia
-          // ultrapassou o combinado no check-in (equivalente a hpd_qtddiariasextras do legado).
-          if (refDate >= stay.expectedCheckOut) addedExtraCount++;
-        } catch {
-          // Já existe lançamento para esse dia (constraint única stayCheckinId+referenceDate) — ignora
+          // Só as diárias ALÉM da previsão de saída entram como débito novo no saldo do hóspede —
+          // as diárias dentro do período combinado já foram debitadas de uma vez no check-in
+          // (guestDebitTotal). Sem esse recorte, as noites do período combinado seriam debitadas
+          // duas vezes; sem debitar as extras, sobra crédito fantasma no check-out.
+          if (extraAmount > 0) {
+            await adjustGuestStayDebit(tx, {
+              tenantId: stay.tenantId,
+              guestId: stay.primaryGuestId,
+              stayCheckinId: stay.id,
+              delta: extraAmount,
+              description: `Diária(s) extra(s) por overstay — Quarto ${stay.room.number} (${extraCount}× ${description})`,
+            });
+          }
         }
-      }
+        return { addedCount: count, addedAmount: amount };
+      });
 
       if (addedCount > 0) {
-        const newLastRollover = new Date(lastRollover);
-        newLastRollover.setUTCDate(newLastRollover.getUTCDate() + daysLate);
-
-        await prisma.stayCheckin.update({
-          where: { id: stay.id },
-          data: {
-            dailiesCount: { increment: addedCount },
-            ...(addedExtraCount > 0 ? { extraDailiesCount: { increment: addedExtraCount } } : {}),
-            totalDaily: { increment: addedAmount },
-            lastRolloverDate: newLastRollover,
-          },
-        });
         rolledOver.push({ roomNumber: stay.room.number, daysAdded: addedCount, amountAdded: addedAmount });
       }
     }

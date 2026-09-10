@@ -4,6 +4,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/caixa/pagamento-checkin — lança um crédito/pagamento na hospedagem ativa do quarto
 // E, ao mesmo tempo, registra o movimento no caixa aberto do operador ativo (equivalente ao
@@ -17,8 +18,6 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      operatorId,
-      operatorName,
       roomId,
       stayCheckinId,
       guestName,
@@ -32,8 +31,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Valor do pagamento deve ser maior que zero." }, { status: 400 });
     }
 
-    const opId = operatorId || "USR-001";
-    const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+    const { operatorId: opId, operatorName: opName } = resolveOperator(session);
     const fpg = formaPagamento || "DINHEIRO";
     const roomTarget = String(roomId || "");
 
@@ -78,12 +77,24 @@ export async function POST(req: NextRequest) {
 
     const desc = descricao || `Pagamento de diárias — Quarto ${roomTarget}`;
 
-    const { cashTransactionId } = await txWithRetry((tx) =>
-      processPaymentLine(tx, {
-        tenantId: stay!.tenantId,
+    const { cashTransactionId, saldoContaQuarto } = await txWithRetry(async (tx) => {
+      // Trava a linha da hospedagem — mesmo lock do check-out (ver /api/stay/checkin PATCH). Sem
+      // isto, este pagamento e o fechamento do check-out num outro terminal correm sem se
+      // serializar. Depois do lock, reconfere que a hospedagem não fechou.
+      await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${stay!.id} FOR UPDATE`;
+      const fresh = await tx.stayCheckin.findUnique({
+        where: { id: stay!.id },
+        select: { isClosed: true, totalConsumption: true, discount: true, otherDebits: true, tenantId: true, primaryGuestId: true },
+      });
+      if (!fresh || fresh.isClosed) {
+        throw new Error("Esta hospedagem já foi encerrada — não é possível lançar novos pagamentos.");
+      }
+
+      const { cashTransactionId: ctId } = await processPaymentLine(tx, {
+        tenantId: fresh.tenantId,
         cashRegisterId: caixa.id,
         stayCheckinId: stay!.id,
-        guestId: stay!.primaryGuestId,
+        guestId: fresh.primaryGuestId,
         roomNumber: roomTarget,
         guestName: guestName || "",
         amount: valorNum,
@@ -91,22 +102,31 @@ export async function POST(req: NextRequest) {
         description: `${desc} (Hóspede: ${guestName || "—"})`,
         operatorId: opId,
         operatorName: opName,
-      })
-    );
-    const movimento = { id: cashTransactionId! };
+      });
 
-    // Saldo devedor atualizado da hospedagem, se localizada no banco
-    let saldoContaQuarto: number | null = null;
-    if (stay) {
+      // Snapshot financeiro recalculado e persistido na mesma transação (mesma fórmula de
+      // /api/caixa/pagamento-lote e do check-out — inclui outros débitos e desconto).
       const [charges, payments] = await Promise.all([
-        prisma.stayCharge.aggregate({ where: { stayCheckinId: stay.id }, _sum: { amount: true } }),
-        prisma.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+        tx.stayCharge.aggregate({ where: { stayCheckinId: stay!.id }, _sum: { amount: true } }),
+        tx.cashTransaction.aggregate({ where: { stayCheckinId: stay!.id, type: "ENTRADA" }, _sum: { amount: true } }),
       ]);
-      const totalDiarias = Number(charges._sum.amount || 0);
-      const totalConsumo = Number(stay.totalConsumption);
       const totalPago = Number(payments._sum.amount || 0);
-      saldoContaQuarto = Math.max(0, totalDiarias + totalConsumo - totalPago);
-    }
+      const saldo = Math.max(
+        0,
+        Number(charges._sum.amount || 0) +
+          Number(fresh.totalConsumption) +
+          Number(fresh.otherDebits) -
+          totalPago -
+          Number(fresh.discount)
+      );
+      await tx.stayCheckin.update({
+        where: { id: stay!.id },
+        data: { totalAdvance: totalPago, balanceDue: saldo },
+      });
+
+      return { cashTransactionId: ctId, saldoContaQuarto: saldo };
+    });
+    const movimento = { id: cashTransactionId! };
 
     await logActivity({
       tenantId: session.tenantId,

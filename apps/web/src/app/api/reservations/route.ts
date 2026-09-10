@@ -2,16 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
-import { resolveRoomId, findConflictingReservation } from "@/lib/reservationHelpers";
+import {
+  resolveRoomId,
+  findConflictingReservation,
+  findBlockingOpenStay,
+  lockRoomsForReservation,
+  nextReservationNumber,
+} from "@/lib/reservationHelpers";
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
 import { txWithRetry } from "@/lib/dbTx";
 import { processReservationDeposit, reverseReservationDeposits } from "@/lib/paymentProcessing";
 import { jsonForTenant } from "@/lib/tenantResponse";
+import { resolveOperator } from "@/lib/operator";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
 class ReservationConflictError extends Error {}
+
+// Reserva inexistente / de outro tenant — o catch mapeia para 404 (não 500).
+class ReservationNotFoundError extends Error {}
 
 // Toda Reservation vive sob este tenantId fixo por convenção histórica deste projeto — o
 // isolamento real por hotel é sempre via Reservation.room.tenantId (ver comentário em
@@ -75,8 +85,6 @@ export async function POST(req: NextRequest) {
       adults = 1,
       children = 0,
       hasWhatsapp = false,
-      operatorId,
-      operatorName,
       notes,
       roomDescription,
       roomCategory,
@@ -97,12 +105,28 @@ export async function POST(req: NextRequest) {
       const checkIn = new Date(checkInDate);
       const checkOut = new Date(checkOutDate);
 
+      // Trava a linha do quarto pelo resto da transação ANTES de checar conflito: sem isso, duas
+      // criações concorrentes para o mesmo quarto/período leem "livre" ao mesmo tempo e ambas
+      // gravam (READ COMMITTED não enxerga o INSERT não commitado da outra).
+      await lockRoomsForReservation(tx as any, [realRoomId]);
+
       // Bloqueia overbooking: mesmo padrão já usado em /api/reservations/batch e /api/stay/period —
       // a checagem roda dentro da própria transação para ser atômica (nunca só uma validação de UI).
       const conflict = await findConflictingReservation(tx as any, realRoomId, checkIn, checkOut);
       if (conflict) {
         throw new ReservationConflictError(
           `Já existe uma reserva confirmada para este quarto neste período (reserva de "${conflict.guestName}").`
+        );
+      }
+
+      // Além da tabela de reservas, bloqueia quando o quarto está fisicamente ocupado por uma
+      // hospedagem em aberto cuja ocupação efetiva (inclui overstay) alcança o período pedido —
+      // sem isso dá para reservar/pré-check-in um quarto de onde o hóspede anterior ainda não saiu
+      // (a reserva de origem dele já tem checkOutDate no passado e não gera conflito).
+      const blockingStay = await findBlockingOpenStay(tx as any, realRoomId, checkIn, checkOut);
+      if (blockingStay) {
+        throw new ReservationConflictError(
+          "Este quarto está ocupado por uma hospedagem em aberto que se estende sobre o período informado. Finalize o check-out antes de reservar."
         );
       }
 
@@ -117,10 +141,9 @@ export async function POST(req: NextRequest) {
       const validPayments = (payments as any[]).filter((p) => Number(p?.amount) > 0);
 
       // O sinal (adiantamento) entra no caixa ABERTO do operador da sessão — nunca um
-      // cashRegisterId vindo do cliente (que permitiria lançar no caixa de outro hotel/operador).
+      // cashRegisterId nem um operatorId vindos do cliente (ver lib/operator.ts).
       // Só resolve/cria o caixa quando há de fato um adiantamento a lançar.
-      const opId = operatorId || "USR-001";
-      const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+      const { operatorId: opId, operatorName: opName } = resolveOperator(session);
       let realCashRegisterId: string | null = null;
       if (validPayments.length > 0) {
         let caixa = await tx.cashRegister.findFirst({
@@ -136,7 +159,7 @@ export async function POST(req: NextRequest) {
         realCashRegisterId = caixa.id;
       }
 
-      const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+      const reservationNumber = await nextReservationNumber(tx);
       const finalTotal = totalAmount || totalDiarias || 0;
 
       const reservation = await tx.reservation.create({
@@ -161,8 +184,8 @@ export async function POST(req: NextRequest) {
           hasWhatsapp: !!hasWhatsapp,
           wppSent: false,
           cashRegisterId: realCashRegisterId,
-          operatorId: operatorId || null,
-          operatorName: operatorName || null,
+          operatorId: opId,
+          operatorName: opName,
           notes: notes || null,
           roomDescription: roomDescription || null,
           roomCategory: roomCategory || null,
@@ -261,8 +284,6 @@ export async function PATCH(req: NextRequest) {
       totalAmount,
       status,
       notes,
-      operatorId,
-      operatorName,
       // Reconciliação de adiantamentos feita pela tela de edição da reserva: novos adiantamentos
       // a lançar e ids de reservation_payments a estornar. Quando qualquer um dos dois é enviado,
       // o depositPaid é recalculado no servidor a partir da soma real (o valor do cliente é ignorado).
@@ -281,7 +302,7 @@ export async function PATCH(req: NextRequest) {
     await txWithRetry(async (tx) => {
       const existing = await tx.reservation.findFirst({ where: { id, room: { tenantId: session.tenantId! } } });
       if (!existing) {
-        throw new Error(`Reserva ${id} não encontrada.`);
+        throw new ReservationNotFoundError(`Reserva ${id} não encontrada.`);
       }
 
       const realRoomId = roomId ? await resolveRoomId(tx as any, String(roomId), session.tenantId!) : undefined;
@@ -293,6 +314,10 @@ export async function PATCH(req: NextRequest) {
       // Só precisa checar quando quarto e/ou datas realmente mudam; edições de outros campos
       // (nome, notas, etc.) não afetam ocupação e não precisam revalidar o período.
       if (realRoomId !== undefined || checkInDate || checkOutDate) {
+        // Trava o(s) quarto(s) envolvidos (o atual e o de destino, se mudou) antes de revalidar o
+        // período — impede que uma edição/movimentação concorrente para o mesmo quarto crie
+        // sobreposição.
+        await lockRoomsForReservation(tx as any, [existing.roomId, realRoomId]);
         const conflict = await findConflictingReservation(
           tx as any,
           realRoomId ?? existing.roomId,
@@ -303,6 +328,21 @@ export async function PATCH(req: NextRequest) {
         if (conflict) {
           throw new ReservationConflictError(
             `Já existe uma reserva confirmada para este quarto neste período (reserva de "${conflict.guestName}").`
+          );
+        }
+
+        // Hospedagem em aberto de OUTRA reserva ocupando o quarto no período (a própria hospedagem
+        // desta reserva é ignorada via excludeReservationId, para não travar a própria prorrogação).
+        const blockingStay = await findBlockingOpenStay(
+          tx as any,
+          realRoomId ?? existing.roomId,
+          effectiveCheckIn,
+          effectiveCheckOut,
+          id
+        );
+        if (blockingStay) {
+          throw new ReservationConflictError(
+            "Este quarto está ocupado por uma hospedagem em aberto que se estende sobre o período informado."
           );
         }
       }
@@ -328,15 +368,15 @@ export async function PATCH(req: NextRequest) {
       });
 
       if (updated.count === 0) {
-        throw new Error(`Reserva ${id} não encontrada.`);
+        throw new ReservationNotFoundError(`Reserva ${id} não encontrada.`);
       }
 
       // ── Reconciliação de adiantamentos editados na tela de edição da reserva ──────────────
       // Igual à criação: o valor entra/estorna no caixa ABERTO do operador da sessão, na mesma
       // transação. Regra do usuário: "qualquer pagamento deve cair no caixa do operador".
       if (reconcilesPayments) {
-        const opId = operatorId || "USR-001";
-        const opName = (operatorName || session.name || "OPERADOR RECEPÇÃO").toUpperCase();
+        // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+        const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
         const removedIds = (Array.isArray(removedPaymentIds) ? removedPaymentIds : []).map(String).filter(Boolean);
         if (removedIds.length > 0) {
@@ -420,7 +460,8 @@ export async function PATCH(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("[PATCH /api/reservations] Erro:", error);
-    const status = error instanceof ReservationConflictError ? 409 : 500;
+    const status =
+      error instanceof ReservationConflictError ? 409 : error instanceof ReservationNotFoundError ? 404 : 500;
     return NextResponse.json({ success: false, error: error.message }, { status });
   }
 }

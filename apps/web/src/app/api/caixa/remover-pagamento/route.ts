@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
-import { getSessionUser, requireAdmin } from "@/lib/auth";
+import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
+import { logActivity } from "@/lib/audit";
 
 // Mesma constante usada em /api/stay/transfer-debit — forma pré-cadastrada usada para "quitar" no
 // quarto de origem o valor movido para outro quarto.
@@ -32,7 +32,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "caixaMovimentoId é obrigatório." }, { status: 400 });
     }
 
-    await txWithRetry(async (tx) => {
+    const result = await txWithRetry(async (tx) => {
       const ct = await tx.cashTransaction.findUnique({
         where: { id: caixaMovimentoId },
         include: { stay: true, cashRegister: { select: { tenantId: true } } },
@@ -52,6 +52,13 @@ export async function DELETE(req: NextRequest) {
 
       const stay = ct.stay;
       const amount = ct.amount;
+
+      // Trava a linha da hospedagem pelo resto da transação — serializa com o check-out e com os
+      // lançamentos de pagamento (mesmo lock). Sem isto, remover um pagamento enquanto o check-out
+      // fecha em outro terminal deixa o fechamento com um total defasado.
+      if (stay) {
+        await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${stay.id} FOR UPDATE`;
+      }
 
       // Descobre as flags da forma de pagamento cadastrada — mesma consulta usada em
       // processPaymentLine ao CRIAR o lançamento, para saber qual efeito colateral desfazer.
@@ -190,11 +197,62 @@ export async function DELETE(req: NextRequest) {
       }
 
       await tx.cashTransaction.delete({ where: { id: caixaMovimentoId } });
+
+      // Recalcula e persiste o snapshot financeiro da hospedagem — sem isto a tela do quarto
+      // continua mostrando o saldo antigo (quitado) depois de remover um pagamento.
+      if (stay) {
+        const [charges, payments, fresh] = await Promise.all([
+          tx.stayCharge.aggregate({ where: { stayCheckinId: stay.id }, _sum: { amount: true } }),
+          tx.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+          tx.stayCheckin.findUnique({
+            where: { id: stay.id },
+            select: { isClosed: true, totalConsumption: true, discount: true, otherDebits: true },
+          }),
+        ]);
+        const totalPago = Number(payments._sum.amount || 0);
+        const saldo = Math.max(
+          0,
+          Number(charges._sum.amount || 0) +
+            Number(fresh?.totalConsumption || 0) +
+            Number(fresh?.otherDebits || 0) -
+            totalPago -
+            Number(fresh?.discount || 0)
+        );
+        await tx.stayCheckin.update({
+          where: { id: stay.id },
+          data: { totalAdvance: totalPago, balanceDue: saldo },
+        });
+        return { stayId: stay.id, isClosed: !!fresh?.isClosed, saldo, guestName: ct.guestName, roomNumber: ct.roomNumber };
+      }
+      return { stayId: null, isClosed: false, saldo: 0, guestName: ct.guestName, roomNumber: ct.roomNumber };
     });
+
+    if (result?.stayId) {
+      await logActivity({
+        tenantId: session!.tenantId!,
+        userId: session!.userId,
+        userName: session!.name,
+        action: "PAYMENT_REMOVE",
+        description:
+          `${session!.name} removeu um lançamento de caixa da hospedagem` +
+          (result.roomNumber ? ` (quarto ${result.roomNumber}` : "") +
+          (result.guestName ? `, hóspede ${result.guestName})` : result.roomNumber ? ")" : "") +
+          `. Novo saldo devedor: R$ ${result.saldo.toFixed(2)}.` +
+          (result.isClosed ? " ATENÇÃO: a hospedagem já estava encerrada — o check-out ficou com saldo em aberto." : ""),
+        entityType: "STAY_CHECKIN",
+        entityId: result.stayId,
+        terminal: getTerminalName(req),
+        ipAddress: getClientIp(req),
+      });
+    }
 
     return NextResponse.json({
       success: true,
-      message: "Lançamento removido da conta e conferência do caixa.",
+      message: result?.isClosed
+        ? "Lançamento removido. Atenção: esta hospedagem já estava encerrada — o check-out ficou com saldo em aberto."
+        : "Lançamento removido da conta e conferência do caixa.",
+      stayClosed: result?.isClosed ?? false,
+      saldoContaQuarto: result?.saldo ?? null,
     });
   } catch (error: any) {
     console.error("[DELETE /api/caixa/remover-pagamento] Erro:", error);

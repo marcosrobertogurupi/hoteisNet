@@ -1178,7 +1178,12 @@ model Reservation {
   children               Int?              @default(0)
   hasWhatsapp            Boolean?          @default(false)
   wppSent                Boolean?          @default(false)
-  reservationNumber      String?
+  // Número gerado da sequência `reservation_number_seq` (ver nextReservationNumber em
+  // lib/reservationHelpers). @unique aqui para o Prisma manter o índice (senão um `db push`
+  // futuro o removeria) — a deduplicação do histórico roda ANTES, na migration
+  // 20260910120000_reservation_number_dedup_unique.sql, que cria o índice com o mesmo nome
+  // (`reservations_reservationNumber_key`) que o Prisma geraria, então não há índice duplicado.
+  reservationNumber      String?           @unique
   roomDescription        String?
   roomCategory           String?
   roomFloor              String?

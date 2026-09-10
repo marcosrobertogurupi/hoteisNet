@@ -5,6 +5,7 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/caixa/pagamento-lote — grava, em uma única transação, todos os lançamentos de
 // crédito/pagamento pendentes da hospedagem no caixa do operador ativo. Espelha o comportamento
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { operatorId, operatorName, roomId, stayCheckinId, guestName, payments, discount } = body;
+    const { roomId, stayCheckinId, guestName, payments, discount } = body;
 
     const hasPayments = Array.isArray(payments) && payments.length > 0;
     const hasDiscountUpdate = discount !== undefined && discount !== null;
@@ -28,8 +29,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, movimentos: [], saldoContaQuarto: null });
     }
 
-    const opId = operatorId || "USR-001";
-    const opName = (operatorName || "OPERADOR RECEPÇÃO").toUpperCase();
+    // Operador = usuário autenticado (nunca o operatorId do body — ver lib/operator.ts).
+    const { operatorId: opId, operatorName: opName } = resolveOperator(session);
     const roomTarget = String(roomId || "");
 
     let stay = stayCheckinId
@@ -77,11 +78,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const movimentos = await txWithRetry(async (tx) => {
+    const { movimentos, saldoContaQuarto } = await txWithRetry(async (tx) => {
       const created: { clientId: string; movimentoCaixaId: string }[] = [];
 
       if (hasPayments && !stay) {
         throw new Error("Hospedagem não encontrada para lançar o pagamento.");
+      }
+
+      // Trava a linha da hospedagem pelo resto da transação — o mesmo lock que o check-out
+      // adquire (ver /api/stay/checkin PATCH). Sem isto, este pagamento e o fechamento do
+      // check-out num outro terminal correm sem se serializar (o check-out escreve só na
+      // stay_checkins, este só na cash_transactions), e o check-out pode fechar usando um total
+      // de pagamentos desatualizado. Depois do lock, reconfere que a hospedagem não fechou.
+      if (stay) {
+        await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${stay.id} FOR UPDATE`;
+        const fresh = await tx.stayCheckin.findUnique({
+          where: { id: stay.id },
+          select: { isClosed: true },
+        });
+        if (fresh?.isClosed) {
+          throw new Error("Esta hospedagem já foi encerrada — não é possível lançar novos pagamentos.");
+        }
       }
 
       if (hasPayments) {
@@ -135,30 +152,31 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      return created;
+      // Snapshot financeiro recalculado e persistido DENTRO da mesma transação (antes ficava em
+      // consultas soltas depois do commit, reabrindo a janela de corrida com o check-out).
+      let saldo: number | null = null;
+      if (stay) {
+        const [charges, paymentsAgg, stayAfter] = await Promise.all([
+          tx.stayCharge.aggregate({ where: { stayCheckinId: stay.id }, _sum: { amount: true } }),
+          tx.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+          tx.stayCheckin.findUnique({ where: { id: stay.id }, select: { totalConsumption: true, discount: true, otherDebits: true } }),
+        ]);
+        const totalDiarias = Number(charges._sum.amount || 0);
+        const totalConsumo = Number(stayAfter?.totalConsumption || 0);
+        const totalPago = Number(paymentsAgg._sum.amount || 0);
+        const totalDesconto = Number(stayAfter?.discount || 0);
+        const totalOutrosDebitos = Number(stayAfter?.otherDebits || 0);
+        saldo = Math.max(0, totalDiarias + totalConsumo + totalOutrosDebitos - totalPago - totalDesconto);
+
+        // Equivalentes a hpd_totaladiant / hpd_saldopagar do sistema legado.
+        await tx.stayCheckin.update({
+          where: { id: stay.id },
+          data: { totalAdvance: totalPago, balanceDue: saldo },
+        });
+      }
+
+      return { movimentos: created, saldoContaQuarto: saldo };
     });
-
-    let saldoContaQuarto: number | null = null;
-    if (stay) {
-      const [charges, paymentsAgg, stayAfter] = await Promise.all([
-        prisma.stayCharge.aggregate({ where: { stayCheckinId: stay.id }, _sum: { amount: true } }),
-        prisma.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA" }, _sum: { amount: true } }),
-        prisma.stayCheckin.findUnique({ where: { id: stay.id }, select: { discount: true, otherDebits: true } }),
-      ]);
-      const totalDiarias = Number(charges._sum.amount || 0);
-      const totalConsumo = Number(stay.totalConsumption);
-      const totalPago = Number(paymentsAgg._sum.amount || 0);
-      const totalDesconto = Number(stayAfter?.discount || 0);
-      const totalOutrosDebitos = Number(stayAfter?.otherDebits || 0);
-      saldoContaQuarto = Math.max(0, totalDiarias + totalConsumo + totalOutrosDebitos - totalPago - totalDesconto);
-
-      // Mantém o snapshot financeiro da hospedagem atualizado a cada lançamento de caixa, não só
-      // no check-out final — equivalentes a hpd_totaladiant e hpd_saldopagar do sistema legado.
-      await prisma.stayCheckin.update({
-        where: { id: stay.id },
-        data: { totalAdvance: totalPago, balanceDue: saldoContaQuarto },
-      });
-    }
 
     const totalLote = hasPayments ? payments.reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0) : 0;
     await logActivity({

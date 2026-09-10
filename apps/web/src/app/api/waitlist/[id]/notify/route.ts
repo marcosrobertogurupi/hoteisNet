@@ -4,6 +4,7 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { findWaitlistVacancy } from "@/lib/waitlistMatch";
+import { lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { sendUazapiText } from "@/lib/uazapi";
 import { sendTenantEmail } from "@/lib/tenantEmail";
 import { escapeHtml } from "@/lib/htmlEscape";
@@ -70,6 +71,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (!entry.guestPhone && !entry.guestEmail) {
         return { code: 400 as const, error: "A entrada não tem e-mail nem telefone para avisar o hóspede." };
       }
+
+      // Trava os quartos da categoria pelo resto da transação: dois avisos concorrentes (ou um aviso
+      // + uma conversão) não podem colocar o mesmo quarto em "soft hold" / reserva para dois
+      // hóspedes da fila ao mesmo tempo.
+      const categoryRooms = await tx.room.findMany({
+        where: { tenantId: session.tenantId!, categoryId: entry.roomCategoryId, active: true },
+        select: { id: true },
+      });
+      await lockRoomsForReservation(tx, categoryRooms.map((r) => r.id));
 
       const vacancy = await findWaitlistVacancy(tx, {
         tenantId: session.tenantId!,

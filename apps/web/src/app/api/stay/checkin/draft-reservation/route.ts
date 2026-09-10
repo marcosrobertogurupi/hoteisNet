@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { validateCPF, formatCPF } from "@/lib/documentValidation";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { nextReservationNumber } from "@/lib/reservationHelpers";
 
 // Status de reserva que já representam uma hospedagem em curso ou encerrada — nunca reaproveitar
 // (mesma lista usada em POST /api/stay/checkin).
@@ -86,7 +87,7 @@ export async function POST(req: NextRequest) {
             totalDiarias: 0,
             totalAmount: 0,
             status: "PRE_RESERVATION",
-            reservationNumber: "RES-" + String(Math.floor(500 + Math.random() * 9000)),
+            reservationNumber: await nextReservationNumber(prisma),
           },
         });
 

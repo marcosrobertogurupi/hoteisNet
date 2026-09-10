@@ -49,7 +49,7 @@ export interface ReservationItem {
   dailyRate: number;
   depositPaid: number;
   totalAmount: number;
-  status: "CONFIRMED" | "PRE_RESERVATION" | "CHECKED_IN" | "CHECKED_OUT" | "CANCELLED";
+  status: "CONFIRMED" | "PRE_RESERVATION" | "CHECKED_IN" | "CHECKED_OUT" | "CANCELLED" | "NO_SHOW";
   company?: string;
   notes?: string;
   precheckinSent?: boolean;
@@ -527,6 +527,37 @@ export default function ReservationGridMap({
     setShowLancarModal(true);
   };
 
+  // Action Handler: Marcar No-Show — hóspede não compareceu. Libera o quarto (NO_SHOW deixa de
+  // bloquear no mapa e na checagem de conflito) sem apagar a reserva. Só faz sentido para reservas
+  // ainda aguardando chegada (PRE_RESERVATION/CONFIRMED). A rotina do worker também marca
+  // automaticamente quando o dia da chegada termina, mas a recepção pode antecipar.
+  const canMarkNoShow = (res: ReservationItem | null | undefined): boolean =>
+    !!res && (res.status === "PRE_RESERVATION" || res.status === "CONFIRMED");
+
+  const handleMarkNoShow = async (res?: ReservationItem | null) => {
+    const target = res || reservations.find(r => r.id === selectedReservationId);
+    if (!canMarkNoShow(target) || !target) return;
+    if (!window.confirm(`Marcar a reserva de ${target.guestName} como NÃO COMPARECEU (no-show)?\n\nO quarto será liberado. A reserva não é apagada e o eventual sinal continua no caixa até a recepção decidir estorná-lo.`)) {
+      return;
+    }
+    try {
+      const r = await fetch("/api/reservations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: target.id, status: "NO_SHOW" }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.success) throw new Error(data?.error || `HTTP ${r.status}`);
+      setReservations(prev => prev.map(x => (x.id === target.id ? { ...x, status: "NO_SHOW" } : x)));
+      setSelectedReservationId(null);
+      toast.success(`Reserva de ${target.guestName} marcada como no-show. Quarto liberado.`);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error("Erro ao marcar no-show:", err);
+      toast.error(`Não foi possível marcar a reserva de ${target.guestName} como no-show. Tente novamente.`);
+    }
+  };
+
   // Action Handler: Excluir Reserva
   const handleOpenExcluirModal = (res?: ReservationItem | null) => {
     const target = res || reservations.find(r => r.id === selectedReservationId);
@@ -840,7 +871,7 @@ export default function ReservationGridMap({
     for (const res of reservations) {
       if (res.id === excludeResId) continue;
       if (res.roomId !== targetRoomId && res.roomId !== roomDef?.number && res.roomId !== roomDef?.id) continue;
-      if (res.status === "CANCELLED" || res.status === "CHECKED_OUT") continue;
+      if (res.status === "CANCELLED" || res.status === "CHECKED_OUT" || res.status === "NO_SHOW") continue;
 
       const resInTime = res.checkInTime || defaultCheckInTime || "14:00";
       const resOutTime = res.checkOutTime || defaultCheckOutTime || "12:00";
@@ -1635,6 +1666,7 @@ export default function ReservationGridMap({
                   (r.roomId === room.id || r.roomId === room.number) &&
                   r.status !== "CANCELLED" &&
                   r.status !== "CHECKED_OUT" &&
+                  r.status !== "NO_SHOW" &&
                   !isReservationExpired(
                     {
                       checkInDate: r.checkInDate,
@@ -1765,8 +1797,8 @@ export default function ReservationGridMap({
                   {reservations
                     .filter((r) => {
                       if (r.roomId !== room.id && r.roomId !== room.number) return false;
-                      // Checkout já concluído: quarto liberado, não bloquear o mapa com hospedagem encerrada
-                      if (r.status === "CANCELLED" || r.status === "CHECKED_OUT") return false;
+                      // Checkout concluído / cancelada / no-show: quarto liberado, não bloqueia o mapa
+                      if (r.status === "CANCELLED" || r.status === "CHECKED_OUT" || r.status === "NO_SHOW") return false;
                       // Filtrar reservas expiradas por tolerância do assinante
                       if (isReservationExpired({
                         checkInDate: r.checkInDate,
@@ -2132,6 +2164,19 @@ export default function ReservationGridMap({
                 Enviar Voucher WhatsApp
               </button>
               <div className="border-t border-slate-800 my-0.5"></div>
+              {canMarkNoShow(contextMenu.reservation) && (
+                <button
+                  onClick={() => {
+                    const res = contextMenu.reservation;
+                    setContextMenu(null);
+                    handleMarkNoShow(res);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-amber-950/60 text-amber-400 hover:text-amber-300 flex items-center gap-2 transition-colors"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Marcar No-Show
+                </button>
+              )}
               <button
                 onClick={() => {
                   const res = contextMenu.reservation;

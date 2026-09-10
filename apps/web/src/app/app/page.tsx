@@ -2455,10 +2455,19 @@ export default function TenantDashboardPage() {
                   expectedCheckOut: updatedData.checkOutDateISO,
                   ratePerNight: updatedData.ratePerNight,
                   tariffName: updatedData.tariffName,
+                  tariffId: updatedData.tariffId,
                 }),
               });
               const data = await res.json();
               if (!data.success) {
+                if (data.precisaAutorizacao) {
+                  toast.error(
+                    `A nova diária representa um desconto acima do limite de ${data.limitePercent ?? ""}% permitido para a recepção. ` +
+                      `Use a tela "Alterar Tarifa da Hospedagem" (que pede autorização de administrador) para reduzir a diária, ou mantenha o valor atual.`,
+                    "Autorização necessária"
+                  );
+                  return;
+                }
                 toast.error(data.error || "Não foi possível alterar o período da hospedagem.");
                 return;
               }
