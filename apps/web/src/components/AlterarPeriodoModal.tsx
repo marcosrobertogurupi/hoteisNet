@@ -23,17 +23,9 @@ export interface TariffOption {
   id: string;
   name: string;
   ratePerNight: number;
-  description: string;
+  description?: string;
   adults?: number;
 }
-
-export const TARIFF_OPTIONS: TariffOption[] = [
-  { id: "APTO_TRIPLO", name: "APTO ESPECIAL TRIPLO", ratePerNight: 170, description: "1 CAMA DE CASAL + 1 SOLTEIRO", adults: 3 },
-  { id: "SUITE_LUXO", name: "SUÍTE LUXO MAR", ratePerNight: 350, description: "1 CAMA KING + SACADA COM VISTA PRO MAR", adults: 2 },
-  { id: "STANDARD_SUP", name: "STANDARD SUPERIOR", ratePerNight: 280, description: "1 CAMA DE CASAL + AR CONDICIONADO SPLIT", adults: 2 },
-  { id: "MASTER_FAMILIA", name: "MASTER FAMÍLIA", ratePerNight: 450, description: "2 CAMAS DE CASAL + 2 CAMAS SOLTEIRO", adults: 4 },
-  { id: "TARIFA_BALCAO", name: "TARIFA BALCÃO REGULAR", ratePerNight: 200, description: "ACOMODAÇÃO PADRÃO HOTEL", adults: 1 },
-];
 
 export interface PaymentItem {
   id: string;
@@ -79,6 +71,7 @@ interface AlterarPeriodoModalProps {
     checkOutDate: string;
     checkOutDateISO: string;
     tariffName: string;
+    tariffId: string | null;
     ratePerNight: number;
     totalNights: number;
     totalBruto: number;
@@ -152,14 +145,50 @@ export default function AlterarPeriodoModal({
     `${String(initialCheckout.getHours()).padStart(2, "0")}:${String(initialCheckout.getMinutes()).padStart(2, "0")}:00`
   );
 
-  const [selectedTariffId, setSelectedTariffId] = useState<string>(() => {
-    const found = TARIFF_OPTIONS.find(t => t.name === stayData.tariffName || t.ratePerNight === stayData.ratePerNight);
-    return found ? found.id : "APTO_TRIPLO";
-  });
+  // Tarifas do cadastro do assinante (Central de Cadastros → Tarifas) — nunca lista mock.
+  const [tariffs, setTariffs] = useState<TariffOption[]>([]);
+  const [selectedTariffId, setSelectedTariffId] = useState<string>("");
 
-  const currentTariff = useMemo(() => {
-    return TARIFF_OPTIONS.find(t => t.id === selectedTariffId) || TARIFF_OPTIONS[0];
-  }, [selectedTariffId]);
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/reservations/tariffs");
+        const data = await res.json();
+        if (cancelled) return;
+        const list: TariffOption[] = (data.tariffs || []).map((t: any) => ({
+          id: String(t.id),
+          name: String(t.name),
+          ratePerNight: Number(t.price) || 0,
+          adults: Number(t.adults) || 1,
+        }));
+        setTariffs(list);
+        const match =
+          list.find((t) => t.name === stayData.tariffName) ||
+          list.find((t) => t.ratePerNight === stayData.ratePerNight) ||
+          list[0];
+        setSelectedTariffId(match ? match.id : "");
+      } catch {
+        if (!cancelled) toast.error("Não foi possível carregar as tarifas cadastradas.", "Erro");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, stayData.tariffName, stayData.ratePerNight, toast]);
+
+  // Tarifa corrente: a selecionada, senão um objeto derivado da própria hospedagem (para os
+  // cálculos não zerarem enquanto a lista carrega ou se o cadastro estiver vazio).
+  const currentTariff = useMemo<TariffOption>(() => {
+    return (
+      tariffs.find((t) => t.id === selectedTariffId) || {
+        id: "",
+        name: stayData.tariffName || "Tarifa atual",
+        ratePerNight: stayData.ratePerNight || 0,
+      }
+    );
+  }, [tariffs, selectedTariffId, stayData.tariffName, stayData.ratePerNight]);
 
   const [adults, setAdults] = useState<number>(1);
   const [children, setChildren] = useState<number>(0);
@@ -281,6 +310,7 @@ export default function AlterarPeriodoModal({
       checkOutDate: formatDateTimeDisplay(finalCout),
       checkOutDateISO: finalCout.toISOString(),
       tariffName: currentTariff.name,
+      tariffId: currentTariff.id || null,
       ratePerNight: currentTariff.ratePerNight,
       totalNights: calculatedNights,
       totalBruto: valorTotalBruto,
@@ -442,7 +472,12 @@ export default function AlterarPeriodoModal({
                     onChange={(e) => setSelectedTariffId(e.target.value)}
                     className={`w-full border rounded px-2 py-1.5 font-semibold focus:outline-none focus:ring-1 focus:ring-sky-500 shadow-inner ${highlightField}`}
                   >
-                    {TARIFF_OPTIONS.map(t => (
+                    {tariffs.length === 0 && (
+                      <option value="">
+                        {stayData.tariffName || "Tarifa atual"} — sem outras tarifas cadastradas
+                      </option>
+                    )}
+                    {tariffs.map(t => (
                       <option key={t.id} value={t.id}>
                         {t.name} • {t.adults || 1} {(t.adults || 1) === 1 ? "Adulto" : "Adultos"} • R$ {t.ratePerNight.toFixed(2)}
                       </option>

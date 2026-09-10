@@ -2455,6 +2455,7 @@ export default function TenantDashboardPage() {
                   expectedCheckOut: updatedData.checkOutDateISO,
                   ratePerNight: updatedData.ratePerNight,
                   tariffName: updatedData.tariffName,
+                  tariffId: updatedData.tariffId,
                 }),
               });
               const data = await res.json();

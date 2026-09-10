@@ -527,6 +527,37 @@ export default function ReservationGridMap({
     setShowLancarModal(true);
   };
 
+  // Action Handler: Marcar No-Show — hóspede não compareceu. Libera o quarto (NO_SHOW deixa de
+  // bloquear no mapa e na checagem de conflito) sem apagar a reserva. Só faz sentido para reservas
+  // ainda aguardando chegada (PRE_RESERVATION/CONFIRMED). A rotina do worker também marca
+  // automaticamente quando o dia da chegada termina, mas a recepção pode antecipar.
+  const canMarkNoShow = (res: ReservationItem | null | undefined): boolean =>
+    !!res && (res.status === "PRE_RESERVATION" || res.status === "CONFIRMED");
+
+  const handleMarkNoShow = async (res?: ReservationItem | null) => {
+    const target = res || reservations.find(r => r.id === selectedReservationId);
+    if (!canMarkNoShow(target) || !target) return;
+    if (!window.confirm(`Marcar a reserva de ${target.guestName} como NÃO COMPARECEU (no-show)?\n\nO quarto será liberado. A reserva não é apagada e o eventual sinal continua no caixa até a recepção decidir estorná-lo.`)) {
+      return;
+    }
+    try {
+      const r = await fetch("/api/reservations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: target.id, status: "NO_SHOW" }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.success) throw new Error(data?.error || `HTTP ${r.status}`);
+      setReservations(prev => prev.map(x => (x.id === target.id ? { ...x, status: "NO_SHOW" } : x)));
+      setSelectedReservationId(null);
+      toast.success(`Reserva de ${target.guestName} marcada como no-show. Quarto liberado.`);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error("Erro ao marcar no-show:", err);
+      toast.error(`Não foi possível marcar a reserva de ${target.guestName} como no-show. Tente novamente.`);
+    }
+  };
+
   // Action Handler: Excluir Reserva
   const handleOpenExcluirModal = (res?: ReservationItem | null) => {
     const target = res || reservations.find(r => r.id === selectedReservationId);
@@ -2133,6 +2164,19 @@ export default function ReservationGridMap({
                 Enviar Voucher WhatsApp
               </button>
               <div className="border-t border-slate-800 my-0.5"></div>
+              {canMarkNoShow(contextMenu.reservation) && (
+                <button
+                  onClick={() => {
+                    const res = contextMenu.reservation;
+                    setContextMenu(null);
+                    handleMarkNoShow(res);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-amber-950/60 text-amber-400 hover:text-amber-300 flex items-center gap-2 transition-colors"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Marcar No-Show
+                </button>
+              )}
               <button
                 onClick={() => {
                   const res = contextMenu.reservation;

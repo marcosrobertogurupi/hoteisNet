@@ -22,7 +22,9 @@ export async function nextReservationNumber(tx: PrismaClientOrTx): Promise<strin
   `;
   const n = rows?.[0]?.nextval;
   if (n !== undefined && n !== null) return "RES-" + String(n);
-  return "RES-" + Date.now().toString(36).toUpperCase();
+  // Fallback (migration ainda não rodou): timestamp + sufixo aleatório, para dois fallbacks no
+  // mesmo milissegundo não colidirem no índice único.
+  return "RES-" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
 }
 
 // Resolve o UUID real do quarto a partir de um id ou número, restrito ao tenant.
