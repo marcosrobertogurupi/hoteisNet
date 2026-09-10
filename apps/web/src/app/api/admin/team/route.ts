@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
 // Só SUPER_ADMIN pode criar outro SUPER_ADMIN.
 export async function POST(req: NextRequest) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   let body: { name?: string; email?: string; role?: string };

@@ -133,8 +133,8 @@ export default function UsuariosPage() {
       toast.error("Nome e e-mail são obrigatórios.");
       return;
     }
-    if (!editing && form.password.length < 6) {
-      toast.error("A senha deve ter pelo menos 6 caracteres.");
+    if (!editing && form.password.length < 10) {
+      toast.error("A senha deve ter pelo menos 10 caracteres, com letras e números.");
       return;
     }
 
@@ -374,7 +374,7 @@ export default function UsuariosPage() {
                   type="password"
                   value={form.password}
                   onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                  placeholder={editing ? "••••••••" : "Mínimo 6 caracteres"}
+                  placeholder={editing ? "••••••••" : "Mínimo 10 caracteres"}
                   className={uField}
                 />
               </div>

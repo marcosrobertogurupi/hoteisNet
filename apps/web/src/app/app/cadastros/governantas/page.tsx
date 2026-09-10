@@ -503,7 +503,7 @@ export default function GovernantasPage() {
                     type={showPassword ? "text" : "password"}
                     value={formPassword}
                     onChange={(e) => setFormPassword(e.target.value)}
-                    placeholder={editing ? "••••••••" : "Defina uma senha"}
+                    placeholder={editing ? "••••••••" : "Mínimo 10 caracteres, com letras e números"}
                     className={`w-full border rounded-xl pl-10 pr-10 py-2.5 text-sm focus:outline-none focus:border-rose-500 ${
                       isDark ? "bg-slate-950 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
                     }`}

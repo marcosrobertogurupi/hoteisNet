@@ -8,7 +8,7 @@ import { logPlatformAction } from "@/lib/platformAudit";
 // (PLATFORM_SUPPORT também responde — é o papel de atendimento; ajuste aqui se necessário).
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   const { id } = await params;

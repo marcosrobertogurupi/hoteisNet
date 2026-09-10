@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
+import { validatePasswordStrength } from "@/lib/passwordPolicy";
 import { getSessionUser, requireAdmin, hashPassword, getClientIp, getTerminalName } from "@/lib/auth";
 
 // GET /api/users — lista usuários (SUPER_ADMIN vê todos os hotéis; TENANT_ADMIN só o seu)
@@ -44,8 +45,9 @@ export async function POST(req: NextRequest) {
     if (!name || !email || !password) {
       return NextResponse.json({ success: false, error: "Nome, e-mail e senha são obrigatórios." }, { status: 400 });
     }
-    if (String(password).length < 6) {
-      return NextResponse.json({ success: false, error: "A senha deve ter pelo menos 6 caracteres." }, { status: 400 });
+    const senhaFraca = validatePasswordStrength(password);
+    if (senhaFraca) {
+      return NextResponse.json({ success: false, error: senhaFraca }, { status: 400 });
     }
 
     const isSuperAdmin = session!.role === "SUPER_ADMIN";
@@ -150,8 +152,9 @@ export async function PATCH(req: NextRequest) {
     }
     if (active !== undefined) data.active = !!active;
     if (password) {
-      if (String(password).length < 6) {
-        return NextResponse.json({ success: false, error: "A senha deve ter pelo menos 6 caracteres." }, { status: 400 });
+      const senhaFraca = validatePasswordStrength(password);
+      if (senhaFraca) {
+        return NextResponse.json({ success: false, error: senhaFraca }, { status: 400 });
       }
       data.passwordHash = await hashPassword(password);
     }

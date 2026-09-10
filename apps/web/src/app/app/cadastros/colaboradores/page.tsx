@@ -318,7 +318,7 @@ export default function ColaboradoresPage() {
                     value={form.senha}
                     disabled={form.removerSenha}
                     onChange={(e) => setForm({ ...form, senha: e.target.value })}
-                    placeholder={form.temSenha ? "•••• (deixe em branco para manter)" : "mínimo 4 caracteres"}
+                    placeholder={form.temSenha ? "•••• (deixe em branco para manter)" : "mínimo 10 caracteres, com letras e números"}
                     className={`${field} ${form.removerSenha ? "opacity-50" : ""}`}
                   />
                 </div>

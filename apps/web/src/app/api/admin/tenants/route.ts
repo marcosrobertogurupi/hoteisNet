@@ -119,7 +119,7 @@ export async function GET(req: NextRequest) {
 // cria assinante (o assinante nunca se auto-cadastra). Edição: PLATFORM_ADMIN / SUPER_ADMIN.
 export async function POST(req: NextRequest) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   let body: Record<string, any>;

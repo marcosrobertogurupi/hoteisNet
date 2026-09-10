@@ -286,10 +286,14 @@ export default function PdvPage() {
       variant: "danger",
     });
     if (!ok) return;
+    const adminEmail = window.prompt("Cancelar a comanda exige autorização.\nE-mail do administrador:");
+    if (!adminEmail) return;
+    const adminPassword = window.prompt("Senha do administrador:");
+    if (!adminPassword) return;
     const res = await fetch(`/api/pdv/atendimentos/${selected.id}/cancelar`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ adminEmail, adminPassword }),
     });
     const data = await res.json();
     if (!data.success) return toast.error(data.error || "Não foi possível cancelar.");

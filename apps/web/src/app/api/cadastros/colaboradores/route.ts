@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { validatePasswordStrength } from "@/lib/passwordPolicy";
 import { getSessionUser, requireAdmin, hashPassword } from "@/lib/auth";
 
 // `select` explícito — nunca traz passwordHash (senha do app de contagem de estoque) para o
@@ -66,8 +67,9 @@ export async function POST(req: NextRequest) {
 
     // Senha opcional — só quem tem senha acessa o app de contagem de estoque (login por telefone).
     const senhaTrim = senha ? String(senha).trim() : "";
-    if (senhaTrim && senhaTrim.length < 4) {
-      return NextResponse.json({ success: false, error: "A senha deve ter ao menos 4 caracteres." }, { status: 400 });
+    const senhaFraca = senhaTrim ? validatePasswordStrength(senhaTrim) : null;
+    if (senhaFraca) {
+      return NextResponse.json({ success: false, error: senhaFraca }, { status: 400 });
     }
     if (senhaTrim && !String(telefone || "").trim()) {
       return NextResponse.json(
@@ -133,8 +135,9 @@ export async function PUT(req: NextRequest) {
       data.lockedUntil = null;
     } else if (senha !== undefined && senha !== null && String(senha).trim() !== "") {
       const senhaTrim = String(senha).trim();
-      if (senhaTrim.length < 4) {
-        return NextResponse.json({ success: false, error: "A senha deve ter ao menos 4 caracteres." }, { status: 400 });
+      const senhaFraca = validatePasswordStrength(senhaTrim);
+      if (senhaFraca) {
+        return NextResponse.json({ success: false, error: senhaFraca }, { status: 400 });
       }
       if (!telefoneTrim) {
         return NextResponse.json(

@@ -10,6 +10,7 @@ interface MeUser {
   email: string;
   role: string;
   canEdit: boolean;
+  mfaEnabled: boolean;
 }
 
 const NAV = [
@@ -145,6 +146,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
+        {me && me.canEdit && !me.mfaEnabled && pathname !== "/admin/team" && (
+          <div className="bg-red-600 text-white px-6 py-2 text-xs font-semibold flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4" /> A verificação em duas etapas é obrigatória para a equipe da plataforma.
+              Enquanto ela não estiver ativa, você consegue consultar o painel, mas nenhuma alteração é aceita.
+            </span>
+            <Link href="/admin/team" className="px-2 py-0.5 rounded bg-white text-red-700 hover:bg-red-50 shrink-0">
+              ativar agora
+            </Link>
+          </div>
+        )}
         {impersonating && (
           <div className="bg-amber-500 text-amber-950 px-6 py-2 text-xs font-semibold flex items-center justify-between gap-3">
             <span className="flex items-center gap-2">

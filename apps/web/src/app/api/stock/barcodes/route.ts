@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, requireTenantAdmin } from "@/lib/auth";
 
 // GET /api/stock/barcodes?productId=... — lista os códigos de barras vinculados a um produto.
 export async function GET(req: NextRequest) {
@@ -79,10 +79,11 @@ export async function POST(req: NextRequest) {
 // DELETE /api/stock/barcodes — remove o vínculo de um código de barras com um produto.
 export async function DELETE(req: NextRequest) {
   try {
+    // Exclusão de cadastro é ação de administrador (CLAUDE.md: usuário padrão inclui e altera,
+    // não exclui).
     const session = await getSessionUser(req);
-    if (!session?.tenantId) {
-      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
-    }
+    const adminError = requireTenantAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await req.json();
     const id = String(body.id || "");
@@ -91,7 +92,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "id é obrigatório." }, { status: 400 });
     }
 
-    const deleted = await prisma.productBarcode.deleteMany({ where: { id, product: { tenantId: session.tenantId } } });
+    const deleted = await prisma.productBarcode.deleteMany({ where: { id, product: { tenantId: session!.tenantId! } } });
     if (deleted.count === 0) {
       return NextResponse.json({ success: false, error: "Código de barras não encontrado." }, { status: 404 });
     }

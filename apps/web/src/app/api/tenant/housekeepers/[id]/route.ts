@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { validatePasswordStrength } from "@/lib/passwordPolicy";
 import { getSessionUser, requireAdmin, hashPassword } from "@/lib/auth";
 
 // PATCH /api/tenant/housekeepers/[id] — edita dados da governanta; senha só é alterada quando
@@ -40,7 +41,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (whatsapp !== undefined) data.whatsapp = whatsapp.trim();
     if (photoUrl !== undefined) data.photoUrl = photoUrl || null;
     if (active !== undefined) data.active = !!active;
-    if (password?.trim()) data.passwordHash = await hashPassword(password.trim());
+    if (password?.trim()) {
+      const senhaFraca = validatePasswordStrength(password.trim());
+      if (senhaFraca) {
+        return NextResponse.json({ success: false, error: senhaFraca }, { status: 400 });
+      }
+      data.passwordHash = await hashPassword(password.trim());
+    }
 
     const updated = await prisma.housekeeper.update({
       where: { id },

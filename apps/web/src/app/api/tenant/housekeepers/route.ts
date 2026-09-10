@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { validatePasswordStrength } from "@/lib/passwordPolicy";
 import { getSessionUser, requireAdmin, hashPassword } from "@/lib/auth";
 
 // GET /api/tenant/housekeepers — lista as governantas cadastradas pelo tenant da sessão,
@@ -45,6 +46,11 @@ export async function POST(req: NextRequest) {
         { success: false, error: "Nome, WhatsApp e senha são obrigatórios." },
         { status: 400 }
       );
+    }
+
+    const senhaFraca = validatePasswordStrength(password.trim());
+    if (senhaFraca) {
+      return NextResponse.json({ success: false, error: senhaFraca }, { status: 400 });
     }
 
     const existing = await prisma.housekeeper.findUnique({

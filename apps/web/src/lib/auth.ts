@@ -108,6 +108,18 @@ export function requireAdmin(session: SessionPayload | null): { status: number; 
   return null;
 }
 
+// Como requireAdmin, mas também exige que a sessão tenha um hotel associado. É o guard correto
+// para as rotas de assinante (`/api/**` que operam sobre dados de um tenant): requireAdmin sozinho
+// deixa passar um membro da equipe da plataforma, que tem `tenantId` nulo e faria as consultas
+// seguintes rodarem sem filtro de tenant. Quem é da plataforma opera pelo painel /admin, que usa
+// getPlatformSession.
+export function requireTenantAdmin(session: SessionPayload | null): { status: number; body: { success: false; error: string } } | null {
+  if (!session?.tenantId) {
+    return { status: 401, body: { success: false, error: "Sessão inválida ou expirada." } };
+  }
+  return requireAdmin(session);
+}
+
 // Lê e valida a sessão do PAINEL DA PLATAFORMA (cookie próprio, ver lib/platformAuth.ts). Igual a
 // getSessionUser, revalida no banco que o usuário segue ativo, com o mesmo tokenVersion e ainda
 // como papel de plataforma — desativar/rebaixar um membro da equipe derruba a sessão na hora.
@@ -140,9 +152,31 @@ export function requirePlatformRole(session: RoleOnly): { status: number; body: 
 
 // Painel /admin — só papéis que PODEM EDITAR (PLATFORM_ADMIN / SUPER_ADMIN). PLATFORM_SUPPORT
 // recebe 403. Usar em handlers POST / PATCH / PUT / DELETE das rotas /api/admin/*.
-export function requirePlatformAdmin(session: RoleOnly): { status: number; body: { success: false; error: string } } | null {
+//
+// Exige também verificação em duas etapas ativa. São as contas que podem personificar qualquer
+// assinante, mexer em planos, faturas e na equipe da plataforma — justamente onde o 2FA era
+// opcional. A exigência recai sobre AÇÕES, não sobre o login: quem ainda não ativou continua
+// entrando no painel e consegue ativar o 2FA em Configuração > Equipe (a rota /api/admin/auth/mfa
+// não passa por este guard), então ninguém fica trancado do lado de fora.
+export async function requirePlatformAdmin(
+  session: (RoleOnly & { userId?: string }) | null
+): Promise<{ status: number; body: { success: false; error: string } } | null> {
   if (!session || !isPlatformEditRole(session.role)) {
     return { status: 403, body: { success: false, error: "Ação restrita a administradores da plataforma." } };
+  }
+  if (!session.userId) {
+    return { status: 403, body: { success: false, error: "Sessão inválida ou expirada." } };
+  }
+  const user = await prisma.user.findUnique({ where: { id: session.userId }, select: { mfaEnabled: true } });
+  if (!user?.mfaEnabled) {
+    return {
+      status: 403,
+      body: {
+        success: false,
+        error:
+          "Ative a verificação em duas etapas em Configuração > Equipe para executar ações no painel da plataforma.",
+      },
+    };
   }
   return null;
 }

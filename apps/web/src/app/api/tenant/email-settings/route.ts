@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser, requireAdmin } from "@/lib/auth";
+import { getSessionUser, requireTenantAdmin } from "@/lib/auth";
 import { isBlockedSmtpHost } from "@/lib/htmlEscape";
 
 const SMTP_SECURE = ["tls", "ssl", "none"] as const;
@@ -15,7 +15,7 @@ const SMTP_SECURE = ["tls", "ssl", "none"] as const;
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
-    const adminError = requireAdmin(session);
+    const adminError = requireTenantAdmin(session);
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const setting = await prisma.emailSetting.findUnique({
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
-    const adminError = requireAdmin(session);
+    const adminError = requireTenantAdmin(session);
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await req.json();
