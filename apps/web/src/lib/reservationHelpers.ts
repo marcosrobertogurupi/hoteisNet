@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma, type ReservationStatus } from "@prisma/client";
+import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 // Aceita tanto o client Prisma completo quanto o client de dentro de uma `prisma.$transaction`
 // (que não expõe $connect/$disconnect/$transaction/$extends) — as duas formas são usadas nas
@@ -62,7 +63,20 @@ export function stayOccupiedUntil(stay: {
 }): Date {
   const billedThrough = new Date(stay.checkInDate);
   billedThrough.setDate(billedThrough.getDate() + stay.dailiesCount);
-  return billedThrough > stay.expectedCheckOut ? billedThrough : stay.expectedCheckOut;
+  const effective = billedThrough > stay.expectedCheckOut ? billedThrough : stay.expectedCheckOut;
+
+  // Overstay (saída prevista já passou e a hospedagem continua aberta): o hóspede ainda está no
+  // quarto e o rollover de diárias avança na HORA exata do check-in — isso abria uma janela de
+  // minutos por dia (entre a hora do check-in e as 14h do padrão do hotel) em que
+  // `stayOccupiedUntil(s) > checkIn` dava falso e a fila de espera / o agente ofereciam um quarto
+  // com hóspede dentro (caso real: fila avisou um hóspede sobre um quarto ocupado). Enquanto a
+  // recepção não finaliza a hospedagem, a ocupação vai até o FIM do dia em Brasília — nunca uma
+  // hora quebrada — e no mínimo até o fim de hoje (protege contra rollover atrasado).
+  if (stay.expectedCheckOut.getTime() < Date.now()) {
+    const latest = new Date(Math.max(effective.getTime(), Date.now()));
+    return new Date(dateOnlyBrasilia(latest).getTime() + 24 * 60 * 60 * 1000); // meia-noite BRT do dia seguinte
+  }
+  return effective;
 }
 
 // Hospedagem em aberto (isClosed:false) que impede uma reserva nova para o período pedido.
