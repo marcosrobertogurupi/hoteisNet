@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
 // providerInvoiceUsd null/"" remove a entrada. Edição: PLATFORM_ADMIN / SUPER_ADMIN.
 export async function PATCH(req: NextRequest) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   let body: Record<string, any>;
