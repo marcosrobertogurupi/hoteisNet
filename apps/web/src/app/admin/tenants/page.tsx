@@ -46,7 +46,6 @@ interface Plan {
   maxRooms: number;
 }
 
-const CYCLE_LABEL: Record<string, string> = { MONTHLY: "Mensal", SEMIANNUAL: "Semestral", ANNUAL: "Anual" };
 
 interface FormState {
   name: string;
@@ -246,6 +245,8 @@ export default function AdminTenantsPage() {
         payload.adminEmail = form.adminEmail;
       } else {
         payload.status = form.status;
+        payload.planId = form.planId;
+        payload.cycle = form.cycle;
       }
       const res = await fetch(url, {
         method,
@@ -513,7 +514,6 @@ export default function AdminTenantsPage() {
                         className={input}
                         value={form.planId}
                         onChange={(e) => setForm({ ...form, planId: e.target.value, cycle: "MONTHLY" })}
-                        disabled={modal.mode === "edit"}
                         required={modal.mode === "create"}
                       >
                         <option value="">{plans.length ? "Selecione…" : "Nenhum plano cadastrado"}</option>
@@ -523,25 +523,19 @@ export default function AdminTenantsPage() {
                       </select>
                     </Field>
 
-                    {modal.mode === "create" ? (
-                      <Field label="Ciclo de cobrança">
-                        {(() => {
-                          const sel = plans.find((p) => p.id === form.planId);
-                          const opts: Array<[string, string]> = [["MONTHLY", `Mensal — R$ ${sel ? Number(sel.priceMonthly).toFixed(2) : "—"}`]];
-                          if (sel?.priceSemiannual != null) opts.push(["SEMIANNUAL", `Semestral — R$ ${Number(sel.priceSemiannual).toFixed(2)} à vista`]);
-                          if (sel?.priceAnnual != null) opts.push(["ANNUAL", `Anual — R$ ${Number(sel.priceAnnual).toFixed(2)} à vista`]);
-                          return (
-                            <select className={input} value={form.cycle} onChange={(e) => setForm({ ...form, cycle: e.target.value })} disabled={!sel}>
-                              {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                            </select>
-                          );
-                        })()}
-                      </Field>
-                    ) : (
-                      <Field label="Ciclo atual">
-                        <input className={`${input} bg-slate-100`} value={CYCLE_LABEL[form.cycle] || form.cycle} readOnly />
-                      </Field>
-                    )}
+                    <Field label={modal.mode === "create" ? "Ciclo de cobrança" : "Ciclo atual"}>
+                      {(() => {
+                        const sel = plans.find((p) => p.id === form.planId);
+                        const opts: Array<[string, string]> = [["MONTHLY", `Mensal — R$ ${sel ? Number(sel.priceMonthly).toFixed(2) : "—"}`]];
+                        if (sel?.priceSemiannual != null) opts.push(["SEMIANNUAL", `Semestral — R$ ${Number(sel.priceSemiannual).toFixed(2)} à vista`]);
+                        if (sel?.priceAnnual != null) opts.push(["ANNUAL", `Anual — R$ ${Number(sel.priceAnnual).toFixed(2)} à vista`]);
+                        return (
+                          <select className={input} value={form.cycle} onChange={(e) => setForm({ ...form, cycle: e.target.value })} disabled={!sel}>
+                            {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                          </select>
+                        );
+                      })()}
+                    </Field>
 
                     <Field label='Acesso válido até ("data_Reset")'>
                       <input className={input} type="date" value={form.accessValidUntil} onChange={(e) => setForm({ ...form, accessValidUntil: e.target.value })} />

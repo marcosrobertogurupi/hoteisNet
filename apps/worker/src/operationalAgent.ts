@@ -1,5 +1,13 @@
 import { PrismaClient, KnowledgeTopicKey } from "@prisma/client";
 import { sendUazapiText } from "./uazapiSend";
+import {
+  WORKER_AI_FEATURES,
+  resolveWorkerAiModel,
+  readGeminiUsage,
+  logWorkerAiUsage,
+  AI_MODEL_FALLBACK,
+  type GeminiUsageMetadata,
+} from "./aiUsage";
 
 const prisma = new PrismaClient();
 
@@ -8,16 +16,19 @@ const prisma = new PrismaClient();
 // com ERR_REQUIRE_ESM. O agente de atendimento em apps/web usa o SDK normalmente porque o bundler
 // do Next.js resolve ESM sem problema; aqui, para uma única chamada simples de geração de texto,
 // é mais robusto falar direto com a API do que lutar contra o CJS/ESM.
-async function generateSummaryText(prompt: string): Promise<string> {
+type GeminiResult<T> = { data: T; usage: GeminiUsageMetadata | undefined };
+
+async function generateSummaryText(prompt: string, model: string): Promise<GeminiResult<string>> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY não configurada.");
 
   // gemini-3.7-flash trava indefinidamente em generateContent (confirmado direto com curl e em
-  // produção) — trocado para gemini-2.5-flash, mesma razão do agente de atendimento (ver
-  // apps/web/src/lib/aiAgent/agent.ts). AbortSignal.timeout aqui é defesa adicional: sem ele, uma
-  // trava do provedor prende o worker (cron a cada 15min) até o fetch nunca resolver.
+  // produção) — por isso o default segue no gemini-2.5-flash, mesma razão do agente de atendimento
+  // (ver apps/web/src/lib/aiAgent/agent.ts). O id do modelo agora é resolvido por recurso/assinante
+  // (ver ./aiUsage). AbortSignal.timeout aqui é defesa adicional: sem ele, uma trava do provedor
+  // prende o worker (cron a cada 15min) até o fetch nunca resolver.
   const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -30,18 +41,22 @@ async function generateSummaryText(prompt: string): Promise<string> {
   const json: any = await response.json();
   const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
   if (!text) throw new Error("Gemini não retornou texto.");
-  return text;
+  return { data: text, usage: json?.usageMetadata };
 }
 
 // Versão estruturada de generateSummaryText: pede JSON com um responseSchema fixo. Mesma API REST
 // direta (o worker é CJS puro e não usa o SDK "ai"). Usada só pela verificação de valores
 // desatualizados na Base de Conhecimento (runKnowledgeDrift).
-async function generateStructured<T>(prompt: string, responseSchema: Record<string, unknown>): Promise<T> {
+async function generateStructured<T>(
+  prompt: string,
+  responseSchema: Record<string, unknown>,
+  model: string
+): Promise<GeminiResult<T>> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY não configurada.");
 
   const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -56,7 +71,7 @@ async function generateStructured<T>(prompt: string, responseSchema: Record<stri
 
   const json: any = await response.json();
   const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
-  return JSON.parse(text) as T;
+  return { data: JSON.parse(text) as T, usage: json?.usageMetadata };
 }
 
 // O envio por WhatsApp (instância uazapi do tenant + fallback via env + verificação do corpo da
@@ -418,6 +433,8 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
 // autoActionNotes: ações que o próprio agente já tomou (modo AUTONOMOUS_LIMITED, ver
 // runAutonomousActions) — o resumo deve mencioná-las para a equipe saber o que já foi feito.
 async function composeAlertMessage(
+  tenantId: string,
+  model: string,
   hotelName: string,
   issues: DetectedIssue[],
   autoActionNotes: string[] = [],
@@ -435,7 +452,13 @@ async function composeAlertMessage(
     const prompt = hasIssues
       ? `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}${actionsList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Se houver ações já tomadas automaticamente, mencione isso brevemente. Não use markdown. Não mencione que você é uma IA.${personaLine}`
       : `Você é o agente operacional do sistema do hotel "${hotelName}". Você tomou automaticamente as seguintes ações e precisa avisar a recepção/gerência:\n${autoActionNotes.map((n) => `- ${n}`).join("\n")}\n\nEscreva um aviso curto e direto em português do Brasil para WhatsApp. Não use markdown. Não mencione que você é uma IA.${personaLine}`;
-    const text = await generateSummaryText(prompt);
+    const { data: text, usage } = await generateSummaryText(prompt, model);
+    await logWorkerAiUsage(prisma, {
+      tenantId,
+      feature: WORKER_AI_FEATURES.OPERATIONAL_MONITORING,
+      model,
+      ...readGeminiUsage(usage),
+    });
     return text.trim();
   } catch {
     // Se a chamada de IA falhar, ainda assim manda o alerta — só sem a redação natural.
@@ -669,6 +692,10 @@ async function runKnowledgeDrift(
 
   lastKbDriftCheck.set(tenantId, Date.now());
 
+  const driftModel = await resolveWorkerAiModel(prisma, WORKER_AI_FEATURES.OPERATIONAL_KNOWLEDGE_DRIFT, tenantId).catch(
+    () => AI_MODEL_FALLBACK
+  );
+
   const prompt = [
     `Você verifica se a Base de Conhecimento do hotel "${hotelName}" tem VALORES desatualizados em relação ao cadastro do sistema.`,
     ``,
@@ -690,7 +717,18 @@ async function runKnowledgeDrift(
 
   let result: { divergencias: DriftDivergence[] };
   try {
-    result = await generateStructured<{ divergencias: DriftDivergence[] }>(prompt, DRIFT_RESPONSE_SCHEMA);
+    const res = await generateStructured<{ divergencias: DriftDivergence[] }>(
+      prompt,
+      DRIFT_RESPONSE_SCHEMA,
+      driftModel
+    );
+    result = res.data;
+    await logWorkerAiUsage(prisma, {
+      tenantId,
+      feature: WORKER_AI_FEATURES.OPERATIONAL_KNOWLEDGE_DRIFT,
+      model: driftModel,
+      ...readGeminiUsage(res.usage),
+    });
   } catch (err: any) {
     console.error(`[operational-agent] verificação de valores da base falhou — tenant=${tenantId}:`, err?.message || err);
     return { driftIssues, autoNotes };
@@ -914,7 +952,19 @@ async function runOperationalAgentInner(): Promise<void> {
         ...kbAutoNotes, // correções que runKnowledgeDrift já aplicou (fora do fluxo de claimed)
       ];
 
-      const message = await composeAlertMessage(hotelName, toNotify, autoActionNotes, setting.operationalSystemPromptExtra);
+      const monitoringModel = await resolveWorkerAiModel(
+        prisma,
+        WORKER_AI_FEATURES.OPERATIONAL_MONITORING,
+        setting.tenantId
+      ).catch(() => AI_MODEL_FALLBACK);
+      const message = await composeAlertMessage(
+        setting.tenantId,
+        monitoringModel,
+        hotelName,
+        toNotify,
+        autoActionNotes,
+        setting.operationalSystemPromptExtra
+      );
       const sent = await sendUazapiText(prisma, setting.alertPhone!, message, setting.tenantId);
 
       if (toNotify.length > 0) {

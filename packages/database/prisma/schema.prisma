@@ -72,6 +72,38 @@ model AppReleaseControl {
   @@map("app_release_control")
 }
 
+// Config de faturamento do consumo de IA (linha única "singleton"). O consumo de IA é revendido ao
+// assinante como serviço extra: `markupPct` é a margem cobrada sobre o custo real (100 = cobra o
+// dobro do custo); `usdToBrlRate` converte o custo em USD (o que o Google cobra) para BRL. Só o
+// admin master vê/edita — nunca exposto ao assinante.
+model AiBillingConfig {
+  id            String   @id @default("singleton")
+  usdToBrlRate  Decimal  @db.Decimal(10, 4) @default(5.0)
+  rateUpdatedAt DateTime?
+  markupPct     Int      @default(100)
+  updatedByName String?
+  updatedAt     DateTime @updatedAt
+
+  @@map("ai_billing_config")
+}
+
+// Reconciliação mensal do custo de IA calculado pelo sistema (Σ AIUsageLog.totalCostUsd) contra a
+// fatura real do Google (Cloud Billing / AI Studio) — a fonte da verdade. Um desvio grande indica
+// que os preços em AiModelPrice ou a contagem de tokens estão errados. Enquanto não há integração
+// automática com o Cloud Billing, a equipe digita o valor da fatura aqui.
+model AiCostReconciliation {
+  id                 String   @id @default(uuid())
+  // Mês de competência no formato "AAAA-MM" (ex.: "2026-09").
+  periodMonth        String   @unique
+  providerInvoiceUsd Decimal  @db.Decimal(12, 4)
+  note               String?
+  enteredByName      String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("ai_cost_reconciliations")
+}
+
 model Tenant {
   id                         String                  @id @default(uuid())
   name                       String
@@ -174,6 +206,7 @@ model Tenant {
   accountPlans               AccountPlan[]
   aiAgentSettings            AIAgentSetting?
   aiUsageLogs                AIUsageLog[]
+  aiModelOverrides           TenantAiModelOverride[]
   cashRegisters              CashRegister[]          @relation("TenantCashRegisters")
   companies                  Company[]
   banks                      Bank[]
@@ -391,14 +424,73 @@ model User {
 model AIUsageLog {
   id           String   @id @default(uuid())
   tenantId     String
+  // Chave técnica do recurso de IA (ver apps/web/src/lib/aiAgent/features.ts). Exibida com rótulo
+  // amigável na telemetria via apps/web/src/lib/aiFeatureLabels.ts.
   feature      String
+  // Modelo efetivamente usado nesta chamada, resolvido em runtime (override do tenant > default de
+  // plataforma por recurso > fallback). Guardado por registro para a fatura continuar reproduzível
+  // mesmo depois de trocar o modelo ou o preço.
+  model        String   @default("gemini-2.5-flash")
+  provider     String   @default("google")
   tokensInput  Int
+  // Subconjunto de tokensInput lido de cache do provedor (cobrado mais barato). 0 quando não houve.
+  tokensCachedInput Int @default(0)
   tokensOutput Int
-  totalCostUsd Decimal  @db.Decimal(10, 6)
+  // Subconjunto de tokensOutput gasto em "thinking"/reasoning. Informativo — já está em tokensOutput.
+  tokensReasoning Int  @default(0)
+  // Quantos passos de tool-loop a chamada consumiu (1 para chamadas simples). Detecta subcontagem.
+  stepCount    Int      @default(1)
+  // Snapshot do custo no momento da escrita (calculado de AiModelPrice vigente). Recalculável.
+  totalCostUsd Decimal  @db.Decimal(12, 8)
   createdAt    DateTime @default(now())
   tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId, createdAt])
+  @@index([feature, createdAt])
   @@map("ai_usage_logs")
+}
+
+// Modelo de IA padrão da plataforma para cada recurso (feature). O admin master edita; quando um
+// recurso não tem linha aqui, cai no fallback do código (resolveAiModel).
+model AiModelDefault {
+  feature     String   @id
+  model       String
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+
+  @@map("ai_model_defaults")
+}
+
+// Override de modelo por (assinante, recurso) — tem prioridade sobre o AiModelDefault. Só o admin
+// master cria/edita, buscando modelos mais baratos ou mais assertivos para um hotel específico.
+model TenantAiModelOverride {
+  id        String   @id @default(uuid())
+  tenantId  String
+  feature   String
+  model     String
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, feature])
+  @@map("tenant_ai_model_overrides")
+}
+
+// Tabela de preços versionada por modelo (USD por 1M de tokens). O custo de cada AIUsageLog usa a
+// linha com maior effectiveFrom <= createdAt do registro, então mudanças de preço não reescrevem o
+// histórico. Mantida à mão a partir da página de pricing do Google (não há API de preço).
+model AiModelPrice {
+  id                      String   @id @default(uuid())
+  model                   String
+  provider                String   @default("google")
+  inputPerMTokenUsd       Decimal  @db.Decimal(10, 4)
+  cachedInputPerMTokenUsd Decimal  @db.Decimal(10, 4)
+  outputPerMTokenUsd      Decimal  @db.Decimal(10, 4)
+  effectiveFrom           DateTime
+  note                    String?
+  createdAt               DateTime @default(now())
+
+  @@index([model, effectiveFrom])
+  @@map("ai_model_prices")
 }
 
 // Volume de dados (egress) que cada assinante puxa do banco por dia — instrumentado no cliente

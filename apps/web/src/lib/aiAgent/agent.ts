@@ -9,11 +9,11 @@ import { buildGuestSupportTools } from "@/lib/aiAgent/tools";
 // assinante não deve depender disso. O controle de cota/custo por tenant continua 100% no nosso
 // próprio AIUsageLog (ver apps/web/src/lib/aiAgent/usage.ts), independente do provider escolhido.
 //
-// gemini-3.7-flash (usado antes) trava indefinidamente em generateContent — confirmado em
-// produção e com curl direto à API do Google (POST nunca retorna, nem erro nem timeout do lado do
-// Google), enquanto gemini-2.5-flash responde normalmente em ~1s com a mesma chave. Trocado até o
-// 3.7-flash normalizar do lado do Google.
-export const AI_AGENT_MODEL = google("gemini-2.5-flash");
+// O id do modelo é resolvido em runtime por recurso/assinante (ver lib/aiAgent/modelResolver.ts) e
+// passado em options.modelId. Este é só o fallback se nada for informado — mesmo modelo que já
+// rodava hardcoded. Histórico: gemini-3.7-flash trava indefinidamente em generateContent
+// (confirmado com curl direto), por isso o default segue no 2.5-flash.
+export const AI_AGENT_MODEL_FALLBACK = "gemini-2.5-flash";
 
 // A cada chamada do agente injetamos a data/hora atual de Brasília no prompt — sem isso o modelo
 // não tem noção de "hoje" e não consegue resolver "amanhã", "depois de amanhã", "sexta que vem"
@@ -65,6 +65,9 @@ const TONE_PRESET_TEXT: Record<string, string> = {
 };
 
 export type GuestSupportAgentOptions = {
+  // Modelo resolvido para o recurso whatsapp_guest_support deste assinante. Se ausente, cai no
+  // AI_AGENT_MODEL_FALLBACK.
+  modelId?: string | null;
   agentDisplayName?: string | null;
   tonePreset?: string | null;
   adminSystemPromptExtra?: string | null;
@@ -87,7 +90,7 @@ export function buildGuestSupportAgent(
   if (options.conversationMemo) parts.push(options.conversationMemo);
 
   return new ToolLoopAgent({
-    model: AI_AGENT_MODEL,
+    model: google(options.modelId || AI_AGENT_MODEL_FALLBACK),
     instructions: parts.join("\n\n"),
     tools: buildGuestSupportTools(tenantId, guestPhone, onEscalate),
     stopWhen: isStepCount(8),
