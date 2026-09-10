@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHousekeeperSession } from "@/lib/housekeeperAuth";
+import { getHousekeeperUser } from "@/lib/housekeeperSession";
 import { prisma } from "@/lib/prisma";
 
 // GET /api/housekeeping/me — usado pelo app mobile ao abrir, para saber se a governanta já está
 // logada (sessão válida) sem pedir WhatsApp/senha de novo.
 export async function GET(req: NextRequest) {
-  const session = await getHousekeeperSession(req);
+  const session = await getHousekeeperUser(req);
   if (!session) {
     return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
   }

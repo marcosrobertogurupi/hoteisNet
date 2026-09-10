@@ -313,7 +313,7 @@ export async function POST(req: NextRequest) {
       const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
 
       if (discountPercent > limite + 0.001) {
-        const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+        const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
         if (!auth.ok) {
           return NextResponse.json(
             { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
@@ -535,9 +535,7 @@ export async function POST(req: NextRequest) {
         targetReservationId = (
           await tx.reservation.create({
             data: {
-              // Reservas sempre vivem sob o tenant "TNT-01" nesta base, independente do tenant
-              // do quarto (convenção histórica dos demais endpoints de /api/reservations).
-              tenantId: "TNT-01",
+              tenantId: session.tenantId!,
               roomId: room.id,
               guestName: String(guestName).toUpperCase(),
               guestCpf: cpf,

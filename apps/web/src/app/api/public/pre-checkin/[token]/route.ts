@@ -1,7 +1,8 @@
+import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
-import { supabaseAdmin } from "@/utils/supabaseClient";
+import { supabaseAdmin } from "@/utils/supabaseAdmin";
 import { validatePreCheckinToken } from "@/lib/preCheckinLink";
 import { validateCPF } from "@/lib/documentValidation";
 
@@ -167,7 +168,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         const buffer = match ? Buffer.from(match[1], "base64") : null;
         const isValidPng = !!buffer && buffer.length > PNG_MAGIC_BYTES.length && buffer.subarray(0, 8).equals(PNG_MAGIC_BYTES);
         if (match && isValidPng && buffer) {
-          const path = `${tenantId}/${link.reservation.id}-${Date.now()}.png`;
+          // Caminho com sufixo aleatório: assinatura de hóspede é dado pessoal e o nome antigo
+          // (`{tenantId}/{reservationId}-{timestamp}.png`) era adivinhável a partir de dados que o
+          // próprio hóspede conhece. O bucket precisa ser PRIVADO — o sufixo é defesa em
+          // profundidade, não substitui a política do bucket.
+          const path = `${tenantId}/${link.reservation.id}-${Date.now()}-${randomBytes(8).toString("hex")}.png`;
           const { error: uploadError } = await supabaseAdmin.storage
             .from(SIGNATURE_BUCKET)
             .upload(path, buffer, { contentType: "image/png", upsert: true });

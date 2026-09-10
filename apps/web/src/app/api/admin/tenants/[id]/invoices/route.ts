@@ -9,7 +9,7 @@ import { asaasEnabled, createAsaasPayment, getAsaasPixPayload, type AsaasBilling
 // PENDING (para dar baixa à mão depois). Edição: PLATFORM_ADMIN / SUPER_ADMIN.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   const { id } = await params;

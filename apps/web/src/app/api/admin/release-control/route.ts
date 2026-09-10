@@ -28,7 +28,7 @@ function currentBuildId(): string {
 // PLATFORM_ADMIN / SUPER_ADMIN.
 async function requirePlatform(req: NextRequest, forEdit: boolean) {
   const session = await getPlatformSession(req);
-  const authError = forEdit ? requirePlatformAdmin(session) : requirePlatformRole(session);
+  const authError = forEdit ? await requirePlatformAdmin(session) : requirePlatformRole(session);
   if (authError) return { error: NextResponse.json(authError.body, { status: authError.status }) };
   return { session: session! };
 }

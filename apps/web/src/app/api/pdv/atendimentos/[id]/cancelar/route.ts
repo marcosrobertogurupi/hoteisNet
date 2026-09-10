@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
+import { verifyAdminStepUp } from "@/lib/adminAuth";
 import { logActivity } from "@/lib/audit";
 import { loadSession, serializeSession } from "@/lib/pdvSession";
 
@@ -14,6 +15,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
+
+    // Cancelar uma comanda aberta apaga o atendimento do faturamento do dia — mesma exigência de
+    // autorização de administrador já usada em /reabrir e /transferir (verifyAdminStepUp).
+    const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
+    if (!auth.ok) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+    }
 
     const current = await loadSession(id, session.tenantId);
     if (!current) return NextResponse.json({ success: false, error: "Atendimento não encontrado." }, { status: 404 });
@@ -34,7 +42,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       userId: session.userId,
       userName: session.name,
       action: "PDV_COMANDA_CANCELAR",
-      description: `${session.name} cancelou a comanda ${current.comanda.number}${body.motivo ? ` — ${String(body.motivo).trim()}` : ""}.`,
+      description: `${session.name} cancelou a comanda ${current.comanda.number}, autorizado por ${auth.admin.name}${body.motivo ? ` — ${String(body.motivo).trim()}` : ""}.`,
       entityType: "COMANDA_SESSION",
       entityId: id,
       terminal: getTerminalName(req),

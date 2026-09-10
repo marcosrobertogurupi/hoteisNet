@@ -4,11 +4,17 @@
 // e disparar via nodemailer.
 import nodemailer from "nodemailer";
 import { prisma } from "@/lib/prisma";
-import { isBlockedSmtpHost } from "@/lib/htmlEscape";
+import { isBlockedSmtpHostResolved } from "@/lib/smtpHostGuard";
 
 export type TenantEmailResult =
   | { ok: true; messageId: string }
   | { ok: false; reason: "not_configured" | "blocked_host" | "send_error"; message: string };
+
+export interface TenantEmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
 
 interface SendTenantEmailArgs {
   tenantId: string;
@@ -17,9 +23,39 @@ interface SendTenantEmailArgs {
   subject: string;
   /** Corpo HTML já montado e com todo texto livre de usuário/hóspede escapado pelo chamador. */
   html: string;
+  attachments?: TenantEmailAttachment[];
 }
 
-export async function sendTenantEmail({ tenantId, to, toName, subject, html }: SendTenantEmailArgs): Promise<TenantEmailResult> {
+/**
+ * Configurações de e-mail do tenant SEM a senha SMTP — para as telas e para montar o cabeçalho
+ * dos e-mails. A senha nunca sai do servidor: quem precisa dela é o sendTenantEmail abaixo.
+ */
+export async function getTenantEmailSettings(tenantId: string) {
+  return prisma.emailSetting.findUnique({
+    where: { tenantId },
+    select: {
+      smtpHost: true,
+      smtpPort: true,
+      smtpSecure: true,
+      smtpUser: true,
+      fromName: true,
+      fromEmail: true,
+      footerText: true,
+      sendVoucherEnabled: true,
+      sendReceiptEnabled: true,
+      sendPaymentConfirmEnabled: true,
+    },
+  });
+}
+
+export async function sendTenantEmail({
+  tenantId,
+  to,
+  toName,
+  subject,
+  html,
+  attachments,
+}: SendTenantEmailArgs): Promise<TenantEmailResult> {
   if (!to?.trim()) {
     return { ok: false, reason: "not_configured", message: "Sem e-mail de destino." };
   }
@@ -41,12 +77,13 @@ export async function sendTenantEmail({ tenantId, to, toName, subject, html }: S
     return {
       ok: false,
       reason: "not_configured",
-      message: "As credenciais de e-mail (SMTP) do hotel não estão configuradas em Configurações.",
+      message:
+        "As credenciais de e-mail (Usuário e Senha SMTP) do hotel não estão configuradas. Acesse Configurações > E-mail para preenchê-las.",
     };
   }
 
   const host = (setting.smtpHost || "smtp.gmail.com").trim();
-  if (isBlockedSmtpHost(host)) {
+  if (await isBlockedSmtpHostResolved(host)) {
     return { ok: false, reason: "blocked_host", message: "Servidor SMTP inválido." };
   }
 
@@ -68,6 +105,7 @@ export async function sendTenantEmail({ tenantId, to, toName, subject, html }: S
       to: toName?.trim() ? `"${toName.trim()}" <${to.trim()}>` : to.trim(),
       subject,
       html,
+      ...(attachments?.length ? { attachments } : {}),
     });
     return { ok: true, messageId: info.messageId };
   } catch (error: any) {

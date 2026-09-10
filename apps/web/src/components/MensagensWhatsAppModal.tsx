@@ -38,7 +38,7 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
   roomData,
   tenantId,
 }) => {
-  const { theme, hotelName, uazapiServerUrl, uazapiInstanceToken } = useTheme();
+  const { theme, hotelName } = useTheme();
 
   const [phoneVisible, setPhoneVisible] = useState(true);
   const [profileImage, setProfileImage] = useState<string | null>(null);
@@ -330,8 +330,6 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
         guestName: roomData.guestName,
         roomNumber: roomData.number,
         tenantId,
-        serverUrl: uazapiServerUrl,
-        instanceToken: uazapiInstanceToken,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -476,8 +474,6 @@ export const MensagensWhatsAppModal: React.FC<MensagensWhatsAppModalProps> = ({
           phone,
           message: messageText,
           tenantId,
-          serverUrl: uazapiServerUrl,
-          instanceToken: uazapiInstanceToken,
         }),
       });
       const data = await res.json().catch(() => ({}));

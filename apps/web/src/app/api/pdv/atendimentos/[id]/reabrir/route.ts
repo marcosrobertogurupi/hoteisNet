@@ -36,7 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ success: false, error: "A NFC-e já foi autorizada — cancele o cupom em vez de reabrir." }, { status: 409 });
     }
 
-    const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+    const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
     if (!auth.ok) return NextResponse.json({ success: false, error: auth.error, precisaAutorizacao: true }, { status: auth.status });
 
     await txWithRetry(async (tx) => {

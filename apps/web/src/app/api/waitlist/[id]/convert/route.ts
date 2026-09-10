@@ -6,9 +6,6 @@ import { txWithRetry } from "@/lib/dbTx";
 import { findConflictingReservation, findBlockingOpenStay, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
 import { waitlistCheckInAt, waitlistCheckOutAt } from "@/lib/waitlistMatch";
 
-// Toda Reservation vive sob este tenantId fixo por convenção histórica do projeto — o isolamento
-// real por hotel é via Reservation.room.tenantId (ver apps/web/src/app/api/reservations/route.ts).
-const RESERVATION_TENANT_ID = "TNT-01";
 
 // POST /api/waitlist/:id/convert — cria a reserva a partir de uma entrada da fila (WAITING ou
 // NOTIFIED) e encerra a entrada como CONVERTED. Escolhe um quarto da categoria livre no período
@@ -101,7 +98,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       const reservation = await tx.reservation.create({
         data: {
-          tenantId: RESERVATION_TENANT_ID,
+          tenantId: session.tenantId!,
           roomId: chosen.id,
           guestName: entry.guestName,
           guestPhone: entry.guestPhone,

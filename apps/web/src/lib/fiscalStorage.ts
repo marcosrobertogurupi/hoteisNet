@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/utils/supabaseClient";
+import { supabaseAdmin } from "@/utils/supabaseAdmin";
 
 // Armazenamento dos arquivos fiscais (XML autorizado, DANFE em PDF) no Supabase Storage —
 // nunca no Postgres, pela regra de egress do projeto. Bucket privado `fiscal`, caminhos

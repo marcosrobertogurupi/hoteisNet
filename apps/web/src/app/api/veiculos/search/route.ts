@@ -22,7 +22,14 @@ export async function GET(req: NextRequest) {
 
     const vehicles = await prisma.vehicle.findMany({
       where,
-      include: { guest: { select: { id: true, fullName: true } } },
+      // `select` explícito: o payload só desenha placa, característica e o hóspede dono
+      // (CLAUDE.md, ⚡ Performance §1 e §2).
+      select: {
+        id: true,
+        placa: true,
+        caracteristica: true,
+        guest: { select: { id: true, fullName: true } },
+      },
       orderBy: { placa: "asc" },
       take: 200,
     });

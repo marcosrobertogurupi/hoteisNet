@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, requireTenantAdmin } from "@/lib/auth";
 import { ensureKnowledgeTopics } from "@/lib/knowledgeBase";
 import { KNOWLEDGE_TOPIC_KEYS } from "@/lib/knowledgeTopics";
 import type { KnowledgeTopicKey } from "@prisma/client";
@@ -21,16 +21,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Sessão inválida." }, { status: 401 });
     }
 
-    await ensureKnowledgeTopics(session.tenantId);
+    await ensureKnowledgeTopics(session!.tenantId!);
 
     const { searchParams } = new URL(req.url);
     const agentType = searchParams.get("agentType");
 
     const [topics, entries] = await Promise.all([
-      prisma.hotelKnowledgeTopic.findMany({ where: { tenantId: session.tenantId } }),
+      prisma.hotelKnowledgeTopic.findMany({ where: { tenantId: session!.tenantId! } }),
       prisma.supportKnowledgeBase.findMany({
         where: {
-          tenantId: session.tenantId,
+          tenantId: session!.tenantId!,
           ...(agentType && ["SUPPORT", "OPERATIONAL"].includes(agentType)
             ? { agentType: agentType as "SUPPORT" | "OPERATIONAL" }
             : {}),
@@ -53,10 +53,12 @@ export async function GET(req: NextRequest) {
 // em outro caminho (webhook, ao escalar) e nunca por esta rota.
 export async function POST(req: NextRequest) {
   try {
+    // Só administrador altera a base de conhecimento: é ela que alimenta o agente de IA que
+    // conversa com o hóspede no WhatsApp — poder reescrevê-la equivale a injetar instruções no
+    // agente. Antes qualquer recepcionista podia.
     const session = await getSessionUser(req);
-    if (!session?.tenantId) {
-      return NextResponse.json({ success: false, error: "Sessão inválida." }, { status: 401 });
-    }
+    const adminError = requireTenantAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await req.json();
     const { title, category, question, resolution, agentType, topicKey } = body;
@@ -70,7 +72,7 @@ export async function POST(req: NextRequest) {
 
     const entry = await prisma.supportKnowledgeBase.create({
       data: {
-        tenantId: session.tenantId,
+        tenantId: session!.tenantId!,
         title,
         category: typeof category === "string" ? category : "",
         question,
@@ -81,7 +83,7 @@ export async function POST(req: NextRequest) {
         status: "ACTIVE",
         verified: true,
         lastReviewedAt: new Date(),
-        updatedByName: session.name,
+        updatedByName: session!.name,
       },
     });
 

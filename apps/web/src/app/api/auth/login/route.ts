@@ -21,7 +21,7 @@ const GENERIC_AUTH_ERROR = "E-mail ou senha inválidos.";
 export async function POST(req: NextRequest) {
   try {
     const ip = getClientIp(req);
-    const rate = checkRateLimit(`login:${ip}`, { max: 5, windowMs: 60_000 });
+    const rate = await checkRateLimit(`login:${ip}`, { max: 5, windowMs: 60_000 });
     if (!rate.allowed) {
       return NextResponse.json(
         { success: false, error: "Muitas tentativas. Tente novamente em instantes." },

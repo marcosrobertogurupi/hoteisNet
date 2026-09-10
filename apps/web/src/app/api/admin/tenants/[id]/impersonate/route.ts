@@ -22,7 +22,7 @@ import { logPlatformAction } from "@/lib/platformAudit";
 // Restrito a PLATFORM_ADMIN / SUPER_ADMIN. Toda personificação é registrada em PlatformAuditLog.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   const { id } = await params;

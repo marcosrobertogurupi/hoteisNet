@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
 //         kind, text?, mediaBase64?, mediaFilename? }
 export async function POST(req: NextRequest) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   let body: Record<string, any>;

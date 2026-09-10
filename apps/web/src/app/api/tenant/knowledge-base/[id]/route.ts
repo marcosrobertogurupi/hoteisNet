@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, requireTenantAdmin } from "@/lib/auth";
 import { recordKnowledgeRevision } from "@/lib/knowledgeBase";
 import { KNOWLEDGE_TOPIC_KEYS } from "@/lib/knowledgeTopics";
 import type { KnowledgeTopicKey } from "@prisma/client";
@@ -12,16 +12,18 @@ const VALID_STATUS = new Set(["ACTIVE", "PENDING_REVIEW", "ARCHIVED"]);
 // (status -> ACTIVE) ou arquiva. Qualquer usuário logado (mesmo critério do CRUD já existente).
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    // Só administrador altera a base de conhecimento: é ela que alimenta o agente de IA que
+    // conversa com o hóspede no WhatsApp — poder reescrevê-la equivale a injetar instruções no
+    // agente. Antes qualquer recepcionista podia.
     const session = await getSessionUser(req);
-    if (!session?.tenantId) {
-      return NextResponse.json({ success: false, error: "Sessão inválida." }, { status: 401 });
-    }
+    const adminError = requireTenantAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const { id } = await params;
     const body = await req.json();
 
     const existing = await prisma.supportKnowledgeBase.findFirst({
-      where: { id, tenantId: session.tenantId },
+      where: { id, tenantId: session!.tenantId! },
     });
     if (!existing) {
       return NextResponse.json({ success: false, error: "Entrada não encontrada." }, { status: 404 });
@@ -46,11 +48,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ success: false, error: "Nada para atualizar." }, { status: 400 });
     }
 
-    data.updatedByName = session.name;
+    data.updatedByName = session!.name;
 
     // Filtro de tenant repetido na própria escrita (regra 3 do CLAUDE.md).
     const updated = await prisma.supportKnowledgeBase.updateMany({
-      where: { id, tenantId: session.tenantId },
+      where: { id, tenantId: session!.tenantId! },
       data,
     });
     if (updated.count === 0) {
@@ -59,12 +61,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     if (data.resolution !== undefined && data.resolution !== existing.resolution) {
       await recordKnowledgeRevision({
-        tenantId: session.tenantId,
+        tenantId: session!.tenantId!,
         targetType: "ENTRY",
         targetId: id,
         contentBefore: existing.resolution,
         contentAfter: data.resolution,
-        changedByName: session.name,
+        changedByName: session!.name,
         reason: existing.status === "PENDING_REVIEW" && data.status === "ACTIVE" ? "Sugestão do agente aprovada" : null,
       });
     }
@@ -79,13 +81,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 // DELETE /api/tenant/knowledge-base/:id — remove uma entrada da base de conhecimento do tenant.
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    // Só administrador altera a base de conhecimento: é ela que alimenta o agente de IA que
+    // conversa com o hóspede no WhatsApp — poder reescrevê-la equivale a injetar instruções no
+    // agente. Antes qualquer recepcionista podia.
     const session = await getSessionUser(req);
-    if (!session?.tenantId) {
-      return NextResponse.json({ success: false, error: "Sessão inválida." }, { status: 401 });
-    }
+    const adminError = requireTenantAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const { id } = await params;
-    const result = await prisma.supportKnowledgeBase.deleteMany({ where: { id, tenantId: session.tenantId } });
+    const result = await prisma.supportKnowledgeBase.deleteMany({ where: { id, tenantId: session!.tenantId! } });
     if (result.count === 0) {
       return NextResponse.json({ success: false, error: "Entrada não encontrada." }, { status: 404 });
     }

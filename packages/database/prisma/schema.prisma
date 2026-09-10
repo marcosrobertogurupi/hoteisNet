@@ -2607,3 +2607,19 @@ enum ReservationStatus {
   CANCELLED
   NO_SHOW
 }
+
+// Contador de tentativas por IP dos endpoints que recebem senha (logins dos quatro apps e a
+// autorização "step-up" de administrador). Fica no banco para ser compartilhado por todas as
+// instâncias serverless — em memória, "5 tentativas por minuto" virava 5 × número de instâncias
+// e zerava a cada cold start. Ver apps/web/src/lib/rateLimit.ts.
+//
+// Não tem tenantId: a chave é derivada do IP e do endpoint, e o contador precisa valer antes de
+// existir qualquer sessão (é justamente o que protege o login).
+model RateLimitBucket {
+  key     String   @id
+  count   Int      @default(0)
+  resetAt DateTime
+
+  @@index([resetAt])
+  @@map("rate_limit_buckets")
+}

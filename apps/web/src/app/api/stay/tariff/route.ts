@@ -111,7 +111,7 @@ export async function PATCH(req: NextRequest) {
         });
         const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
         if (reducaoPercent > limite + 0.001) {
-          const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+          const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
           if (!auth.ok) {
             return NextResponse.json(
               { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
@@ -159,7 +159,7 @@ export async function PATCH(req: NextRequest) {
       const totalDaily = Number(chargesAgg._sum.amount || 0);
 
       const updatedStay = await tx.stayCheckin.update({
-        where: { id: stayCheckinId },
+        where: { id: stayCheckinId, tenantId: session.tenantId! },
         data: { totalDaily },
         include: { charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } } },
       });

@@ -1,7 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
-import nodemailer from "nodemailer";
 import { getSessionUser } from "@/lib/auth";
-import { escapeHtml, isBlockedSmtpHost } from "@/lib/htmlEscape";
+import { escapeHtml } from "@/lib/htmlEscape";
+import { getTenantEmailSettings, sendTenantEmail, type TenantEmailAttachment } from "@/lib/tenantEmail";
+
+// POST /api/email/send — envia voucher/recibo/confirmação de pagamento para o hóspede usando
+// EXCLUSIVAMENTE as credenciais SMTP do tenant da sessão (EmailSetting).
+//
+// Antes esta rota aceitava smtpHost/smtpUser/smtpPass/fromEmail do corpo da requisição: qualquer
+// sessão válida fazia o servidor abrir conexão SMTP para o host que quisesse e enviar e-mail com
+// remetente e anexo arbitrários — relay de spam/phishing saindo do IP da plataforma
+// (CLAUDE.md, Segurança §7). O corpo agora só descreve o destinatário e o documento.
+
+const DOC_TYPES = {
+  voucher: {
+    title: "Voucher de Reserva",
+    defaultFilename: "Voucher_Reserva.pdf",
+    badgeColor: "#0284c7",
+    settingKey: "sendVoucherEnabled",
+    disabledMessage: "O envio de Vouchers por e-mail está desativado nas Configurações do assinante.",
+  },
+  receipt: {
+    title: "Recibo & Extrato de Hospedagem",
+    defaultFilename: "Recibo_Hospedagem.pdf",
+    badgeColor: "#10b981",
+    settingKey: "sendReceiptEnabled",
+    disabledMessage: "O envio de Recibos/Extratos por e-mail está desativado nas Configurações do assinante.",
+  },
+  payment_confirmation: {
+    title: "Comprovante / Confirmação de Pagamento",
+    defaultFilename: "Confirmacao_Pagamento.pdf",
+    badgeColor: "#8b5cf6",
+    settingKey: "sendPaymentConfirmEnabled",
+    disabledMessage: "O envio de Confirmações de Pagamento por e-mail está desativado nas Configurações do assinante.",
+  },
+} as const;
+
+// Anexo montado pelo cliente: limitado para que a rota não vire canal de exfiltração de arquivos
+// grandes nem estoure a memória da função.
+const MAX_PDF_BYTES = 8 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,132 +47,76 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const {
-      recipientEmail,
-      recipientName,
-      subject,
-      documentType = "voucher", // "voucher" | "receipt" | "payment_confirmation"
-      message,
-      pdfBase64,
-      filename,
-      // Configurações SMTP
-      smtpHost = "smtp.gmail.com",
-      smtpPort = 587,
-      smtpSecure = "tls",
-      smtpUser = "",
-      smtpPass = "",
-      fromEmail = "reserva@pousada.com.br",
-      fromName = "Pousada Sol & Mar - Reservas",
-      footerText = "Obrigado por escolher nossa pousada! Em caso de dúvidas, entre em contato conosco.",
-    } = body;
+    const { recipientEmail, recipientName, subject, documentType = "voucher", message, pdfBase64, filename } = body;
 
-    if (!recipientEmail) {
-      return NextResponse.json(
-        { success: false, error: "O e-mail de destino é obrigatório." },
-        { status: 400 }
-      );
+    const doc = DOC_TYPES[documentType as keyof typeof DOC_TYPES];
+    if (!doc) {
+      return NextResponse.json({ success: false, error: "Tipo de documento inválido." }, { status: 400 });
     }
 
-    // Valida se as credenciais SMTP foram preenchidas no assinante
-    if (!smtpUser?.trim() || !smtpPass?.trim()) {
+    const to = String(recipientEmail || "").trim();
+    if (!to || !to.includes("@")) {
+      return NextResponse.json({ success: false, error: "O e-mail de destino é obrigatório." }, { status: 400 });
+    }
+
+    const setting = await getTenantEmailSettings(session.tenantId);
+    if (!setting?.smtpUser?.trim()) {
       return NextResponse.json(
         {
           success: false,
-          error: "As credenciais de e-mail (Usuário e Senha SMTP) não estão configuradas. Por favor, acesse a Área do Assinante > Configurações para preencher seu Usuário e Senha de App de E-mail.",
+          error:
+            "As credenciais de e-mail (Usuário e Senha) não estão configuradas. Acesse Configurações > E-mail para preenchê-las.",
         },
         { status: 400 }
       );
     }
-
-    if (isBlockedSmtpHost(smtpHost)) {
-      return NextResponse.json({ success: false, error: "Servidor SMTP inválido." }, { status: 400 });
+    if (!setting[doc.settingKey]) {
+      return NextResponse.json({ success: false, error: doc.disabledMessage }, { status: 400 });
     }
 
-    const isSecure = smtpSecure === "ssl" || Number(smtpPort) === 465;
+    const fromName = setting.fromName || "Reservas";
+    const footerText =
+      setting.footerText || "Obrigado por escolher nossa pousada! Em caso de dúvidas, entre em contato conosco.";
+    const docFilename = String(filename || doc.defaultFilename);
+    const emailSubject = String(subject || `${doc.title} - ${fromName}`).slice(0, 250);
 
-    // Configura Nodemailer
-    const transporter = nodemailer.createTransport({
-      host: (smtpHost || "smtp.gmail.com").trim(),
-      port: Number(smtpPort || 587),
-      secure: isSecure,
-      auth: { user: smtpUser.trim(), pass: smtpPass.trim() },
-      tls: {
-        rejectUnauthorized: true,
-      },
-      connectionTimeout: 12000,
-    });
-
-    let docTitle = "Voucher de Reserva";
-    let defaultFilename = "Voucher_Reserva.pdf";
-    let badgeColor = "#0284c7";
-
-    if (documentType === "receipt") {
-      docTitle = "Recibo & Extrato de Hospedagem";
-      defaultFilename = "Recibo_Hospedagem.pdf";
-      badgeColor = "#10b981";
-    } else if (documentType === "payment_confirmation") {
-      docTitle = "Comprovante / Confirmação de Pagamento";
-      defaultFilename = "Confirmacao_Pagamento.pdf";
-      badgeColor = "#8b5cf6";
-    }
-
-    const emailSubject = subject || `${docTitle} - ${fromName}`;
-    const docFilename = filename || defaultFilename;
-
-    // Extrai e limpa a string Base64 do PDF (removendo qualquer prefixo de Data URI)
-    let attachments: any[] = [];
+    const attachments: TenantEmailAttachment[] = [];
     if (pdfBase64) {
-      // Extrai o conteúdo base64 puro após a vírgula, se presente
-      const rawBase64 = pdfBase64.includes(",")
-        ? pdfBase64.split(",")[1]
-        : pdfBase64;
-
+      const asString = String(pdfBase64);
+      const rawBase64 = asString.includes(",") ? asString.split(",")[1] : asString;
       const cleanBase64 = rawBase64.replace(/[\r\n\s]/g, "").trim();
       const pdfBuffer = Buffer.from(cleanBase64, "base64");
-
+      if (pdfBuffer.length > MAX_PDF_BYTES) {
+        return NextResponse.json(
+          { success: false, error: "O documento em anexo é grande demais para envio." },
+          { status: 400 }
+        );
+      }
       // Garante extensão .pdf válida para visualizadores de PDF de qualquer SO
       const safeFilename = docFilename.toLowerCase().endsWith(".pdf")
         ? docFilename
         : `${docFilename.replace(/\.[^/.]+$/, "")}.pdf`;
-
       attachments.push({
-        filename: safeFilename,
+        filename: safeFilename.replace(/[\\/\r\n]/g, "_"),
         content: pdfBuffer,
         contentType: "application/pdf",
-        contentDisposition: "attachment",
       });
     }
 
     const safeFromName = escapeHtml(fromName);
     const safeRecipientName = escapeHtml(recipientName || "Prezado(a) Hóspede");
-    const safeMessage = message ? escapeHtml(message) : `Segue em anexo o seu <strong>${escapeHtml(docTitle.toLowerCase())}</strong> gerado pelo nosso sistema.`;
+    const safeMessage = message
+      ? escapeHtml(String(message))
+      : `Segue em anexo o seu <strong>${escapeHtml(doc.title.toLowerCase())}</strong> gerado pelo nosso sistema.`;
     const safeFooterText = escapeHtml(footerText);
     const safeDocFilename = escapeHtml(docFilename.endsWith(".pdf") ? docFilename : `${docFilename}.pdf`);
+    const badgeColor = doc.badgeColor;
 
-    const htmlContent = `
-      <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-        <!-- Top Header Banner -->
-        <div style="background-color: ${badgeColor}; padding: 24px 32px; text-align: center; color: #ffffff;">
-          <h1 style="margin: 0; font-size: 22px; font-weight: 700; text-transform: uppercase;">${safeFromName}</h1>
-          <p style="margin: 6px 0 0 0; font-size: 14px; opacity: 0.9;">${docTitle}</p>
-        </div>
-
-        <!-- Body Content -->
-        <div style="padding: 32px; color: #334155; line-height: 1.6;">
-          <p style="font-size: 16px; font-weight: 600; margin-top: 0; color: #0f172a;">
-            Olá, ${safeRecipientName}!
-          </p>
-
-          <p style="font-size: 14px; color: #475569;">
-            ${safeMessage}
-          </p>
-
-          ${
-            pdfBase64
-              ? `
+    const anexoBloco = attachments.length
+      ? `
               <div style="background-color: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 16px; margin: 24px 0; text-align: center;">
                 <p style="margin: 0 0 6px 0; font-weight: bold; font-size: 13px; color: #0f172a;">
-                  📎 Arquivo em Anexo (PDF):
+                  Arquivo em anexo (PDF):
                 </p>
                 <span style="font-family: monospace; font-size: 12px; color: ${badgeColor}; font-weight: bold;">
                   ${safeDocFilename}
@@ -146,61 +126,69 @@ export async function POST(request: NextRequest) {
                 </p>
               </div>
               `
-              : ""
-          }
+      : "";
+
+    const htmlContent = `
+      <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div style="background-color: ${badgeColor}; padding: 24px 32px; text-align: center; color: #ffffff;">
+          <h1 style="margin: 0; font-size: 22px; font-weight: 700; text-transform: uppercase;">${safeFromName}</h1>
+          <p style="margin: 6px 0 0 0; font-size: 14px; opacity: 0.9;">${doc.title}</p>
+        </div>
+
+        <div style="padding: 32px; color: #334155; line-height: 1.6;">
+          <p style="font-size: 16px; font-weight: 600; margin-top: 0; color: #0f172a;">
+            Olá, ${safeRecipientName}!
+          </p>
+
+          <p style="font-size: 14px; color: #475569;">
+            ${safeMessage}
+          </p>
+
+          ${anexoBloco}
 
           <div style="background-color: #f1f5f9; border-left: 4px solid ${badgeColor}; padding: 12px 16px; margin-top: 24px; border-radius: 0 8px 8px 0; font-size: 13px; color: #475569;">
             ${safeFooterText}
           </div>
         </div>
 
-        <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; text-align: center; font-size: 12px; color: #94a3b8;">
           <p style="margin: 0;">Enviado por <strong>${safeFromName}</strong> via Hoteis.Net PMS SaaS.</p>
         </div>
       </div>
     `;
 
-    const info = await transporter.sendMail({
-      from: `"${fromName}" <${fromEmail || smtpUser}>`,
-      to: recipientEmail,
+    const result = await sendTenantEmail({
+      tenantId: session.tenantId,
+      to,
+      toName: recipientName || null,
       subject: emailSubject,
       html: htmlContent,
       attachments,
     });
 
-    console.log(`[Email Send] Message sent to ${recipientEmail}, MessageId: ${info.messageId}`);
+    if (!result.ok) {
+      const status = result.reason === "send_error" ? 502 : 400;
+      let userFriendlyError = result.message;
+      if (
+        result.message.includes("530-5.7.0") ||
+        result.message.includes("Authentication Required") ||
+        result.message.includes("535 5.7.8")
+      ) {
+        userFriendlyError =
+          "Falha de autenticação no servidor de e-mail. Verifique em Configurações > E-mail se o usuário e a senha de aplicativo estão corretos.";
+      } else if (result.message.includes("ECONNREFUSED") || result.message.includes("ETIMEDOUT")) {
+        userFriendlyError =
+          "Não foi possível conectar ao servidor de e-mail. Verifique o servidor e a porta informados em Configurações > E-mail.";
+      }
+      return NextResponse.json({ success: false, error: userFriendlyError }, { status });
+    }
 
     return NextResponse.json({
       success: true,
-      message: `${docTitle} enviado com sucesso para ${recipientEmail}!`,
-      messageId: info.messageId,
+      message: `${doc.title} enviado com sucesso para ${to}!`,
     });
   } catch (error: any) {
     console.error("[Email Send Error]", error);
-
-    let userFriendlyError = error.message || "Erro ao enviar e-mail.";
-    if (
-      error.message?.includes("530-5.7.0") ||
-      error.message?.includes("Authentication Required") ||
-      error.message?.includes("535 5.7.8")
-    ) {
-      userFriendlyError =
-        "Falha de Autenticação no servidor de e-mail (530/535). Por favor, acesse Área do Assinante > Configurações e verifique se o Usuário e a Senha de App SMTP estão configurados corretamente.";
-    } else if (
-      error.message?.includes("ECONNREFUSED") ||
-      error.message?.includes("ETIMEDOUT")
-    ) {
-      userFriendlyError =
-        "Não foi possível conectar ao servidor SMTP. Verifique o Servidor Host e a Porta informados nas Configurações.";
-    }
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: userFriendlyError,
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Erro ao enviar e-mail." }, { status: 500 });
   }
 }

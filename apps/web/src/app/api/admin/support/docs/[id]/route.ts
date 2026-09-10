@@ -6,7 +6,7 @@ import { logPlatformAction } from "@/lib/platformAudit";
 // PATCH /api/admin/support/docs/[id] — edita/ativa/desativa. Edição: PLATFORM_ADMIN / SUPER_ADMIN.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   const { id } = await params;
@@ -47,7 +47,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getPlatformSession(req);
-  const authError = requirePlatformAdmin(session);
+  const authError = await requirePlatformAdmin(session);
   if (authError) return NextResponse.json(authError.body, { status: authError.status });
 
   const { id } = await params;

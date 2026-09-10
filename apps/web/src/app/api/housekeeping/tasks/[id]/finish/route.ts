@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHousekeeperSession } from "@/lib/housekeeperAuth";
+import { getHousekeeperUser } from "@/lib/housekeeperSession";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { applyMinibarCheck } from "@/lib/minibarCheck";
@@ -18,7 +18,7 @@ import { logActivity } from "@/lib/audit";
 // frigobar é reabastecido ao kit cheio logo após a arrumação.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getHousekeeperSession(req);
+    const session = await getHousekeeperUser(req);
     if (!session) {
       return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
     }
@@ -100,8 +100,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         });
       }
 
+      // Filtro de tenant repetido na própria escrita (CLAUDE.md, Segurança §3).
       const updatedTask = await tx.housekeepingTask.update({
-        where: { id },
+        where: { id, tenantId: session.tenantId },
         data: {
           status: "DONE",
           finishedAt,
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       });
 
       if (task.type === "CHECKOUT" && task.room.status === "VACANT_DIRTY") {
-        await tx.room.update({ where: { id: task.roomId }, data: { status: "VACANT_CLEAN" } });
+        await tx.room.update({ where: { id: task.roomId, tenantId: session.tenantId }, data: { status: "VACANT_CLEAN" } });
       }
 
       return { updatedTask, minibar };

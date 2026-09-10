@@ -97,7 +97,7 @@ export async function PATCH(req: NextRequest) {
         });
         const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
         if (reducaoPercent > limite + 0.001) {
-          const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+          const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
           if (!auth.ok) {
             return NextResponse.json(
               { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
@@ -136,7 +136,7 @@ export async function PATCH(req: NextRequest) {
       const prevExpectedCheckOut = stay.expectedCheckOut;
 
       await tx.stayCheckin.update({
-        where: { id: stayCheckinId },
+        where: { id: stayCheckinId, tenantId: session.tenantId! },
         data: { expectedCheckOut: newExpectedCheckOut },
       });
 
@@ -155,7 +155,7 @@ export async function PATCH(req: NextRequest) {
       if (hasNewRate && currentCharge && Number(currentCharge.amount) !== Number(ratePerNight)) {
         dailyRateDelta = Number(ratePerNight) - Number(currentCharge.amount);
         await tx.stayCharge.update({
-          where: { id: currentCharge.id },
+          where: { id: currentCharge.id, stayCheckinId },
           data: {
             amount: Number(ratePerNight),
             description: tariffName || currentCharge.description,
@@ -171,7 +171,7 @@ export async function PATCH(req: NextRequest) {
       });
 
       const updatedStay = await tx.stayCheckin.update({
-        where: { id: stayCheckinId },
+        where: { id: stayCheckinId, tenantId: session.tenantId! },
         data: { totalDaily: Number(chargesAgg._sum.amount || 0) },
         include: { charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } } },
       });

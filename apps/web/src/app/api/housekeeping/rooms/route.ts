@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHousekeeperSession } from "@/lib/housekeeperAuth";
+import { getHousekeeperUser } from "@/lib/housekeeperSession";
 import { prisma } from "@/lib/prisma";
 import { ensureDailyArrumacaoTasks } from "@/lib/housekeeping";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
@@ -29,7 +29,7 @@ function naturalCompare(a: string, b: string): number {
 //  - Quarto VACANT_CLEAN / MAINTENANCE nunca aparece.
 export async function GET(req: NextRequest) {
   try {
-    const session = await getHousekeeperSession(req);
+    const session = await getHousekeeperUser(req);
     if (!session) {
       return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
     }
@@ -90,9 +90,14 @@ export async function GET(req: NextRequest) {
       const todaySpStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
       const dayStart = new Date(`${todaySpStr}T00:00:00.000Z`);
       const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      // Isola pelo tenant do QUARTO: até a migration 20260910130000 toda reserva carregava o
+      // rótulo fixo "TNT-01" no próprio tenantId, então este filtro (escrito da forma "óbvia")
+      // voltava sempre vazio para qualquer hotel cujo id não fosse "TNT-01" — a priorização de
+      // limpeza por chegada do dia nunca funcionou — e traria reservas de todos os assinantes
+      // para o hotel "TNT-01". O filtro pelo quarto está correto antes e depois do backfill.
       const todayArrivals = await prisma.reservation.findMany({
         where: {
-          tenantId: session.tenantId,
+          room: { tenantId: session.tenantId },
           status: { notIn: ["CANCELLED", "CHECKED_IN", "CHECKED_OUT", "NO_SHOW"] },
           checkInDate: { gte: dayStart, lt: dayEnd },
         },

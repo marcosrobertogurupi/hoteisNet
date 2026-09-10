@@ -41,10 +41,37 @@ const HOUSEKEEPER_API_PREFIX = "/api/housekeeping/";
 // telefone + senha), separado do login administrativo — ver lib/stockCountAuth.ts.
 const STOCK_COUNT_API_PREFIX = "/api/stock-count/";
 
+// Rotas que recebem POST de FORA do navegador (webhooks de provedor externo e o agente fiscal do
+// caixa) e por isso não podem passar pela checagem de Origin abaixo. Todas são autenticadas por
+// segredo/token próprio na própria rota, nunca por cookie — logo não são alvo de CSRF.
+const CSRF_EXEMPT_PREFIXES = ["/api/uazapi/webhook/", "/api/asaas/webhook/", "/api/pdv/agente/"];
+
+const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+// Defesa em profundidade contra CSRF. A proteção real do projeto é o `SameSite=Lax` dos cookies de
+// sessão, que já barra o caso clássico (um site de terceiro dispara POST com o cookie do usuário).
+// Esta checagem cobre o resto: quando o navegador manda `Origin` — e ele SEMPRE manda em requisição
+// que altera estado —, a origem precisa ser a própria aplicação. Requisição sem `Origin` não vem de
+// navegador (curl, agente fiscal, healthcheck) e segue para a autenticação normal da rota.
+function isCrossOriginStateChange(req: NextRequest): boolean {
+  if (!STATE_CHANGING_METHODS.has(req.method)) return false;
+  const origin = req.headers.get("origin");
+  if (!origin) return false;
+  try {
+    return new URL(origin).origin !== req.nextUrl.origin;
+  } catch {
+    return true; // Origin malformada: trata como cross-origin.
+  }
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (pathname.startsWith("/api/")) {
+    if (!CSRF_EXEMPT_PREFIXES.some((prefix) => pathname.startsWith(prefix)) && isCrossOriginStateChange(req)) {
+      return NextResponse.json({ success: false, error: "Origem da requisição não autorizada." }, { status: 403 });
+    }
+
     if (PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
       return NextResponse.next();
     }

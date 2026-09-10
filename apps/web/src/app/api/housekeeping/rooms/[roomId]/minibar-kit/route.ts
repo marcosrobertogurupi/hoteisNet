@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getHousekeeperSession } from "@/lib/housekeeperAuth";
+import { getHousekeeperUser } from "@/lib/housekeeperSession";
 import { prisma } from "@/lib/prisma";
 
 // GET /api/housekeeping/rooms/[roomId]/minibar-kit — kit do frigobar do quarto (recurso "quarto
@@ -11,7 +11,7 @@ import { prisma } from "@/lib/prisma";
 // conferência.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ roomId: string }> }) {
   try {
-    const session = await getHousekeeperSession(req);
+    const session = await getHousekeeperUser(req);
     if (!session) {
       return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
     }

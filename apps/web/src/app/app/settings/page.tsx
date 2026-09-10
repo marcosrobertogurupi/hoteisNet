@@ -68,29 +68,6 @@ export default function SubscriberSettingsPage() {
     setDefaultCheckOutTime,
     reservationToleranceHours,
     setReservationToleranceHours,
-    // E-mail / SMTP
-    emailSmtpHost,
-    setEmailSmtpHost,
-    emailSmtpPort,
-    setEmailSmtpPort,
-    emailSmtpSecure,
-    setEmailSmtpSecure,
-    emailSmtpUser,
-    setEmailSmtpUser,
-    emailSmtpPass,
-    setEmailSmtpPass,
-    emailFromName,
-    setEmailFromName,
-    emailFromAddress,
-    setEmailFromAddress,
-    emailFooterText,
-    setEmailFooterText,
-    sendVoucherEmailEnabled,
-    setSendVoucherEmailEnabled,
-    sendReceiptEmailEnabled,
-    setSendReceiptEmailEnabled,
-    sendPaymentConfirmEmailEnabled,
-    setSendPaymentConfirmEmailEnabled,
     whatsappSoundEnabled,
     setWhatsappSoundEnabled,
     humanInterventionSoundEnabled,
@@ -111,18 +88,22 @@ export default function SubscriberSettingsPage() {
   const [earlyCheckinFixedFeeInput, setEarlyCheckinFixedFeeInput] = useState("0");
   const [earlyCheckinPolicyTextInput, setEarlyCheckinPolicyTextInput] = useState("");
 
-  // Estados de E-mail / SMTP
-  const [smtpHostInput, setSmtpHostInput] = useState(emailSmtpHost);
-  const [smtpPortInput, setSmtpPortInput] = useState(String(emailSmtpPort));
-  const [smtpSecureInput, setSmtpSecureInput] = useState(emailSmtpSecure);
-  const [smtpUserInput, setSmtpUserInput] = useState(emailSmtpUser);
-  const [smtpPassInput, setSmtpPassInput] = useState(emailSmtpPass);
-  const [fromNameInput, setFromNameInput] = useState(emailFromName);
-  const [fromAddressInput, setFromAddressInput] = useState(emailFromAddress);
-  const [footerTextInput, setFooterTextInput] = useState(emailFooterText);
-  const [optVoucherInput, setOptVoucherInput] = useState(sendVoucherEmailEnabled);
-  const [optReceiptInput, setOptReceiptInput] = useState(sendReceiptEmailEnabled);
-  const [optPaymentInput, setOptPaymentInput] = useState(sendPaymentConfirmEmailEnabled);
+  // Estados de E-mail / SMTP — autoritativos no banco (EmailSetting), carregados abaixo por
+  // /api/tenant/email-settings. A senha nunca volta do servidor: o campo fica em branco e só é
+  // enviado quando o administrador digita uma nova.
+  const [smtpHostInput, setSmtpHostInput] = useState("smtp.gmail.com");
+  const [smtpPortInput, setSmtpPortInput] = useState("587");
+  const [smtpSecureInput, setSmtpSecureInput] = useState("tls");
+  const [smtpUserInput, setSmtpUserInput] = useState("");
+  const [smtpPassInput, setSmtpPassInput] = useState("");
+  const [emailPassConfigured, setEmailPassConfigured] = useState(false);
+  const [fromNameInput, setFromNameInput] = useState("");
+  const [fromAddressInput, setFromAddressInput] = useState("");
+  const [footerTextInput, setFooterTextInput] = useState("");
+  const [optVoucherInput, setOptVoucherInput] = useState(true);
+  const [optReceiptInput, setOptReceiptInput] = useState(true);
+  const [optPaymentInput, setOptPaymentInput] = useState(true);
+  const [emailSaveError, setEmailSaveError] = useState<string | null>(null);
 
   const [showEmailPass, setShowEmailPass] = useState(false);
   const [testingEmailSmtp, setTestingEmailSmtp] = useState(false);
@@ -540,6 +521,25 @@ export default function SubscriberSettingsPage() {
       })
       .catch(() => {});
 
+    const loadEmailSettings = fetch("/api/tenant/email-settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success || !data.settings) return;
+        const s = data.settings;
+        setSmtpHostInput(s.smtpHost || "smtp.gmail.com");
+        setSmtpPortInput(String(s.smtpPort ?? 587));
+        setSmtpSecureInput(s.smtpSecure || "tls");
+        setSmtpUserInput(s.smtpUser || "");
+        setEmailPassConfigured(!!s.senhaConfigurada);
+        setFromNameInput(s.fromName || "");
+        setFromAddressInput(s.fromEmail || "");
+        setFooterTextInput(s.footerText || "");
+        setOptVoucherInput(s.sendVoucherEnabled !== false);
+        setOptReceiptInput(s.sendReceiptEnabled !== false);
+        setOptPaymentInput(s.sendPaymentConfirmEnabled !== false);
+      })
+      .catch(() => {});
+
     const loadSnrhosSettings = fetch("/api/tenant/snrhos-settings")
       .then((res) => res.json())
       .then((data) => {
@@ -596,7 +596,7 @@ export default function SubscriberSettingsPage() {
       })
       .catch(() => {});
 
-    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages, loadSnrhosSettings, loadAiAgentSettings, loadHousekeepingSettings, loadPosLocations]).finally(() =>
+    Promise.allSettled([loadUazapiInstance(), loadTenantSettings, loadWhatsappMessages, loadEmailSettings, loadSnrhosSettings, loadAiAgentSettings, loadHousekeepingSettings, loadPosLocations]).finally(() =>
       setIsLoadingSettings(false)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -799,18 +799,37 @@ export default function SubscriberSettingsPage() {
     const parsedHours = Math.max(1, Number(toleranceInput) || 24);
     setReservationToleranceHours(parsedHours);
 
-    // Salva parâmetros de e-mail
-    setEmailSmtpHost(smtpHostInput.trim());
-    setEmailSmtpPort(Number(smtpPortInput) || 587);
-    setEmailSmtpSecure(smtpSecureInput);
-    setEmailSmtpUser(smtpUserInput.trim());
-    setEmailSmtpPass(smtpPassInput.trim());
-    setEmailFromName(fromNameInput.trim());
-    setEmailFromAddress(fromAddressInput.trim());
-    setEmailFooterText(footerTextInput.trim());
-    setSendVoucherEmailEnabled(optVoucherInput);
-    setSendReceiptEmailEnabled(optReceiptInput);
-    setSendPaymentConfirmEmailEnabled(optPaymentInput);
+    // Salva parâmetros de e-mail no banco (EmailSetting). A senha só sobe quando o administrador
+    // digitou uma nova — em branco significa "manter a que já está salva".
+    setEmailSaveError(null);
+    try {
+      const res = await fetch("/api/tenant/email-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          smtpHost: smtpHostInput.trim(),
+          smtpPort: Number(smtpPortInput) || 587,
+          smtpSecure: smtpSecureInput,
+          smtpUser: smtpUserInput.trim(),
+          ...(smtpPassInput.trim() ? { smtpPass: smtpPassInput.trim() } : {}),
+          fromName: fromNameInput.trim(),
+          fromEmail: fromAddressInput.trim(),
+          footerText: footerTextInput.trim(),
+          sendVoucherEnabled: optVoucherInput,
+          sendReceiptEnabled: optReceiptInput,
+          sendPaymentConfirmEnabled: optPaymentInput,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setEmailSaveError(data.error || "Erro ao salvar as configurações de e-mail.");
+      } else if (smtpPassInput.trim()) {
+        setEmailPassConfigured(true);
+        setSmtpPassInput("");
+      }
+    } catch (err: any) {
+      setEmailSaveError(err.message || "Erro de rede ao salvar as configurações de e-mail.");
+    }
 
     // Avisa o InactivityLock (montado no layout persistente de /app) para recarregar o
     // parâmetro de bloqueio de tela imediatamente — sem isso, o timer que já estava rodando
@@ -2060,7 +2079,7 @@ export default function SubscriberSettingsPage() {
                   type={showEmailPass ? "text" : "password"}
                   value={smtpPassInput}
                   onChange={(e) => setSmtpPassInput(e.target.value)}
-                  placeholder="••••••••••••"
+                  placeholder={emailPassConfigured ? "Senha já cadastrada — deixe em branco para manter" : "••••••••••••"}
                   className={`w-full border rounded-xl pl-3 pr-10 py-2 text-xs font-mono focus:outline-none focus:border-purple-500 ${
                     theme.isDark ? "bg-slate-900 border-slate-700 text-white" : "bg-white border-slate-300 text-slate-900"
                   }`}
@@ -2073,7 +2092,13 @@ export default function SubscriberSettingsPage() {
                   {showEmailPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <span className={`text-[10px] ${theme.textMuted}`}>Para o Gmail, utilize Senha de App de 16 caracteres.</span>
+              <span className={`text-[10px] ${theme.textMuted}`}>
+                Para o Gmail, utilize Senha de App de 16 caracteres.
+                {emailPassConfigured ? " A senha atual fica guardada apenas no servidor e não é exibida aqui." : ""}
+              </span>
+              {emailSaveError && (
+                <p className="text-[10px] text-red-400 mt-1">{emailSaveError}</p>
+              )}
             </div>
           </div>
 

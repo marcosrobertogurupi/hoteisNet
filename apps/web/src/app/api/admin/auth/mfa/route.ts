@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getPlatformSession } from "@/lib/auth";
 import { generateTotpSecret, totpUri, verifyTotp } from "@/lib/totp";
 import { logPlatformAction } from "@/lib/platformAudit";
+import { encryptSecret, decryptSecret } from "@/lib/secretBox";
 
 // POST /api/admin/auth/mfa — 2FA da própria conta no painel.
 //   { action: "setup" }          → gera um segredo pendente e devolve { secret, uri }
@@ -28,13 +29,14 @@ export async function POST(req: NextRequest) {
   if (body.action === "setup") {
     if (user.mfaEnabled) return NextResponse.json({ success: false, error: "2FA já está ativo." }, { status: 409 });
     const secret = generateTotpSecret();
-    await prisma.user.update({ where: { id: user.id }, data: { mfaSecret: secret } });
+    await prisma.user.update({ where: { id: user.id }, data: { mfaSecret: encryptSecret(secret) } });
     return NextResponse.json({ success: true, secret, uri: totpUri(secret, user.email) });
   }
 
   if (body.action === "enable") {
-    if (!user.mfaSecret) return NextResponse.json({ success: false, error: "Gere o segredo primeiro (setup)." }, { status: 400 });
-    if (!verifyTotp(user.mfaSecret, String(body.code || ""))) {
+    const pendingSecret = decryptSecret(user.mfaSecret);
+    if (!pendingSecret) return NextResponse.json({ success: false, error: "Gere o segredo primeiro (setup)." }, { status: 400 });
+    if (!verifyTotp(pendingSecret, String(body.code || ""))) {
       return NextResponse.json({ success: false, error: "Código inválido — confira o horário do celular e tente de novo." }, { status: 400 });
     }
     await prisma.user.update({ where: { id: user.id }, data: { mfaEnabled: true } });
@@ -44,7 +46,8 @@ export async function POST(req: NextRequest) {
 
   if (body.action === "disable") {
     if (!user.mfaEnabled) return NextResponse.json({ success: false, error: "2FA não está ativo." }, { status: 409 });
-    if (!user.mfaSecret || !verifyTotp(user.mfaSecret, String(body.code || ""))) {
+    const activeSecret = decryptSecret(user.mfaSecret);
+    if (!activeSecret || !verifyTotp(activeSecret, String(body.code || ""))) {
       return NextResponse.json({ success: false, error: "Código inválido." }, { status: 400 });
     }
     await prisma.user.update({ where: { id: user.id }, data: { mfaEnabled: false, mfaSecret: null } });

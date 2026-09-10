@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
       const limite = Number(tenant?.maxDiscountPercent ?? 20);
 
       if (discountPercent > limite + 0.001) {
-        const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+        const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
         if (!auth.ok) {
           return NextResponse.json(
             { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
 
       if (hasDiscountUpdate && stay) {
         await tx.stayCheckin.update({
-          where: { id: stay.id },
+          where: { id: stay.id, tenantId: session.tenantId! },
           data: { discount: discountValue },
         });
       }
@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
 
         // Equivalentes a hpd_totaladiant / hpd_saldopagar do sistema legado.
         await tx.stayCheckin.update({
-          where: { id: stay.id },
+          where: { id: stay.id, tenantId: session.tenantId! },
           data: { totalAdvance: totalPago, balanceDue: saldo },
         });
       }

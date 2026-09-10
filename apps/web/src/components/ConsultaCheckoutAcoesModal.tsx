@@ -117,17 +117,6 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
 }) => {
   const {
     hotelName,
-    uazapiServerUrl,
-    uazapiInstanceToken,
-    emailSmtpHost,
-    emailSmtpPort,
-    emailSmtpSecure,
-    emailSmtpUser,
-    emailSmtpPass,
-    emailFromName,
-    emailFromAddress,
-    emailFooterText,
-    sendReceiptEmailEnabled,
   } = useTheme();
   const toast = useToast();
 
@@ -373,8 +362,6 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
           fileName: docFilename,
           guestName: stay.guest.fullName,
           roomNumber: stay.roomNumber,
-          serverUrl: uazapiServerUrl,
-          instanceToken: uazapiInstanceToken,
         }),
       });
 
@@ -406,13 +393,6 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
 
   const handleSendEmail = async () => {
     if (!stay) return;
-    if (!sendReceiptEmailEnabled) {
-      setEmailStatusMsg({
-        type: "error",
-        text: "O envio de Recibos/Extratos por e-mail está desativado nas Configurações da Área do Assinante.",
-      });
-      return;
-    }
     if (!emailAddress || !emailAddress.includes("@")) {
       setEmailStatusMsg({ type: "error", text: "Por favor, insira um endereço de e-mail válido." });
       return;
@@ -434,14 +414,6 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
           message: `Olá, ${stay.guest.fullName}! Segue em anexo o resumo da sua hospedagem no Quarto ${stay.roomNumber}.`,
           pdfBase64,
           filename: docFilename,
-          smtpHost: emailSmtpHost,
-          smtpPort: emailSmtpPort,
-          smtpSecure: emailSmtpSecure,
-          smtpUser: emailSmtpUser,
-          smtpPass: emailSmtpPass,
-          fromName: emailFromName || hotelName,
-          fromEmail: emailFromAddress,
-          footerText: emailFooterText,
         }),
       });
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/utils/supabaseClient";
+import { supabaseAdmin } from "@/utils/supabaseAdmin";
 import { getSessionUser } from "@/lib/auth";
 
 // GET /api/reservations/tariffs — lista as tarifas ativas do tenant da sessão

@@ -43,7 +43,15 @@ export async function GET(req: NextRequest) {
 
     const records = await prisma.fNRHRecord.findMany({
       where,
-      include: {
+      // `select` no lugar de `include`: o include trazia a linha inteira da FNRH (todos os campos
+      // de endereço, origem/destino, assinatura) para desenhar oito colunas
+      // (CLAUDE.md, ⚡ Performance §1 e §2).
+      select: {
+        id: true,
+        transmittedSNRHos: true,
+        transmittedAt: true,
+        snrhosAttempts: true,
+        snrhosLastError: true,
         guest: { select: { fullName: true } },
         reservation: { select: { reservationNumber: true, checkInDate: true, checkOutDate: true, room: { select: { number: true } } } },
       },

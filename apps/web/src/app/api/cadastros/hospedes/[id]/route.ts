@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, requireTenantAdmin } from "@/lib/auth";
 import { cpfMatchVariants, formatCPF, validateCPF } from "@/lib/documentValidation";
 
 // GET /api/cadastros/hospedes/[id]
@@ -154,14 +154,16 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Excluir o cadastro de um hóspede é ação de administrador — a política do projeto é
+    // "usuário padrão: inclusão/alteração, sem exclusão" (CLAUDE.md). Antes qualquer
+    // recepcionista apagava o cadastro completo de um hóspede.
     const session = await getSessionUser(request);
-    if (!session?.tenantId) {
-      return NextResponse.json({ error: "Sessão inválida ou expirada." }, { status: 401 });
-    }
+    const adminError = requireTenantAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const { id } = await params;
     const deleted = await prisma.guest.deleteMany({
-      where: { id, tenantId: session.tenantId },
+      where: { id, tenantId: session!.tenantId! },
     });
 
     if (deleted.count === 0) {

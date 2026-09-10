@@ -113,17 +113,6 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
     hotelName,
     hotelLogo,
     showLogoInPrint,
-    uazapiServerUrl,
-    uazapiInstanceToken,
-    emailSmtpHost,
-    emailSmtpPort,
-    emailSmtpSecure,
-    emailSmtpUser,
-    emailSmtpPass,
-    emailFromName,
-    emailFromAddress,
-    emailFooterText,
-    sendReceiptEmailEnabled,
   } = useTheme();
 
   // Padrão desta tela: os dados são buscados do banco UMA VEZ, na abertura da janela, e ficam
@@ -345,8 +334,6 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
           fileName: docFilename,
           guestName: roomData.guestName,
           roomNumber: roomData.number,
-          serverUrl: uazapiServerUrl,
-          instanceToken: uazapiInstanceToken,
         }),
       });
 
@@ -385,13 +372,6 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
   };
 
   const handleSendEmailExtrato = async () => {
-    if (!sendReceiptEmailEnabled) {
-      setEmailStatusMsg({
-        type: "error",
-        text: "O envio de Recibos/Extratos por e-mail está desativado nas Configurações da Área do Assinante.",
-      });
-      return;
-    }
 
     if (!emailAddress || !emailAddress.includes("@")) {
       setEmailStatusMsg({
@@ -454,14 +434,6 @@ export const ImprimirExtratoHospedagemModal: React.FC<ImprimirExtratoHospedagemM
           message: `Olá, ${roomData.guestName}! Segue em anexo o resumo do extrato e consumo da sua hospedagem no Quarto ${roomData.number || ""}.`,
           pdfBase64,
           filename: docFilename,
-          smtpHost: emailSmtpHost,
-          smtpPort: emailSmtpPort,
-          smtpSecure: emailSmtpSecure,
-          smtpUser: emailSmtpUser,
-          smtpPass: emailSmtpPass,
-          fromName: emailFromName || hotelName,
-          fromEmail: emailFromAddress,
-          footerText: emailFooterText,
         }),
       });
 

@@ -391,8 +391,8 @@ function atBrasiliaTime(dateYmd: string, hhmm: string): Date {
 // Cria a reserva de verdade, dentro de uma transação (mesmo princípio de atomic-checkout-balance-guard
 // já aplicado no resto do sistema: a checagem de conflito acontece dentro da própria transação, não
 // só antes dela). O status (CONFIRMED vs PRE_RESERVATION) nunca é decidido pelo modelo — vem de
-// AIAgentSetting.autoConfirmReservations, configurado pelo assinante. tenantId da Reservation em si
-// é sempre "TNT-01" por convenção histórica do projeto (ver room.tenantId para o tenant real).
+// AIAgentSetting.autoConfirmReservations, configurado pelo assinante.
+// A reserva é gravada com o tenantId do próprio hotel (o mesmo do quarto escolhido).
 async function createReservationForAgent(
   tenantId: string,
   guestPhone: string,
@@ -531,7 +531,7 @@ async function createReservationForAgent(
 
     const created = await tx.reservation.create({
       data: {
-        tenantId: "TNT-01",
+        tenantId,
         roomId: freeRoom.id,
         guestName: params.guestName,
         guestPhone,

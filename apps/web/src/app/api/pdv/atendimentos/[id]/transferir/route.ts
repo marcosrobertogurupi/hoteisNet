@@ -29,7 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ success: false, error: "Selecione os itens a transferir." }, { status: 400 });
     }
 
-    const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+    const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
     if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
 
     const [origem, destino] = await Promise.all([

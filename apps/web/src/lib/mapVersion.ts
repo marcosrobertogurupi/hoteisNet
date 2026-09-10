@@ -69,12 +69,12 @@ export async function reservationsMapVersion(tenantId: string): Promise<string> 
   }
 }
 
-// IMPORTANTE: `reservations."tenantId"` NÃO é o tenant do hotel — é um rótulo legado fixo ("TNT-01")
-// para todas as reservas (ver RESERVATION_TENANT_ID em lib/mapQueries.ts). O isolamento real por
-// hotel é sempre `reservations.room.tenantId`. Filtrar a versão por `reservations."tenantId" = $1`
-// (o tenant da sessão) casava zero linhas e o carimbo ficava CONGELADO em `resv:0:0` — criar/editar/
-// mover/excluir reserva não mudava o ETag, o polling recebia 304 e a tela continuava mostrando o
-// retrato antigo. Toda contagem/timestamp de reserva abaixo passa por JOIN em "rooms".
+// Toda contagem/timestamp de reserva abaixo isola por JOIN em "rooms" (`rooms."tenantId"`), e não
+// por `reservations."tenantId"`. Historicamente esse campo era um rótulo fixo ("TNT-01") em todas
+// as reservas: filtrar por ele casava zero linhas e o carimbo ficava CONGELADO em `resv:0:0` —
+// criar/editar/mover/excluir reserva não mudava o ETag, o polling recebia 304 e a tela continuava
+// mostrando o retrato antigo. A migration 20260910130000 acertou o campo, mas o JOIN pelo quarto
+// segue sendo a forma canônica de isolar reserva por hotel (e é imune a qualquer resíduo antigo).
 function computeReservationsMapVersion(tenantId: string): Promise<string> {
   return combinedSig(tenantId, [
     { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX(r."updatedAt"), 'epoch'), COALESCE(MAX(r."createdAt"), 'epoch')) AS ts FROM "reservations" r JOIN "rooms" rm ON r."roomId" = rm.id WHERE rm."tenantId" = $1` },
