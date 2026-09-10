@@ -51,7 +51,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         const percent = subtotal > 0 ? (desconto / subtotal) * 100 : 100;
         const limite = Number(tenant?.maxDiscountPercent ?? 20);
         if (percent > limite + 0.001) {
-          const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+          const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
           if (!auth.ok) {
             return NextResponse.json(
               { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },

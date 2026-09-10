@@ -313,7 +313,7 @@ export async function POST(req: NextRequest) {
       const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
 
       if (discountPercent > limite + 0.001) {
-        const auth = await verifyAdminStepUp(body.adminEmail, body.adminPassword, session.tenantId);
+        const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
         if (!auth.ok) {
           return NextResponse.json(
             { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },

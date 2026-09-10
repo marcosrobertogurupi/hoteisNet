@@ -15,6 +15,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { processReservationDeposit, reverseReservationDeposits } from "@/lib/paymentProcessing";
 import { jsonForTenant } from "@/lib/tenantResponse";
 import { resolveOperator } from "@/lib/operator";
+import { checkDiscountAuthorization, reservationDiscountBase } from "@/lib/discountAuth";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
@@ -98,6 +99,21 @@ export async function POST(req: NextRequest) {
         success: false,
         error: "Campos obrigatórios faltando: Quarto, Hóspede, Chegada, Saída ou Tarifa.",
       });
+    }
+
+    // Desconto acima do limite do assinante exige autorização de administrador — revalidada aqui,
+    // antes de abrir a transação. A base do percentual é o total de diárias recalculado com a
+    // tarifa do CADASTRO (nunca o totalDiarias do corpo, que o chamador poderia inflar para o
+    // desconto caber no limite). Ver lib/discountAuth.ts.
+    const discountAuth = await checkDiscountAuthorization(req, {
+      tenantId: session.tenantId,
+      discountAmount,
+      baseAmount: await reservationDiscountBase(session.tenantId, tariffId, dailyRate, checkInDate, checkOutDate),
+      adminEmail: body.adminEmail,
+      adminPassword: body.adminPassword,
+    });
+    if (discountAuth.failure) {
+      return NextResponse.json(discountAuth.failure.body, { status: discountAuth.failure.status });
     }
 
     const result = await txWithRetry(async (tx) => {
@@ -247,6 +263,22 @@ export async function POST(req: NextRequest) {
       ipAddress: getClientIp(req),
     });
 
+    // Registra quem liberou o desconto acima do limite — sem isso o desconto excepcional fica
+    // gravado sem nenhum responsável identificado.
+    if (discountAuth.authorizedBy) {
+      await logActivity({
+        tenantId: session.tenantId,
+        userId: discountAuth.authorizedBy.id,
+        userName: discountAuth.authorizedBy.name,
+        action: "RESERVATION_DISCOUNT_AUTHORIZED",
+        description: `${discountAuth.authorizedBy.name} autorizou desconto de R$ ${Number(discountAmount).toFixed(2)} acima do limite na reserva ${result.reservationNumber}.`,
+        entityType: "RESERVATION",
+        entityId: result.reservationId,
+        terminal: getTerminalName(req),
+        ipAddress: getClientIp(req),
+      });
+    }
+
     return NextResponse.json({
       success: true,
       ...result,
@@ -281,6 +313,7 @@ export async function PATCH(req: NextRequest) {
       guestPhone,
       dailyRate,
       depositPaid,
+      discountAmount,
       totalAmount,
       status,
       notes,
@@ -297,6 +330,37 @@ export async function PATCH(req: NextRequest) {
 
     if (!id) {
       return NextResponse.json({ success: false, error: "ID da reserva é obrigatório." }, { status: 400 });
+    }
+
+    // Alterar o desconto acima do limite do assinante exige a mesma autorização de administrador
+    // do POST. Até 09/09/2026 o PATCH nem sequer gravava discountAmount — passa a gravar, agora
+    // com a trava no servidor (ver lib/discountAuth.ts).
+    let discountAuthorizedBy: { id: string; name: string } | undefined;
+    if (discountAmount !== undefined) {
+      const atual = await prisma.reservation.findFirst({
+        where: { id, room: { tenantId: session.tenantId } },
+        select: { tariffId: true, dailyRate: true, checkInDate: true, checkOutDate: true },
+      });
+      if (!atual) {
+        return NextResponse.json({ success: false, error: "Reserva não encontrada." }, { status: 404 });
+      }
+      const auth = await checkDiscountAuthorization(req, {
+        tenantId: session.tenantId,
+        discountAmount,
+        baseAmount: await reservationDiscountBase(
+          session.tenantId,
+          atual.tariffId ?? undefined,
+          dailyRate ?? atual.dailyRate,
+          (checkInDate ? new Date(checkInDate) : atual.checkInDate).toISOString(),
+          (checkOutDate ? new Date(checkOutDate) : atual.checkOutDate).toISOString()
+        ),
+        adminEmail: body.adminEmail,
+        adminPassword: body.adminPassword,
+      });
+      if (auth.failure) {
+        return NextResponse.json(auth.failure.body, { status: auth.failure.status });
+      }
+      discountAuthorizedBy = auth.authorizedBy;
     }
 
     await txWithRetry(async (tx) => {
@@ -358,6 +422,7 @@ export async function PATCH(req: NextRequest) {
       // Quando a tela reconcilia adiantamentos (add/remove), o depositPaid vem do recálculo abaixo,
       // não do valor enviado pelo cliente.
       if (depositPaid !== undefined && !reconcilesPayments) data.depositPaid = depositPaid;
+      if (discountAmount !== undefined) data.discountAmount = discountAmount;
       if (totalAmount !== undefined) data.totalAmount = totalAmount;
       if (notes !== undefined) data.notes = notes;
       if (status) data.status = status;
@@ -453,6 +518,20 @@ export async function PATCH(req: NextRequest) {
       terminal: getTerminalName(req),
       ipAddress: getClientIp(req),
     });
+
+    if (discountAuthorizedBy) {
+      await logActivity({
+        tenantId: session.tenantId,
+        userId: discountAuthorizedBy.id,
+        userName: discountAuthorizedBy.name,
+        action: "RESERVATION_DISCOUNT_AUTHORIZED",
+        description: `${discountAuthorizedBy.name} autorizou desconto de R$ ${Number(discountAmount).toFixed(2)} acima do limite na reserva ${id}.`,
+        entityType: "RESERVATION",
+        entityId: id,
+        terminal: getTerminalName(req),
+        ipAddress: getClientIp(req),
+      });
+    }
 
     return NextResponse.json({
       success: true,
