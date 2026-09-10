@@ -20,7 +20,23 @@ export async function GET(req: NextRequest) {
     const caixas = await prisma.cashRegister.findMany({
       where: { tenantId: session!.tenantId },
       orderBy: { openedAt: "desc" },
-      include: { transactions: true },
+      // `select` explícito e, nos lançamentos, só os quatro campos que entram nos totais — o
+      // `include: { transactions: true }` baixava a linha inteira de CADA movimento de CADA caixa
+      // (descrição, hóspede, quarto, ids de vínculo, timestamps) para somar valores
+      // (CLAUDE.md, ⚡ Performance §1 e §2).
+      select: {
+        id: true,
+        operatorId: true,
+        operatorName: true,
+        isOpen: true,
+        openedAt: true,
+        closedAt: true,
+        openingBalance: true,
+        closingBalance: true,
+        transactions: {
+          select: { type: true, amount: true, paymentMethod: true, countsInCashTotal: true },
+        },
+      },
     });
 
     const rows = caixas.map((caixa) => {

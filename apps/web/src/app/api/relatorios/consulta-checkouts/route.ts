@@ -42,7 +42,22 @@ export async function GET(req: NextRequest) {
         isClosed: true,
         actualCheckOut: { gte: start, lte: end },
       },
-      include: { room: true, primaryGuest: true },
+      // `select` explícito: o relatório desenha treze colunas, não a linha inteira da hospedagem
+      // mais a do quarto e a do hóspede (CLAUDE.md, ⚡ Performance §1 e §2).
+      select: {
+        id: true,
+        checkInDate: true,
+        expectedCheckOut: true,
+        actualCheckOut: true,
+        totalDaily: true,
+        totalConsumption: true,
+        otherDebits: true,
+        discount: true,
+        balanceDue: true,
+        closingOperatorName: true,
+        room: { select: { number: true } },
+        primaryGuest: { select: { fullName: true, whatsappPhone: true, phone: true } },
+      },
       orderBy: { actualCheckOut: "desc" },
     });
 

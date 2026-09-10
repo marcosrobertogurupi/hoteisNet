@@ -42,11 +42,37 @@ export async function createPreCheckinLink(
   return { token, url: `${resolveAppBaseUrl()}/self-checkin/${token}`, expiresAt };
 }
 
+// `select` aninhado, nunca `include`: esta consulta serve uma rota PÚBLICA (o hóspede abre o link
+// pelo WhatsApp) e o `include: { tenant: true }` anterior puxava a linha inteira do Tenant —
+// CNPJ, endereço, dados de cobrança — para exibir só nome e logo do hotel
+// (CLAUDE.md, ⚡ Performance §2).
 function loadLinkWithReservation(tx: TxClient, token: string) {
   return tx.preCheckinLink.findUnique({
     where: { token },
-    include: {
-      reservation: { include: { room: { include: { tenant: true } } } },
+    select: {
+      id: true,
+      status: true,
+      expiresAt: true,
+      reservation: {
+        select: {
+          id: true,
+          guestId: true,
+          guestName: true,
+          guestCpf: true,
+          guestPhone: true,
+          reservationNumber: true,
+          checkInDate: true,
+          checkOutDate: true,
+          roomDescription: true,
+          roomCategory: true,
+          room: {
+            select: {
+              tenantId: true,
+              tenant: { select: { name: true, tradeName: true, logoUrl: true } },
+            },
+          },
+        },
+      },
     },
   });
 }

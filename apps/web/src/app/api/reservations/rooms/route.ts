@@ -98,12 +98,21 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
 
-    const activeStayInclude = {
+    // Endpoint do Mapa de Quartos, consultado em polling de 3 s por terminal: traz SÓ as colunas
+    // que formatRoom desenha. Antes era `include: { category: true, checkins: { include:
+    // { primaryGuest: true } } }`, ou seja, a linha inteira de quarto, categoria, hospedagem e
+    // hóspede a cada tique — o mesmo formato de consulta que estourou a cota de egress do Supabase
+    // em agosto (CLAUDE.md, ⚡ Performance §1 a §3 e §5).
+    const activeStaySelect = {
       where: { isClosed: false },
       orderBy: { checkInDate: "desc" as const },
       take: 1,
-      include: {
-        primaryGuest: true,
+      select: {
+        id: true,
+        checkInDate: true,
+        expectedCheckOut: true,
+        totalConsumption: true,
+        primaryGuest: { select: { fullName: true } },
         _count: { select: { whatsappMessages: { where: { direction: "IN", read: false } } } },
       },
     };
@@ -111,9 +120,21 @@ export async function GET(req: NextRequest) {
     const rooms = await withDbRetry(() =>
       prisma.room.findMany({
         where: { tenantId: session.tenantId! },
-        include: {
-          category: true,
-          checkins: activeStayInclude,
+        select: {
+          id: true,
+          number: true,
+          floor: true,
+          bloco: true,
+          camasCasal: true,
+          camasSolteiro: true,
+          caracteristicas: true,
+          photos: true,
+          status: true,
+          notes: true,
+          active: true,
+          categoryId: true,
+          category: { select: { id: true, name: true, description: true, dailyPrice: true, capacity: true } },
+          checkins: activeStaySelect,
         },
         orderBy: {
           number: "asc",
