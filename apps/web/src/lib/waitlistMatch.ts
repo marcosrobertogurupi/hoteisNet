@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { busyRoomIdsForPeriod } from "@/lib/reservationHelpers";
+import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
@@ -21,6 +22,98 @@ export function waitlistCheckInAt(date: Date): Date {
 }
 export function waitlistCheckOutAt(date: Date): Date {
   return atBrasiliaTime(date.toISOString().slice(0, 10), DEFAULT_CHECK_OUT_TIME);
+}
+
+// Normaliza adults/children vindos do cliente: inteiros, adults >= 1, children >= 0. Sem isso um
+// `children: -3` (truthy) ou `adults: 2.7` era gravado cru.
+export function sanitizeParty(adults: unknown, children: unknown): { adults: number; children: number } {
+  const a = Math.trunc(Number(adults));
+  const c = Math.trunc(Number(children));
+  return {
+    adults: Number.isFinite(a) && a >= 1 ? a : 1,
+    children: Number.isFinite(c) && c >= 0 ? c : 0,
+  };
+}
+
+// Procura uma entrada ATIVA (WAITING/NOTIFIED) que seja "a mesma pessoa" já na fila para a mesma
+// categoria e um período sobreposto — mesmo CPF, ou mesmo telefone (só dígitos), ou mesmo e-mail.
+// Evita que a recepção (ou uma dupla submissão) crie a mesma pessoa duas vezes na fila, o que
+// inflava a fila e faria o worker avisar o hóspede em duplicidade. Retorna a entrada encontrada
+// ou null. Compara em memória (a fila é pequena) porque o telefone é gravado formatado.
+export async function findActiveDuplicateEntry(
+  tx: PrismaClientOrTx,
+  params: {
+    tenantId: string;
+    roomCategoryId: string;
+    checkIn: Date;
+    checkOut: Date;
+    guestCpf?: string | null;
+    guestPhone?: string | null;
+    guestEmail?: string | null;
+  }
+): Promise<{ id: string; guestName: string; createdAt: Date } | null> {
+  const cpf = params.guestCpf?.replace(/\D/g, "") || null;
+  const phone = params.guestPhone?.replace(/\D/g, "") || null;
+  const email = params.guestEmail?.trim().toLowerCase() || null;
+  if (!cpf && !(phone && phone.length >= 10) && !email) return null;
+
+  const checkIn = waitlistCheckInAt(params.checkIn);
+  const checkOut = waitlistCheckOutAt(params.checkOut);
+  const candidates = await tx.waitlistEntry.findMany({
+    where: {
+      tenantId: params.tenantId,
+      roomCategoryId: params.roomCategoryId,
+      status: { in: ["WAITING", "NOTIFIED"] },
+      checkInDate: { lt: checkOut },
+      checkOutDate: { gt: checkIn },
+    },
+    select: { id: true, guestName: true, createdAt: true, guestCpf: true, guestPhone: true, guestEmail: true },
+    take: 100,
+  });
+
+  const dup = candidates.find(
+    (c) =>
+      (cpf && c.guestCpf?.replace(/\D/g, "") === cpf) ||
+      (phone && phone.length >= 10 && c.guestPhone?.replace(/\D/g, "") === phone) ||
+      (email && c.guestEmail?.trim().toLowerCase() === email)
+  );
+  return dup ? { id: dup.id, guestName: dup.guestName, createdAt: dup.createdAt } : null;
+}
+
+// A data de chegada não pode estar no passado — ancorada em Brasília, porque em produção o "hoje"
+// do processo roda em UTC (3h à frente da meia-noite BRT). Retorna a mensagem de erro, ou null.
+export function pastCheckInError(checkIn: Date): string | null {
+  return dateOnlyBrasilia(checkIn) < dateOnlyBrasilia(new Date())
+    ? "A data de chegada não pode estar no passado."
+    : null;
+}
+
+// Maior número de hóspedes que alguma tarifa ativa do tenant consegue precificar (Tariff.adults é
+// tratado como capacidade da tarifa, igual ao check-in). `null` quando o hotel ainda não tem
+// nenhuma tarifa cadastrada — aí a validação de capacidade não roda aqui (o convert cobra isso).
+export async function maxTariffOccupancy(tx: PrismaClientOrTx, tenantId: string): Promise<number | null> {
+  const t = await tx.tariff.findFirst({
+    where: { tenantId, active: true },
+    orderBy: { adults: "desc" },
+    select: { adults: true },
+  });
+  return t ? t.adults : null;
+}
+
+// Valida o nº de pessoas contra a capacidade máxima das tarifas do tenant. Retorna a mensagem de
+// erro, ou null se ok (ou se não há tarifa cadastrada para comparar).
+export async function partyOverCapacityError(
+  tx: PrismaClientOrTx,
+  tenantId: string,
+  adults: number,
+  children: number
+): Promise<string | null> {
+  const max = await maxTariffOccupancy(tx, tenantId);
+  if (max == null) return null;
+  const occupants = adults + children;
+  return occupants > max
+    ? `Nenhuma tarifa cadastrada acomoda ${occupants} hóspede(s) (máximo ${max}). Ajuste o número de pessoas ou cadastre uma tarifa adequada.`
+    : null;
 }
 
 // Procura um quarto ATIVO da categoria pedida que esteja genuinamente livre para todo o período
@@ -54,22 +147,83 @@ export async function findWaitlistVacancy(
   if (rooms.length === 0) return null;
   const roomIds = rooms.map((r) => r.id);
 
-  const [busy, heldEntries] = await Promise.all([
+  const [busy, held] = await Promise.all([
     busyRoomIdsForPeriod(tx, roomIds, checkIn, checkOut),
-    tx.waitlistEntry.findMany({
-      where: {
-        tenantId: params.tenantId,
-        status: "NOTIFIED",
-        notifiedRoomId: { in: roomIds },
-        id: params.excludeWaitlistId ? { not: params.excludeWaitlistId } : undefined,
-        checkInDate: { lt: checkOut },
-        checkOutDate: { gt: checkIn },
-      },
-      select: { notifiedRoomId: true },
+    roomIdsHeldByOtherWaitlist(tx, {
+      tenantId: params.tenantId,
+      roomIds,
+      checkIn: params.checkIn,
+      checkOut: params.checkOut,
+      excludeWaitlistId: params.excludeWaitlistId,
     }),
   ]);
 
-  const held = new Set(heldEntries.map((e) => e.notifiedRoomId).filter(Boolean) as string[]);
   const free = roomIds.find((id) => !busy.has(id) && !held.has(id));
   return free ? { roomId: free } : null;
+}
+
+// Quartos (dentre os informados) em "soft hold" por OUTRA entrada da fila já avisada (status
+// NOTIFIED, `notifiedRoomId` preenchido, período sobreposto) — ou seja, um quarto já prometido a
+// outro hóspede da fila. `excludeWaitlistId` tira a própria entrada da conta (o hold dela não
+// compete consigo mesma). Usado por `findWaitlistVacancy` e pela conversão, para a recepção nunca
+// converter uma entrada usando o quarto reservado para quem já foi avisado antes.
+export async function roomIdsHeldByOtherWaitlist(
+  tx: PrismaClientOrTx,
+  params: {
+    tenantId: string;
+    roomIds: string[];
+    checkIn: Date;
+    checkOut: Date;
+    excludeWaitlistId?: string;
+  }
+): Promise<Set<string>> {
+  if (params.roomIds.length === 0) return new Set();
+  const checkIn = waitlistCheckInAt(params.checkIn);
+  const checkOut = waitlistCheckOutAt(params.checkOut);
+  const heldEntries = await tx.waitlistEntry.findMany({
+    where: {
+      tenantId: params.tenantId,
+      status: "NOTIFIED",
+      notifiedRoomId: { in: params.roomIds },
+      id: params.excludeWaitlistId ? { not: params.excludeWaitlistId } : undefined,
+      checkInDate: { lt: checkOut },
+      checkOutDate: { gt: checkIn },
+    },
+    select: { notifiedRoomId: true },
+  });
+  return new Set(heldEntries.map((e) => e.notifiedRoomId).filter(Boolean) as string[]);
+}
+
+// Quantas entradas da fila estão À FRENTE desta para a mesma categoria e um período sobreposto —
+// isto é, entradas ainda `WAITING` criadas antes (`createdAt` menor) que disputam a mesma vaga.
+// A regra travada com o usuário é "avisar o primeiro da fila (createdAt asc)"; avisar/converter
+// alguém com gente na frente é "furar a fila" e só deve acontecer com confirmação explícita da
+// recepção (e fica registrado na trilha de auditoria). Uma entrada à frente já `NOTIFIED` não
+// entra nesta conta — ela é protegida pelo soft hold (`roomIdsHeldByOtherWaitlist`), não pela
+// ordem.
+export async function countWaitlistAhead(
+  tx: PrismaClientOrTx,
+  entry: {
+    id: string;
+    tenantId: string;
+    roomCategoryId: string;
+    checkInDate: Date;
+    checkOutDate: Date;
+    createdAt: Date;
+  }
+): Promise<{ count: number; nextGuestName: string | null }> {
+  const ahead = await tx.waitlistEntry.findMany({
+    where: {
+      tenantId: entry.tenantId,
+      status: "WAITING",
+      roomCategoryId: entry.roomCategoryId,
+      id: { not: entry.id },
+      createdAt: { lt: entry.createdAt },
+      checkInDate: { lt: entry.checkOutDate },
+      checkOutDate: { gt: entry.checkInDate },
+    },
+    orderBy: { createdAt: "asc" },
+    select: { guestName: true },
+  });
+  return { count: ahead.length, nextGuestName: ahead[0]?.guestName ?? null };
 }

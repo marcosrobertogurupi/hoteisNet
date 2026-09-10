@@ -105,11 +105,41 @@ export default function WaitlistPanel({
     return () => clearTimeout(t);
   }, [feedback]);
 
+  // POST para uma ação da fila (notify/convert). Quando o servidor responde `needsQueueOverride`
+  // (há hóspedes mais antigos na frente para a mesma categoria/período), pede confirmação e reenvia
+  // com `override: true` — o "furo de fila" fica registrado na trilha de auditoria pelo servidor.
+  const postWaitlistAction = async (
+    id: string,
+    action: "notify" | "convert",
+    verb: string,
+  ): Promise<any | null> => {
+    const send = (override: boolean) =>
+      fetch(`/api/waitlist/${id}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(override ? { override: true } : {}),
+      }).then((r) => r.json());
+
+    let data = await send(false);
+    if (data?.needsQueueOverride) {
+      const ahead =
+        typeof data.aheadCount === "number" && data.aheadCount > 0
+          ? `${data.aheadCount} hóspede(s) na frente na fila`
+          : "hóspedes na frente na fila";
+      const next = data.nextGuestName ? ` O próximo seria ${data.nextGuestName}.` : "";
+      if (!confirm(`Há ${ahead} para esta categoria e período.${next}\n\nFurar a fila e ${verb} este hóspede mesmo assim?`)) {
+        return null;
+      }
+      data = await send(true);
+    }
+    return data;
+  };
+
   const notify = async (id: string) => {
     setBusyId(id);
     try {
-      const res = await fetch(`/api/waitlist/${id}/notify`, { method: "POST" });
-      const data = await res.json();
+      const data = await postWaitlistAction(id, "notify", "avisar");
+      if (data === null) return;
       setFeedback(
         data.success
           ? { type: "ok", text: data.message || "Hóspede avisado." }
@@ -125,8 +155,8 @@ export default function WaitlistPanel({
     if (!confirm("Converter esta entrada da fila em uma reserva confirmada?")) return;
     setBusyId(id);
     try {
-      const res = await fetch(`/api/waitlist/${id}/convert`, { method: "POST" });
-      const data = await res.json();
+      const data = await postWaitlistAction(id, "convert", "converter");
+      if (data === null) return;
       setFeedback(
         data.success
           ? { type: "ok", text: `Reserva ${data.reservationNumber} criada (quarto ${data.room}).` }
@@ -343,6 +373,9 @@ function AddToWaitlistModal({
   const { theme } = useTheme();
   const isDark = theme.isDark;
 
+  // "Hoje" no fuso do hotel (Brasília) — trava o mínimo dos campos de data; o servidor revalida.
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+
   const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState({
     guestName: "",
@@ -394,7 +427,8 @@ function AddToWaitlistModal({
       });
       const data = await res.json();
       if (data.success) onSaved();
-      else if (data.hasVacancy) setVacancyWarning(data.error || "Há quarto livre nesse período.");
+      else if (data.hasVacancy || data.duplicate)
+        setVacancyWarning(data.error || (data.duplicate ? "Este hóspede já está na fila." : "Há quarto livre nesse período."));
       else setError(data.error || "Erro ao adicionar à fila.");
     } catch {
       setError("Erro de conexão.");
@@ -665,6 +699,7 @@ function AddToWaitlistModal({
               <label className={`text-xs font-semibold ${label}`}>Chegada *</label>
               <input
                 type="date"
+                min={todayStr}
                 value={form.checkInDate}
                 onChange={(e) => set("checkInDate", e.target.value)}
                 className={inputCls}
@@ -674,6 +709,7 @@ function AddToWaitlistModal({
               <label className={`text-xs font-semibold ${label}`}>Saída *</label>
               <input
                 type="date"
+                min={form.checkInDate || todayStr}
                 value={form.checkOutDate}
                 onChange={(e) => set("checkOutDate", e.target.value)}
                 className={inputCls}

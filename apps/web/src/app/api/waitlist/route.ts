@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
-import { waitlistCheckInAt, waitlistCheckOutAt, findWaitlistVacancy } from "@/lib/waitlistMatch";
+import {
+  waitlistCheckInAt,
+  waitlistCheckOutAt,
+  findWaitlistVacancy,
+  findActiveDuplicateEntry,
+  sanitizeParty,
+  pastCheckInError,
+  partyOverCapacityError,
+} from "@/lib/waitlistMatch";
 
 // Campos que a tela de gestão da fila de espera desenha — select explícito, sem `include`, sem
 // spread do registro na resposta (CLAUDE.md, Performance §1–§3).
@@ -121,7 +129,41 @@ export async function POST(req: NextRequest) {
     const checkIn = waitlistCheckInAt(new Date(checkInDate));
     const checkOut = waitlistCheckOutAt(new Date(checkOutDate));
     if (isNaN(checkIn.getTime()) || isNaN(checkOut.getTime()) || checkOut <= checkIn) {
-      return NextResponse.json({ success: false, error: "Datas inválidas." }, { status: 400 });
+      return NextResponse.json({ success: false, error: "A data de saída precisa ser depois da chegada." }, { status: 400 });
+    }
+    const pastErr = pastCheckInError(checkIn);
+    if (pastErr) {
+      return NextResponse.json({ success: false, error: pastErr }, { status: 400 });
+    }
+
+    // Nº de pessoas: normaliza (sem negativos/decimais) e valida contra a capacidade das tarifas —
+    // sem isso dava para registrar "50 adultos" e, na conversão, cair na tarifa mais barata.
+    const { adults: adultsN, children: childrenN } = sanitizeParty(adults, children);
+    const capacityErr = await partyOverCapacityError(prisma, session.tenantId, adultsN, childrenN);
+    if (capacityErr) {
+      return NextResponse.json({ success: false, error: capacityErr }, { status: 400 });
+    }
+
+    // Deduplicação: a mesma pessoa (CPF / telefone / e-mail) já na fila para essa categoria e
+    // período sobreposto não entra de novo — a recepção edita a entrada existente. "Adicionar
+    // mesmo assim" (force) libera, para o caso raro de dois hóspedes homônimos sem CPF.
+    if (!force) {
+      const dup = await findActiveDuplicateEntry(prisma, {
+        tenantId: session.tenantId,
+        roomCategoryId: category.id,
+        checkIn,
+        checkOut,
+        guestCpf,
+        guestPhone,
+        guestEmail,
+      });
+      if (dup) {
+        return NextResponse.json({
+          success: false,
+          duplicate: true,
+          error: `${dup.guestName} já está na fila para ${category.name} nesse período (desde ${dup.createdAt.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}). Edite a entrada existente ou confirme para adicionar mesmo assim.`,
+        });
+      }
     }
 
     // A fila de espera só faz sentido quando NÃO há vaga. Se já existe um quarto livre da categoria
@@ -155,8 +197,8 @@ export async function POST(req: NextRequest) {
         roomCategoryName: category.name,
         checkInDate: checkIn,
         checkOutDate: checkOut,
-        adults: Number(adults) || 1,
-        children: Number(children) || 0,
+        adults: adultsN,
+        children: childrenN,
         notes: notes?.trim() || null,
         source: "MANUAL",
         operatorId: operatorId || session.userId || null,

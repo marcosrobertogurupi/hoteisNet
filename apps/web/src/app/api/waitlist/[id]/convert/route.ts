@@ -4,13 +4,25 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { findConflictingReservation, findBlockingOpenStay, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
-import { waitlistCheckInAt, waitlistCheckOutAt } from "@/lib/waitlistMatch";
+import {
+  waitlistCheckInAt,
+  waitlistCheckOutAt,
+  countWaitlistAhead,
+  roomIdsHeldByOtherWaitlist,
+  pastCheckInError,
+} from "@/lib/waitlistMatch";
 
 
 // POST /api/waitlist/:id/convert — cria a reserva a partir de uma entrada da fila (WAITING ou
 // NOTIFIED) e encerra a entrada como CONVERTED. Escolhe um quarto da categoria livre no período
-// (a mesma régua de prioridade da reserva) e a tarifa pelo nº de adultos. Sem lançamento de sinal
+// (a mesma régua de prioridade da reserva) e a tarifa pelo nº de hóspedes. Sem lançamento de sinal
 // aqui — a recepção adiciona pagamento depois pela edição da reserva, se houver.
+//
+// Permissão: só `getSessionUser` (sem `requireAdmin`) — de propósito. Converter a fila é criar uma
+// reserva, e `POST /api/reservations` também é liberado para qualquer operador autenticado do
+// tenant; exigir admin aqui seria MAIS restritivo que lançar a reserva na mão, sem ganho de
+// segurança (o isolamento por tenant já está garantido). `requireAdmin` continua valendo para
+// exclusão/cadastros mestres, não para operação de recepção.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getSessionUser(req);
@@ -20,6 +32,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const { id } = await params;
     const tenantId = session.tenantId;
+    const body = await req.json().catch(() => ({} as any));
+    // "furar a fila": converter mesmo havendo entradas WAITING mais antigas para a mesma
+    // categoria/período. A recepção confirma no modal antes de reenviar com este flag.
+    const overrideQueue = body?.override === true;
 
     const outcome = await txWithRetry(async (tx) => {
       const entry = await tx.waitlistEntry.findFirst({
@@ -37,9 +53,42 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           adults: true,
           children: true,
           notifiedRoomId: true,
+          status: true,
+          createdAt: true,
         },
       });
       if (!entry) return { code: 404 as const, error: "Entrada não encontrada ou já encerrada." };
+
+      // Datas no passado: a entrada pode ter envelhecido na fila até a chegada pedida já ter
+      // passado. Não dá para criar uma reserva CONFIRMED no passado — a recepção edita o período
+      // da entrada antes de converter.
+      const pastErr = pastCheckInError(entry.checkInDate);
+      if (pastErr) {
+        return { code: 409 as const, error: `${pastErr} Edite o período da entrada antes de converter.` };
+      }
+
+      // Ordem da fila: uma entrada já NOTIFIED (a recepção/worker já a colocou na frente) passa
+      // direto; caso contrário, se há entradas WAITING mais antigas para a mesma categoria/período,
+      // a conversão só segue com o override explícito da recepção — e o "furo" fica registrado.
+      let jumpedQueue = false;
+      if (entry.status !== "NOTIFIED") {
+        const ahead = await countWaitlistAhead(tx, { ...entry, tenantId });
+        if (ahead.count > 0) {
+          if (!overrideQueue) {
+            return {
+              code: 409 as const,
+              needsQueueOverride: true as const,
+              aheadCount: ahead.count,
+              nextGuestName: ahead.nextGuestName,
+              error:
+                `Há ${ahead.count} hóspede(s) na frente na fila para ${entry.roomCategoryName} nesse período` +
+                (ahead.nextGuestName ? ` (o próximo é ${ahead.nextGuestName})` : "") +
+                `. Converta esse primeiro ou confirme para furar a fila.`,
+            };
+          }
+          jumpedQueue = true;
+        }
+      }
 
       const checkIn = waitlistCheckInAt(entry.checkInDate);
       const checkOut = waitlistCheckOutAt(entry.checkOutDate);
@@ -59,8 +108,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         ? [...rooms].sort((a, b) => (a.id === entry.notifiedRoomId ? -1 : b.id === entry.notifiedRoomId ? 1 : 0))
         : rooms;
 
+      // Quartos já prometidos (soft hold) a OUTRA entrada da fila avisada antes — não podem ser
+      // usados aqui, senão a conversão rouba o quarto de quem foi avisado primeiro. O soft hold da
+      // própria entrada não entra nessa lista (excludeWaitlistId) e continua sendo o preferido.
+      const heldByOthers = await roomIdsHeldByOtherWaitlist(tx, {
+        tenantId,
+        roomIds: rooms.map((r) => r.id),
+        checkIn: entry.checkInDate,
+        checkOut: entry.checkOutDate,
+        excludeWaitlistId: entry.id,
+      });
+
       let chosen: (typeof rooms)[number] | null = null;
       for (const room of ordered) {
+        if (heldByOthers.has(room.id)) continue;
         const [conflict, openStay] = await Promise.all([
           findConflictingReservation(tx, room.id, checkIn, checkOut),
           findBlockingOpenStay(tx, room.id, checkIn, checkOut),
@@ -74,15 +135,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         return { code: 409 as const, error: `Não há quarto livre da categoria ${entry.roomCategoryName} no período.` };
       }
 
-      // Tarifa pelo nº de adultos (Tariff não tem categoryId — mesma regra do sistema legado).
-      const tariff =
-        (await tx.tariff.findFirst({
-          where: { tenantId, active: true, adults: { gte: entry.adults } },
-          orderBy: { adults: "asc" },
-        })) ||
-        (await tx.tariff.findFirst({ where: { tenantId, active: true }, orderBy: { price: "asc" } }));
+      // Tarifa pela ocupação (adultos + crianças), igual ao check-in — Tariff.adults é a capacidade
+      // da tarifa. A menor tarifa que cobre a ocupação. NUNCA cair na "mais barata" quando nenhuma
+      // cobre: isso subfaturava (família grande pagando tarifa single). Sem tarifa que cubra → a
+      // recepção ajusta o cadastro de tarifas ou o nº de pessoas.
+      const occupants = entry.adults + entry.children;
+      const tariff = await tx.tariff.findFirst({
+        where: { tenantId, active: true, adults: { gte: occupants } },
+        orderBy: [{ adults: "asc" }, { price: "asc" }],
+      });
       if (!tariff) {
-        return { code: 409 as const, error: "Hotel sem tarifa cadastrada — cadastre uma tarifa antes de converter." };
+        const anyTariff = await tx.tariff.findFirst({ where: { tenantId, active: true }, select: { id: true } });
+        return {
+          code: 409 as const,
+          error: anyTariff
+            ? `Nenhuma tarifa cadastrada cobre ${occupants} hóspede(s). Cadastre uma tarifa adequada ou ajuste o número de pessoas da entrada antes de converter.`
+            : "Hotel sem tarifa cadastrada — cadastre uma tarifa antes de converter.",
+        };
       }
 
       // guestId revalidado contra o tenant.
@@ -137,11 +206,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       });
 
-      return { code: 200 as const, reservation, room: chosen.number };
+      return { code: 200 as const, reservation, room: chosen.number, jumpedQueue };
     });
 
     if (outcome.code !== 200) {
-      return NextResponse.json({ success: false, error: outcome.error }, { status: outcome.code });
+      return NextResponse.json(
+        {
+          success: false,
+          error: outcome.error,
+          ...("needsQueueOverride" in outcome
+            ? { needsQueueOverride: true, aheadCount: outcome.aheadCount, nextGuestName: outcome.nextGuestName }
+            : {}),
+        },
+        { status: outcome.code },
+      );
     }
 
     await prisma.humanEscalation.updateMany({
@@ -154,7 +232,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       userId: session.userId,
       userName: session.name,
       action: "WAITLIST_CONVERT",
-      description: `${session.name || "Usuário"} converteu uma entrada da fila de espera na reserva ${outcome.reservation.reservationNumber} (quarto ${outcome.room}).`,
+      description:
+        `${session.name || "Usuário"} converteu uma entrada da fila de espera na reserva ${outcome.reservation.reservationNumber} (quarto ${outcome.room}).` +
+        (outcome.jumpedQueue ? " [furou a fila — havia entradas mais antigas para a categoria/período]" : ""),
       entityType: "WAITLIST_ENTRY",
       entityId: id,
       terminal: getTerminalName(req),

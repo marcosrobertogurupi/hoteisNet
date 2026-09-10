@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
-import { waitlistCheckInAt, waitlistCheckOutAt } from "@/lib/waitlistMatch";
+import {
+  waitlistCheckInAt,
+  waitlistCheckOutAt,
+  sanitizeParty,
+  pastCheckInError,
+  partyOverCapacityError,
+} from "@/lib/waitlistMatch";
 
 // PATCH /api/waitlist/:id — edita datas / nº de pessoas / observações de uma entrada ainda WAITING.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -16,19 +22,46 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const body = await req.json();
     const { checkInDate, checkOutDate, adults, children, notes } = body;
 
+    // A entrada atual dá os valores efetivos para validar edições parciais (mudar só a chegada
+    // não pode gerar um período invertido com a saída que já estava salva, etc.).
+    const current = await prisma.waitlistEntry.findFirst({
+      where: { id, tenantId: session.tenantId, status: "WAITING" },
+      select: { checkInDate: true, checkOutDate: true, adults: true, children: true },
+    });
+    if (!current) {
+      return NextResponse.json({ success: false, error: "Entrada não encontrada ou não está mais na fila." }, { status: 404 });
+    }
+
     const data: Record<string, unknown> = {};
-    if (checkInDate) {
-      const d = waitlistCheckInAt(new Date(checkInDate));
-      if (isNaN(d.getTime())) return NextResponse.json({ success: false, error: "Data de chegada inválida." }, { status: 400 });
-      data.checkInDate = d;
+
+    const effectiveCheckIn = checkInDate ? waitlistCheckInAt(new Date(checkInDate)) : current.checkInDate;
+    const effectiveCheckOut = checkOutDate ? waitlistCheckOutAt(new Date(checkOutDate)) : current.checkOutDate;
+    if (isNaN(effectiveCheckIn.getTime()) || isNaN(effectiveCheckOut.getTime())) {
+      return NextResponse.json({ success: false, error: "Datas inválidas." }, { status: 400 });
     }
-    if (checkOutDate) {
-      const d = waitlistCheckOutAt(new Date(checkOutDate));
-      if (isNaN(d.getTime())) return NextResponse.json({ success: false, error: "Data de saída inválida." }, { status: 400 });
-      data.checkOutDate = d;
+    if (checkInDate || checkOutDate) {
+      if (effectiveCheckOut <= effectiveCheckIn) {
+        return NextResponse.json({ success: false, error: "A data de saída precisa ser depois da chegada." }, { status: 400 });
+      }
+      if (checkInDate) {
+        const pastErr = pastCheckInError(effectiveCheckIn);
+        if (pastErr) return NextResponse.json({ success: false, error: pastErr }, { status: 400 });
+      }
+      if (checkInDate) data.checkInDate = effectiveCheckIn;
+      if (checkOutDate) data.checkOutDate = effectiveCheckOut;
     }
-    if (adults !== undefined) data.adults = Number(adults) || 1;
-    if (children !== undefined) data.children = Number(children) || 0;
+
+    if (adults !== undefined || children !== undefined) {
+      const { adults: adultsN, children: childrenN } = sanitizeParty(
+        adults !== undefined ? adults : current.adults,
+        children !== undefined ? children : current.children,
+      );
+      const capacityErr = await partyOverCapacityError(prisma, session.tenantId, adultsN, childrenN);
+      if (capacityErr) return NextResponse.json({ success: false, error: capacityErr }, { status: 400 });
+      if (adults !== undefined) data.adults = adultsN;
+      if (children !== undefined) data.children = childrenN;
+    }
+
     if (notes !== undefined) data.notes = notes?.trim() || null;
 
     // Filtro de tenant DIRETO na escrita (CLAUDE.md, Segurança §3). Só entradas WAITING podem ser
