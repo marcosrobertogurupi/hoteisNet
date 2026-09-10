@@ -9,6 +9,7 @@ import { runOperationalAgent } from "./operationalAgent";
 import { runWaitlistAgent } from "./waitlistAgent";
 import { runSaasDunning } from "./saasDunning";
 import { runSaasMonitor } from "./saasMonitor";
+import { runNoShowSweep } from "./noShowSweep";
 
 console.log("[worker] Virada de diária — worker iniciado.");
 
@@ -68,5 +69,13 @@ cron.schedule("7 * * * *", () => {
 cron.schedule("12 * * * *", () => {
   runSaasMonitor().catch((err) => {
     console.error("[worker] Erro ao rodar monitor da plataforma:", err);
+  });
+});
+
+// Rotina de no-show — marca NO_SHOW as reservas cujo dia de chegada terminou sem check-in,
+// liberando o quarto. Determinística (sem LLM). 1x por hora é frequência de sobra.
+cron.schedule("17 * * * *", () => {
+  runNoShowSweep().catch((err) => {
+    console.error("[worker] Erro ao rodar rotina de no-show:", err);
   });
 });

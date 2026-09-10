@@ -253,7 +253,7 @@ export async function roomsStatusPayload(tenantId: string) {
   const todayArrivals = await prisma.reservation.findMany({
     where: {
       room: { tenantId },
-      status: { notIn: ["CANCELLED", "CHECKED_IN", "CHECKED_OUT"] },
+      status: { notIn: ["CANCELLED", "CHECKED_IN", "CHECKED_OUT", "NO_SHOW"] },
       checkInDate: { gte: dayStart, lt: dayEnd },
     },
     select: {

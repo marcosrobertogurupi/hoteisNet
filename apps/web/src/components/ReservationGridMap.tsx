@@ -49,7 +49,7 @@ export interface ReservationItem {
   dailyRate: number;
   depositPaid: number;
   totalAmount: number;
-  status: "CONFIRMED" | "PRE_RESERVATION" | "CHECKED_IN" | "CHECKED_OUT" | "CANCELLED";
+  status: "CONFIRMED" | "PRE_RESERVATION" | "CHECKED_IN" | "CHECKED_OUT" | "CANCELLED" | "NO_SHOW";
   company?: string;
   notes?: string;
   precheckinSent?: boolean;
@@ -840,7 +840,7 @@ export default function ReservationGridMap({
     for (const res of reservations) {
       if (res.id === excludeResId) continue;
       if (res.roomId !== targetRoomId && res.roomId !== roomDef?.number && res.roomId !== roomDef?.id) continue;
-      if (res.status === "CANCELLED" || res.status === "CHECKED_OUT") continue;
+      if (res.status === "CANCELLED" || res.status === "CHECKED_OUT" || res.status === "NO_SHOW") continue;
 
       const resInTime = res.checkInTime || defaultCheckInTime || "14:00";
       const resOutTime = res.checkOutTime || defaultCheckOutTime || "12:00";
@@ -1635,6 +1635,7 @@ export default function ReservationGridMap({
                   (r.roomId === room.id || r.roomId === room.number) &&
                   r.status !== "CANCELLED" &&
                   r.status !== "CHECKED_OUT" &&
+                  r.status !== "NO_SHOW" &&
                   !isReservationExpired(
                     {
                       checkInDate: r.checkInDate,
@@ -1765,8 +1766,8 @@ export default function ReservationGridMap({
                   {reservations
                     .filter((r) => {
                       if (r.roomId !== room.id && r.roomId !== room.number) return false;
-                      // Checkout já concluído: quarto liberado, não bloquear o mapa com hospedagem encerrada
-                      if (r.status === "CANCELLED" || r.status === "CHECKED_OUT") return false;
+                      // Checkout concluído / cancelada / no-show: quarto liberado, não bloqueia o mapa
+                      if (r.status === "CANCELLED" || r.status === "CHECKED_OUT" || r.status === "NO_SHOW") return false;
                       // Filtrar reservas expiradas por tolerância do assinante
                       if (isReservationExpired({
                         checkInDate: r.checkInDate,

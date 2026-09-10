@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { Prisma } from "@prisma/client";
+import { Prisma, type ReservationStatus } from "@prisma/client";
 
 // Aceita tanto o client Prisma completo quanto o client de dentro de uma `prisma.$transaction`
 // (que não expõe $connect/$disconnect/$transaction/$extends) — as duas formas são usadas nas
@@ -116,7 +116,7 @@ export async function busyRoomIdsForPeriod(
     tx.reservation.findMany({
       where: {
         roomId: { in: roomIds },
-        status: { in: ["PRE_RESERVATION", "CONFIRMED", "CHECKED_IN"] },
+        status: { in: ACTIVE_RESERVATION_STATUSES },
         checkInDate: { lt: checkOut },
         checkOutDate: { gt: checkIn },
       },
@@ -155,7 +155,12 @@ export async function lockRoomsForReservation(
   await tx.$queryRaw`SELECT id FROM rooms WHERE id IN (${Prisma.join(ids)}) ORDER BY id FOR UPDATE`;
 }
 
-// Verifica se existe alguma reserva ativa (não CANCELLED/CHECKED_OUT) sobrepondo o período
+// Status de reserva que ocupam o quarto no período (bloqueiam nova reserva / walk-in). Constante
+// ÚNICA para todos os módulos não divergirem: CANCELLED (cancelada), CHECKED_OUT (já saiu) e
+// NO_SHOW (não compareceu — o quarto foi liberado pela rotina de no-show) NÃO bloqueiam.
+export const ACTIVE_RESERVATION_STATUSES: ReservationStatus[] = ["PRE_RESERVATION", "CONFIRMED", "CHECKED_IN"];
+
+// Verifica se existe alguma reserva ativa (ver ACTIVE_RESERVATION_STATUSES) sobrepondo o período
 // informado para o quarto indicado. Usado tanto na criação individual quanto em lote, sempre
 // dentro da própria transação Prisma, para que a checagem de conflito seja atômica e não apenas
 // uma validação de UI — duas reservas do mesmo lote para o mesmo quarto também são pegas aqui,
@@ -171,7 +176,7 @@ export async function findConflictingReservation(
     where: {
       roomId,
       id: excludeReservationId ? { not: excludeReservationId } : undefined,
-      status: { notIn: ["CANCELLED", "CHECKED_OUT"] },
+      status: { in: ACTIVE_RESERVATION_STATUSES },
       checkInDate: { lt: checkOutDate },
       checkOutDate: { gt: checkInDate },
     },
