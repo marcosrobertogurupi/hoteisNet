@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
@@ -50,6 +50,13 @@ export async function POST(req: NextRequest) {
     const { operatorId: opId, operatorName: opName } = resolveOperator(session);
 
     const result = await txWithRetry(async (tx) => {
+      // Trava as DUAS hospedagens pelo resto da transação, em ordem de id (nunca forma deadlock
+      // cruzado com outra transferência) — mesmo lock que o check-out adquire. Sem isto, um
+      // check-out concorrente de qualquer uma das pontas pode commitar entre a leitura do
+      // `isClosed` abaixo e as escritas, anexando/removendo débito de uma hospedagem já fechada.
+      const lockIds = [fromStayCheckinId, toStayCheckinId].map(String).sort();
+      await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id IN (${Prisma.join(lockIds)}) ORDER BY id FOR UPDATE`;
+
       const [fromStay, toStay] = await Promise.all([
         tx.stayCheckin.findUnique({
           where: { id: fromStayCheckinId },
