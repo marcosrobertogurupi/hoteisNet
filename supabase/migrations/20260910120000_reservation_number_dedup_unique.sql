@@ -1,6 +1,6 @@
 -- Deduplicação do número de reserva histórico + índice único
 --
--- Complemento da migration 20260909170000 (sequência reservation_number_seq): o número passou a
+-- Complemento da migration 20260910110000 (sequência reservation_number_seq): o número passou a
 -- vir da sequência em toda criação nova, mas as reservas antigas geradas com
 -- `"RES-" + Math.random()` (500..9499) podem ter duplicatas. Este passo:
 --   1) renumera as duplicatas — mantém a mais antiga (menor createdAt, desempate por id) com o

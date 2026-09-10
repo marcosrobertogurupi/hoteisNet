@@ -7,12 +7,12 @@ import { Prisma, type ReservationStatus } from "@prisma/client";
 type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
 // Número da reserva (Reservation.reservationNumber) — vindo da sequência do banco
-// `reservation_number_seq` (migration 20260909170000), no lugar do antigo
+// `reservation_number_seq` (migration 20260910110000), no lugar do antigo
 // `"RES-" + Math.floor(500 + Math.random() * 9000)` que colidia num hotel movimentado.
 // Chamar SEMPRE dentro da mesma transação que cria a reserva.
 export async function nextReservationNumber(tx: PrismaClientOrTx): Promise<string> {
   // `to_regclass` devolve NULL em vez de dar erro quando a sequência ainda não existe (migration
-  // 20260909170000 não aplicada) — assim a query nunca aborta a transação. Nesse caso cai num
+  // 20260910110000 não aplicada) — assim a query nunca aborta a transação. Nesse caso cai num
   // fallback com timestamp base36 (colisão desprezível) para não quebrar a criação de reserva
   // antes do deploy da migration.
   const rows = await tx.$queryRaw<{ nextval: bigint | null }[]>`
