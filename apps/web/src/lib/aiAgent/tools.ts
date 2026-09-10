@@ -7,7 +7,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
-import { findConflictingReservation, findBlockingOpenStay, busyRoomIdsForPeriod, lockRoomsForReservation } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, busyRoomIdsForPeriod, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
 import { sendUazapiImage } from "@/lib/uazapi";
 import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
@@ -527,7 +527,7 @@ async function createReservationForAgent(
     const nights = Math.max(1, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / (24 * 60 * 60 * 1000)));
     const totalAmount = Number(tariff.price) * nights;
     const status = agentSetting?.autoConfirmReservations ? "CONFIRMED" : "PRE_RESERVATION";
-    const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+    const reservationNumber = await nextReservationNumber(tx);
 
     const created = await tx.reservation.create({
       data: {

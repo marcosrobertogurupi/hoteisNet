@@ -6,6 +6,25 @@ import { Prisma } from "@prisma/client";
 // chamadas destas funções.
 type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
+// Número da reserva (Reservation.reservationNumber) — vindo da sequência do banco
+// `reservation_number_seq` (migration 20260909170000), no lugar do antigo
+// `"RES-" + Math.floor(500 + Math.random() * 9000)` que colidia num hotel movimentado.
+// Chamar SEMPRE dentro da mesma transação que cria a reserva.
+export async function nextReservationNumber(tx: PrismaClientOrTx): Promise<string> {
+  // `to_regclass` devolve NULL em vez de dar erro quando a sequência ainda não existe (migration
+  // 20260909170000 não aplicada) — assim a query nunca aborta a transação. Nesse caso cai num
+  // fallback com timestamp base36 (colisão desprezível) para não quebrar a criação de reserva
+  // antes do deploy da migration.
+  const rows = await tx.$queryRaw<{ nextval: bigint | null }[]>`
+    SELECT CASE WHEN to_regclass('public.reservation_number_seq') IS NOT NULL
+                THEN nextval('public.reservation_number_seq')
+                ELSE NULL END AS nextval
+  `;
+  const n = rows?.[0]?.nextval;
+  if (n !== undefined && n !== null) return "RES-" + String(n);
+  return "RES-" + Date.now().toString(36).toUpperCase();
+}
+
 // Resolve o UUID real do quarto a partir de um id ou número; cria o quarto se não existir.
 export async function resolveRoomId(
   tx: PrismaClientOrTx,

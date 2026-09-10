@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
-import { findConflictingReservation, findBlockingOpenStay, lockRoomsForReservation } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
 import { waitlistCheckInAt, waitlistCheckOutAt } from "@/lib/waitlistMatch";
 
 // Toda Reservation vive sob este tenantId fixo por convenção histórica do projeto — o isolamento
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       const nights = Math.max(1, Math.round((checkOut.getTime() - checkIn.getTime()) / (24 * 60 * 60 * 1000)));
       const totalAmount = Number(tariff.price) * nights;
-      const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+      const reservationNumber = await nextReservationNumber(tx);
 
       const reservation = await tx.reservation.create({
         data: {

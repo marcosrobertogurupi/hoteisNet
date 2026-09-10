@@ -7,6 +7,7 @@ import {
   findConflictingReservation,
   findBlockingOpenStay,
   lockRoomsForReservation,
+  nextReservationNumber,
 } from "@/lib/reservationHelpers";
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
@@ -158,7 +159,7 @@ export async function POST(req: NextRequest) {
         realCashRegisterId = caixa.id;
       }
 
-      const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+      const reservationNumber = await nextReservationNumber(tx);
       const finalTotal = totalAmount || totalDiarias || 0;
 
       const reservation = await tx.reservation.create({

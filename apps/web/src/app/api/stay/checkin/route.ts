@@ -6,6 +6,7 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { sendUazapiText } from "@/lib/uazapi";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 import { processPaymentLine } from "@/lib/paymentProcessing";
+import { nextReservationNumber } from "@/lib/reservationHelpers";
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
@@ -549,7 +550,7 @@ export async function POST(req: NextRequest) {
               tariffId: tariffId || "TAR-001",
               tariffName: tariffName || "APTO ESPECIAL DUPLO",
               status: "CHECKED_IN",
-              reservationNumber: "RES-" + String(Math.floor(500 + Math.random() * 9000)),
+              reservationNumber: await nextReservationNumber(tx),
             },
           })
         ).id;

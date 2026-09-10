@@ -1,0 +1,14 @@
+-- Numeração de reservas — sequência do banco no lugar de "RES-" + Math.random() (500..9499)
+--
+-- Auditoria do processo de reserva/check-in/check-out (Fase 28 do PRD): o número da reserva era
+-- gerado com `"RES-" + Math.floor(500 + Math.random() * 9000)` em 5 lugares (POST /api/reservations,
+-- /batch, POST /api/stay/checkin, draft-reservation, waitlist/[id]/convert) — só ~9000 valores
+-- possíveis, sem verificação. Num hotel movimentado colisões são frequentes (paradoxo do
+-- aniversário: praticamente certas ao longo de meses), gerando dois "RES-1234" distintos e
+-- atendimento/busca ambíguos.
+--
+-- A sequência começa em 100000 para nunca colidir com os números aleatórios antigos (500..9499)
+-- já gravados. Não é criada constraint UNIQUE em reservations.reservationNumber porque os dados
+-- históricos podem já conter duplicatas (a de-duplicação e a constraint ficam como passo futuro);
+-- a sequência sozinha já garante que todo número NOVO é único e monotônico.
+CREATE SEQUENCE IF NOT EXISTS reservation_number_seq START WITH 100000 INCREMENT BY 1;

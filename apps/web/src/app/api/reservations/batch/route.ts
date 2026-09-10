@@ -8,6 +8,7 @@ import {
   findConflictingReservation,
   findBlockingOpenStay,
   lockRoomsForReservation,
+  nextReservationNumber,
 } from "@/lib/reservationHelpers";
 import { processReservationDeposit } from "@/lib/paymentProcessing";
 import { resolveOperator } from "@/lib/operator";
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest) {
           realGuestId = guest?.id || null;
         }
 
-        const reservationNumber = "RES-" + String(Math.floor(500 + Math.random() * 9000));
+        const reservationNumber = await nextReservationNumber(tx);
         const finalTotal = r.totalAmount ?? r.totalDiarias ?? 0;
 
         const reservation = await tx.reservation.create({
