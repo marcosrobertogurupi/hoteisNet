@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
@@ -802,10 +802,11 @@ export async function POST(req: NextRequest) {
       ipAddress: getClientIp(req),
     });
 
-    // Mensagem de boas-vindas via WhatsApp — dispara em segundo plano, sem bloquear a resposta
-    // do check-in nem falhar a operação caso o envio dê erro.
+    // Mensagem de boas-vindas via WhatsApp — dispara depois da resposta (after()), sem bloquear o
+    // check-in nem falhar a operação caso o envio dê erro. `after` garante que a função serverless
+    // não é congelada antes do envio terminar (um IIFE não-aguardado podia ser cortado no meio).
     if (result.guestPhone) {
-      (async () => {
+      after(async () => {
         try {
           const [waSettings, tenant] = await Promise.all([
             prisma.whatsappMessageSetting.findUnique({ where: { tenantId: result.tenantId } }),
@@ -825,7 +826,7 @@ export async function POST(req: NextRequest) {
         } catch (err) {
           console.error("[POST /api/stay/checkin] Falha ao enviar boas-vindas por WhatsApp:", err);
         }
-      })();
+      });
     }
 
     return NextResponse.json({ success: true, ...result });
@@ -1023,10 +1024,10 @@ export async function PATCH(req: NextRequest) {
       ipAddress: getClientIp(req),
     });
 
-    // Mensagem de checkout via WhatsApp — dispara em segundo plano, sem bloquear a resposta
-    // do checkout nem falhar a operação caso o envio dê erro.
+    // Mensagem de checkout via WhatsApp — dispara depois da resposta (after()), sem bloquear o
+    // checkout nem falhar a operação caso o envio dê erro.
     const tenantIdForWa = room?.tenantId || DEFAULT_TENANT_ID;
-    (async () => {
+    after(async () => {
       try {
         const [waSettings, tenant, guest] = await Promise.all([
           prisma.whatsappMessageSetting.findUnique({ where: { tenantId: tenantIdForWa } }),
@@ -1046,7 +1047,7 @@ export async function PATCH(req: NextRequest) {
       } catch (err) {
         console.error("[PATCH /api/stay/checkin] Falha ao enviar mensagem de checkout por WhatsApp:", err);
       }
-    })();
+    });
 
     return NextResponse.json({ success: true, stayCheckinId: stay.id });
   } catch (error: any) {

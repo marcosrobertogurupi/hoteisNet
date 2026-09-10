@@ -84,6 +84,15 @@ export async function PATCH(req: NextRequest) {
         select: { referenceDate: true, amount: true },
       });
       const byRef = new Map(currentCharges.map((c) => [c.referenceDate.getTime(), Number(c.amount)]));
+      // Toda referenceDate enviada precisa casar 1:1 com uma diária existente — senão o
+      // stayCharge.update dentro da transação aborta tudo com um 500 cru (P2025).
+      const semDiaria = resolvedRates.filter((d) => !byRef.has(new Date(d.referenceDate).getTime()));
+      if (semDiaria.length > 0) {
+        return NextResponse.json(
+          { success: false, error: "Uma ou mais diárias informadas não foram encontradas nesta hospedagem. Recarregue a tela e tente novamente." },
+          { status: 409 }
+        );
+      }
       let somaAntes = 0;
       let somaDepois = 0;
       for (const d of resolvedRates) {

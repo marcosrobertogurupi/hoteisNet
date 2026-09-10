@@ -25,33 +25,23 @@ export async function nextReservationNumber(tx: PrismaClientOrTx): Promise<strin
   return "RES-" + Date.now().toString(36).toUpperCase();
 }
 
-// Resolve o UUID real do quarto a partir de um id ou número; cria o quarto se não existir.
+// Resolve o UUID real do quarto a partir de um id ou número, restrito ao tenant.
+// NÃO cria mais o quarto quando não existe: as telas mandam um id/nº real escolhido de um seletor,
+// então "não achou" é sempre um erro (nº digitado errado, quarto de outro hotel) — criar um quarto
+// fantasma no cadastro do tenant só mascarava o bug.
 export async function resolveRoomId(
   tx: PrismaClientOrTx,
   roomIdOrNumber: string,
   tenantId: string
 ): Promise<string> {
-  // Sempre restrito ao tenant informado — sem isso, um número de quarto comum (ex: "101") podia
-  // resolver para o quarto de OUTRO hotel caso ele tivesse sido criado primeiro no banco, criando
-  // reservas/edições cruzadas entre tenants diferentes.
   const room = await tx.room.findFirst({
     where: { OR: [{ id: roomIdOrNumber }, { number: roomIdOrNumber }], tenantId },
+    select: { id: true },
   });
-  if (room) return room.id;
-
-  const category = await tx.roomCategory.findFirst({ where: { tenantId } });
-  const created = await tx.room.create({
-    data: {
-      number: String(roomIdOrNumber),
-      floor: "1",
-      status: "VACANT_CLEAN",
-      tenantId,
-      categoryId:
-        category?.id ||
-        (await tx.roomCategory.create({ data: { tenantId, name: "STANDARD", dailyPrice: 0, capacity: 2 } })).id,
-    },
-  });
-  return created.id;
+  if (!room) {
+    throw new Error(`Quarto "${roomIdOrNumber}" não encontrado neste estabelecimento.`);
+  }
+  return room.id;
 }
 
 // Data-limite EFETIVA de ocupação de uma hospedagem: o maior valor entre a saída prevista e
