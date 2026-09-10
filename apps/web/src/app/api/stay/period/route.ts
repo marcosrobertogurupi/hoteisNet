@@ -29,12 +29,14 @@ export async function PATCH(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { stayCheckinId, expectedCheckOut, ratePerNight, tariffName } = body as {
+    const { stayCheckinId, expectedCheckOut, ratePerNight, tariffId } = body as {
       stayCheckinId?: string;
       expectedCheckOut?: string;
       ratePerNight?: number;
+      tariffId?: string | null;
       tariffName?: string;
     };
+    let tariffName: string | undefined = body.tariffName;
 
     if (!stayCheckinId || !expectedCheckOut) {
       return NextResponse.json(
@@ -46,6 +48,24 @@ export async function PATCH(req: NextRequest) {
     const newExpectedCheckOut = new Date(expectedCheckOut);
     if (Number.isNaN(newExpectedCheckOut.getTime())) {
       return NextResponse.json({ success: false, error: "expectedCheckOut inválido." }, { status: 400 });
+    }
+
+    // tariffId (quando informado) precisa ser tarifa ATIVA do próprio tenant. Resolve nome canônico
+    // e preço de referência (base correta do controle de desconto abaixo).
+    let referencePrice: number | null = null;
+    if (tariffId) {
+      const tariff = await prisma.tariff.findFirst({
+        where: { id: String(tariffId), tenantId: session.tenantId, active: true },
+        select: { name: true, price: true },
+      });
+      if (!tariff) {
+        return NextResponse.json(
+          { success: false, error: "Tarifa selecionada não encontrada no cadastro do estabelecimento." },
+          { status: 400 }
+        );
+      }
+      tariffName = tariff.name;
+      referencePrice = Number(tariff.price);
     }
 
     // ── Controle de desconto (autoritativo no servidor) ────────────────────────────────────
@@ -66,7 +86,9 @@ export async function PATCH(req: NextRequest) {
         orderBy: { referenceDate: "desc" },
         select: { amount: true },
       });
-      const antes = Number(currentCharge?.amount ?? 0);
+      // Base do desconto: preço da tarifa cadastrada quando o modal manda tariffId; senão a diária
+      // corrente lançada (fallback para o modal ainda em lista mock).
+      const antes = referencePrice ?? Number(currentCharge?.amount ?? 0);
       const reducaoPercent = antes > 0 ? ((antes - Number(ratePerNight)) / antes) * 100 : 0;
       if (reducaoPercent > 0.001) {
         const tenantForDiscount = await prisma.tenant.findUnique({

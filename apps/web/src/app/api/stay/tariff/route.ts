@@ -21,7 +21,7 @@ export async function PATCH(req: NextRequest) {
     const body = await req.json();
     const { stayCheckinId, dailyRates } = body as {
       stayCheckinId?: string;
-      dailyRates?: { referenceDate: string; tariffName: string; rateValue: number }[];
+      dailyRates?: { referenceDate: string; tariffName: string; tariffId?: string | null; rateValue: number }[];
     };
 
     if (!stayCheckinId || !Array.isArray(dailyRates) || dailyRates.length === 0) {
@@ -40,6 +40,30 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
+    // tariffId (quando o modal já manda) precisa ser uma tarifa ATIVA do próprio tenant — nunca um
+    // id/nome livre. Resolve o nome canônico e o preço de referência (para o controle de desconto).
+    const tariffIds = [...new Set(dailyRates.map((d) => d.tariffId).filter((x): x is string => !!x))];
+    const tariffsById = new Map<string, { name: string; price: number }>();
+    if (tariffIds.length > 0) {
+      const found = await prisma.tariff.findMany({
+        where: { id: { in: tariffIds }, tenantId: session.tenantId, active: true },
+        select: { id: true, name: true, price: true },
+      });
+      for (const t of found) tariffsById.set(t.id, { name: t.name, price: Number(t.price) });
+      const missing = tariffIds.filter((id) => !tariffsById.has(id));
+      if (missing.length > 0) {
+        return NextResponse.json(
+          { success: false, error: "Tarifa selecionada não encontrada no cadastro do estabelecimento." },
+          { status: 400 }
+        );
+      }
+    }
+    // Nome canônico da tarifa cadastrada substitui a string livre do body.
+    const resolvedRates = dailyRates.map((d) => {
+      const t = d.tariffId ? tariffsById.get(d.tariffId) : undefined;
+      return { ...d, tariffName: t ? t.name : d.tariffName, referencePrice: t ? t.price : null as number | null };
+    });
+
     // ── Controle de desconto (autoritativo no servidor) ────────────────────────────────────
     // Baixar a tarifa de uma diária já lançada é um desconto implícito: sem esta trava, um
     // operador zerava todas as diárias (R$ 0,01) e escapava do Tenant.maxDiscountPercent, que só
@@ -54,7 +78,7 @@ export async function PATCH(req: NextRequest) {
       if (!staySc) {
         return NextResponse.json({ success: false, error: `Hospedagem ${stayCheckinId} não encontrada.` }, { status: 404 });
       }
-      const refs = dailyRates.map((d) => new Date(d.referenceDate));
+      const refs = resolvedRates.map((d) => new Date(d.referenceDate));
       const currentCharges = await prisma.stayCharge.findMany({
         where: { stayCheckinId, referenceDate: { in: refs } },
         select: { referenceDate: true, amount: true },
@@ -62,10 +86,12 @@ export async function PATCH(req: NextRequest) {
       const byRef = new Map(currentCharges.map((c) => [c.referenceDate.getTime(), Number(c.amount)]));
       let somaAntes = 0;
       let somaDepois = 0;
-      for (const d of dailyRates) {
-        const old = byRef.get(new Date(d.referenceDate).getTime());
-        if (old === undefined) continue;
-        somaAntes += old;
+      for (const d of resolvedRates) {
+        // Base do desconto: o preço da tarifa CADASTRADA quando o modal manda tariffId (referência
+        // correta); senão a diária que estava lançada (fallback para o modal ainda em lista mock).
+        const base = d.referencePrice ?? byRef.get(new Date(d.referenceDate).getTime());
+        if (base === undefined || base === null) continue;
+        somaAntes += base;
         somaDepois += Number(d.rateValue);
       }
       const reducaoPercent = somaAntes > 0 ? ((somaAntes - somaDepois) / somaAntes) * 100 : 0;
@@ -97,7 +123,7 @@ export async function PATCH(req: NextRequest) {
       }
 
       let totalDelta = 0;
-      for (const item of dailyRates) {
+      for (const item of resolvedRates) {
         const ref = new Date(item.referenceDate);
         const before = await tx.stayCharge.findUnique({
           where: { stayCheckinId_referenceDate: { stayCheckinId, referenceDate: ref } },

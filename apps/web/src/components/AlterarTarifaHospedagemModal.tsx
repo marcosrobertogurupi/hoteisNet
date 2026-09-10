@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { X, Eye, Printer, Filter, Search, ChevronDown, Check } from "lucide-react";
-import { INITIAL_TARIFFS, TariffItem } from "./CadastroTarifasModal";
+import { TariffItem } from "./CadastroTarifasModal";
 import { useToast } from "@/context/ToastContext";
 import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
 
@@ -18,6 +18,7 @@ function parseBRDate(dateStr: string): Date | null {
 export interface DailyRateItem {
   id: string;
   tariffName: string;
+  tariffId?: string | null; // id da tarifa cadastrada aplicada nesta diária (quando veio do seletor)
   startDate: string; // DD/MM/YYYY
   endDate: string;   // DD/MM/YYYY
   rateValue: number;
@@ -62,16 +63,42 @@ export default function AlterarTarifaHospedagemModal({
 }: AlterarTarifaHospedagemModalProps) {
   const toast = useToast();
 
-  // State for available subscriber tariffs
-  const [tariffs] = useState<TariffItem[]>(INITIAL_TARIFFS);
-  
-  // Selected tariff in dropdown
-  const [selectedTariff, setSelectedTariff] = useState<TariffItem>(
-    INITIAL_TARIFFS.find((t) => t.name.includes("ESPECIAL INDIVIDUAL")) || INITIAL_TARIFFS[2]
-  );
+  // Tarifas do cadastro do assinante (Central de Cadastros → Tarifas) — nunca a lista mock.
+  // Enquanto carrega, começa vazia; o operador não deve escolher de uma lista inventada.
+  const [tariffs, setTariffs] = useState<TariffItem[]>([]);
+  const [selectedTariff, setSelectedTariff] = useState<TariffItem | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [customDailyValue, setCustomDailyValue] = useState<number>(selectedTariff.price);
+  const [customDailyValue, setCustomDailyValue] = useState<number>(0);
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/reservations/tariffs");
+        const data = await res.json();
+        if (cancelled) return;
+        const list: TariffItem[] = (data.tariffs || []).map((t: any) => ({
+          id: String(t.id),
+          name: String(t.name),
+          adults: Number(t.adults) || 1,
+          price: Number(t.price) || 0,
+        }));
+        setTariffs(list);
+        // Pré-seleciona a tarifa que casa com a diária corrente da hospedagem (por nome), senão a 1ª.
+        const currentName = stayData.dailyRates?.[stayData.dailyRates.length - 1]?.tariffName;
+        const match = list.find((t) => t.name === currentName) || list[0] || null;
+        setSelectedTariff(match);
+        if (match) setCustomDailyValue(match.price);
+      } catch {
+        if (!cancelled) toast.error("Não foi possível carregar as tarifas cadastradas.", "Erro");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, stayData.dailyRates, toast]);
 
   // Autorização de administrador para redução de tarifa acima do limite (Tenant.maxDiscountPercent).
   // O servidor (/api/stay/tariff) é a autoridade: se recusar com precisaAutorizacao, abrimos este
@@ -112,7 +139,7 @@ export default function AlterarTarifaHospedagemModal({
 
   // Keep custom daily value updated when tariff selection changes
   useEffect(() => {
-    setCustomDailyValue(selectedTariff.price);
+    if (selectedTariff) setCustomDailyValue(selectedTariff.price);
   }, [selectedTariff]);
 
   // Recalculate financial totals dynamically
@@ -131,19 +158,30 @@ export default function AlterarTarifaHospedagemModal({
 
   if (!isOpen) return null;
 
+  const applyTariffToRow = (item: DailyRateItem): DailyRateItem => ({
+    ...item,
+    tariffName: selectedTariff ? selectedTariff.name : item.tariffName,
+    tariffId: selectedTariff ? selectedTariff.id : item.tariffId ?? null,
+    rateValue: customDailyValue,
+  });
+
+  const requireTariffSelected = (): boolean => {
+    if (!selectedTariff) {
+      toast.warning("Selecione uma tarifa cadastrada antes de aplicar.");
+      return false;
+    }
+    return true;
+  };
+
   // Apply Action 1: Apply to ALL days in stay
   const handleApplyToAll = () => {
-    setDailyRates((prev) =>
-      prev.map((item) => ({
-        ...item,
-        tariffName: selectedTariff.name,
-        rateValue: customDailyValue,
-      }))
-    );
+    if (!requireTariffSelected()) return;
+    setDailyRates((prev) => prev.map(applyTariffToRow));
   };
 
   // Apply Action 2: Apply from TODAY onwards (diária corrente e subsequentes)
   const handleApplyFromToday = () => {
+    if (!requireTariffSelected()) return;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -151,20 +189,14 @@ export default function AlterarTarifaHospedagemModal({
       prev.map((item) => {
         const itemStart = parseBRDate(item.startDate);
         // Somente diárias de hoje em diante recebem a nova tarifa
-        if (itemStart && itemStart >= today) {
-          return {
-            ...item,
-            tariffName: selectedTariff.name,
-            rateValue: customDailyValue,
-          };
-        }
-        return item;
+        return itemStart && itemStart >= today ? applyTariffToRow(item) : item;
       })
     );
   };
 
   // Apply Action 3: Apply ONLY to selected rows in table
   const handleApplyToSelected = () => {
+    if (!requireTariffSelected()) return;
     const hasSelected = dailyRates.some((item) => item.selected);
     if (!hasSelected) {
       toast.warning("Selecione ao menos uma diária na tabela abaixo para aplicar a nova tarifa.");
@@ -172,11 +204,7 @@ export default function AlterarTarifaHospedagemModal({
     }
 
     setDailyRates((prev) =>
-      prev.map((item) =>
-        item.selected
-          ? { ...item, tariffName: selectedTariff.name, rateValue: customDailyValue, selected: false }
-          : item
-      )
+      prev.map((item) => (item.selected ? { ...applyTariffToRow(item), selected: false } : item))
     );
   };
 
@@ -208,6 +236,7 @@ export default function AlterarTarifaHospedagemModal({
           dailyRates: dailyRates.map((item) => ({
             referenceDate: item.referenceDate,
             tariffName: item.tariffName,
+            tariffId: item.tariffId ?? null,
             rateValue: item.rateValue,
           })),
           adminEmail: credentials?.email,
@@ -453,7 +482,11 @@ export default function AlterarTarifaHospedagemModal({
                   className="w-full bg-[#ffffa0] border border-slate-400 px-2 py-1 text-slate-900 font-bold flex items-center justify-between cursor-pointer select-none text-xs"
                 >
                   <span className="truncate">
-                    {selectedTariff.name} • {selectedTariff.adults} {selectedTariff.adults === 1 ? "Adulto" : "Adultos"} • R$ {selectedTariff.price.toFixed(2)}
+                    {selectedTariff
+                      ? `${selectedTariff.name} • ${selectedTariff.adults} ${selectedTariff.adults === 1 ? "Adulto" : "Adultos"} • R$ ${selectedTariff.price.toFixed(2)}`
+                      : tariffs.length === 0
+                        ? "Nenhuma tarifa cadastrada — cadastre em Central de Cadastros → Tarifas"
+                        : "Selecione uma tarifa…"}
                   </span>
                   <div className="w-4 h-4 bg-[#00b4d8] text-white flex items-center justify-center ml-1 shrink-0">
                     <ChevronDown className="w-3 h-3" />
@@ -480,7 +513,7 @@ export default function AlterarTarifaHospedagemModal({
                               setIsDropdownOpen(false);
                             }}
                             className={`cursor-pointer hover:bg-sky-600 hover:text-white transition-colors ${
-                              selectedTariff.id === t.id ? "bg-sky-500 text-white font-bold" : "text-slate-900"
+                              selectedTariff?.id === t.id ? "bg-sky-500 text-white font-bold" : "text-slate-900"
                             }`}
                           >
                             <td className="py-1 px-2 border-r border-slate-300 truncate font-sans uppercase">
