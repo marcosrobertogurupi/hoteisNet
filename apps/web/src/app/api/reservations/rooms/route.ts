@@ -74,6 +74,10 @@ async function resolveCategoryId(tenantId: string, categoryName: string): Promis
   return created.id;
 }
 
+// Valores aceitos do enum RoomStatus (schema.prisma) — nunca deixar passar uma string arbitrária
+// para a coluna status.
+const ROOM_STATUS_VALUES = new Set(["VACANT_CLEAN", "VACANT_DIRTY", "OCCUPIED", "MAINTENANCE"]);
+
 function mapStatusToDb(status?: string): string | undefined {
   if (!status) return undefined;
   const map: Record<string, string> = {
@@ -82,7 +86,8 @@ function mapStatusToDb(status?: string): string | undefined {
     LIMPEZA: "VACANT_DIRTY",
     MANUTENCAO: "MAINTENANCE",
   };
-  return map[status] || status;
+  const mapped = map[status] || status;
+  return ROOM_STATUS_VALUES.has(mapped) ? mapped : undefined;
 }
 
 // GET /api/reservations/rooms — lista todos os quartos com categoria do tenant da sessão
@@ -210,8 +215,29 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: "ID ou número do quarto é obrigatório." }, { status: 400 });
     }
 
+    // Só status/observação são de operação diária (Mapa de Quartos, recepção). Alterar dados de
+    // cadastro do apartamento (número, ativo/inativo, categoria, andar/bloco, camas, características,
+    // fotos) é ação de cadastro mestre — exige administrador (CLAUDE.md § Segurança).
+    const cadastroFieldsTouched =
+      active !== undefined ||
+      numero !== undefined ||
+      andar !== undefined ||
+      bloco !== undefined ||
+      camasCasal !== undefined ||
+      camasSolteiro !== undefined ||
+      caracteristicas !== undefined ||
+      photos !== undefined ||
+      categoria !== undefined;
+    if (cadastroFieldsTouched) {
+      const adminError = requireAdmin(session);
+      if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    }
+
     const data: Record<string, unknown> = {};
     const mappedStatus = mapStatusToDb(status);
+    if (status !== undefined && status !== null && status !== "" && !mappedStatus) {
+      return NextResponse.json({ success: false, error: `Status de quarto inválido: ${status}` }, { status: 400 });
+    }
     if (mappedStatus) data.status = mappedStatus;
     if (notes !== undefined) data.notes = notes;
     else if (observacao !== undefined) data.notes = observacao;
