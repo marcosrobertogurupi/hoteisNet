@@ -6,6 +6,7 @@ import {
   waitlistCheckInAt,
   waitlistCheckOutAt,
   findWaitlistVacancy,
+  findActiveDuplicateEntry,
   sanitizeParty,
   pastCheckInError,
   partyOverCapacityError,
@@ -141,6 +142,28 @@ export async function POST(req: NextRequest) {
     const capacityErr = await partyOverCapacityError(prisma, session.tenantId, adultsN, childrenN);
     if (capacityErr) {
       return NextResponse.json({ success: false, error: capacityErr }, { status: 400 });
+    }
+
+    // Deduplicação: a mesma pessoa (CPF / telefone / e-mail) já na fila para essa categoria e
+    // período sobreposto não entra de novo — a recepção edita a entrada existente. "Adicionar
+    // mesmo assim" (force) libera, para o caso raro de dois hóspedes homônimos sem CPF.
+    if (!force) {
+      const dup = await findActiveDuplicateEntry(prisma, {
+        tenantId: session.tenantId,
+        roomCategoryId: category.id,
+        checkIn,
+        checkOut,
+        guestCpf,
+        guestPhone,
+        guestEmail,
+      });
+      if (dup) {
+        return NextResponse.json({
+          success: false,
+          duplicate: true,
+          error: `${dup.guestName} já está na fila para ${category.name} nesse período (desde ${dup.createdAt.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}). Edite a entrada existente ou confirme para adicionar mesmo assim.`,
+        });
+      }
     }
 
     // A fila de espera só faz sentido quando NÃO há vaga. Se já existe um quarto livre da categoria

@@ -168,6 +168,36 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       whatsappSent = await sendUazapiText(entry.guestPhone, message, session.tenantId);
     }
 
+    // Nenhum canal funcionou → o hóspede NÃO foi avisado. Desfaz o NOTIFIED (libera o soft-hold do
+    // quarto e devolve a entrada para a fila) para a recepção não achar que está aguardando
+    // resposta de quem nunca recebeu nada. Só reverte se a entrada ainda estiver NOTIFIED (uma
+    // conversão concorrente já a teria encerrado).
+    if (!emailSent && !whatsappSent) {
+      await prisma.waitlistEntry.updateMany({
+        where: { id: entry.id, tenantId: session.tenantId, status: "NOTIFIED" },
+        data: { status: "WAITING", notifiedAt: null, notifiedRoomId: null },
+      });
+      await logActivity({
+        tenantId: session.tenantId,
+        userId: session.userId,
+        userName: session.name,
+        action: "WAITLIST_NOTIFY_MANUAL",
+        description: `${session.name || "Usuário"} tentou avisar ${entry.guestName} sobre vaga na fila (${entry.roomCategoryName}), mas nenhum canal (e-mail/WhatsApp) funcionou — entrada devolvida à fila.`,
+        entityType: "WAITLIST_ENTRY",
+        entityId: entry.id,
+        terminal: getTerminalName(req),
+        ipAddress: getClientIp(req),
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Não foi possível enviar o aviso — o e-mail e/ou o WhatsApp falharam. A entrada continua na fila. Verifique as configurações de e-mail/WhatsApp do hotel ou entre em contato com o hóspede manualmente.",
+        },
+        { status: 502 },
+      );
+    }
+
     await logActivity({
       tenantId: session.tenantId,
       userId: session.userId,
@@ -190,10 +220,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       success: true,
       emailSent,
       whatsappSent,
-      message:
-        channels.length > 0
-          ? `Hóspede avisado por ${channels.join(" e ")}.`
-          : "Entrada marcada como avisada, mas o aviso não pôde ser enviado — entre em contato manualmente.",
+      message: `Hóspede avisado por ${channels.join(" e ")}.`,
     });
   } catch (error: any) {
     console.error("[POST /api/waitlist/:id/notify] Erro:", error);

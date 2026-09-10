@@ -427,7 +427,8 @@ function AddToWaitlistModal({
       });
       const data = await res.json();
       if (data.success) onSaved();
-      else if (data.hasVacancy) setVacancyWarning(data.error || "Há quarto livre nesse período.");
+      else if (data.hasVacancy || data.duplicate)
+        setVacancyWarning(data.error || (data.duplicate ? "Este hóspede já está na fila." : "Há quarto livre nesse período."));
       else setError(data.error || "Erro ao adicionar à fila.");
     } catch {
       setError("Erro de conexão.");

@@ -35,6 +35,51 @@ export function sanitizeParty(adults: unknown, children: unknown): { adults: num
   };
 }
 
+// Procura uma entrada ATIVA (WAITING/NOTIFIED) que seja "a mesma pessoa" já na fila para a mesma
+// categoria e um período sobreposto — mesmo CPF, ou mesmo telefone (só dígitos), ou mesmo e-mail.
+// Evita que a recepção (ou uma dupla submissão) crie a mesma pessoa duas vezes na fila, o que
+// inflava a fila e faria o worker avisar o hóspede em duplicidade. Retorna a entrada encontrada
+// ou null. Compara em memória (a fila é pequena) porque o telefone é gravado formatado.
+export async function findActiveDuplicateEntry(
+  tx: PrismaClientOrTx,
+  params: {
+    tenantId: string;
+    roomCategoryId: string;
+    checkIn: Date;
+    checkOut: Date;
+    guestCpf?: string | null;
+    guestPhone?: string | null;
+    guestEmail?: string | null;
+  }
+): Promise<{ id: string; guestName: string; createdAt: Date } | null> {
+  const cpf = params.guestCpf?.replace(/\D/g, "") || null;
+  const phone = params.guestPhone?.replace(/\D/g, "") || null;
+  const email = params.guestEmail?.trim().toLowerCase() || null;
+  if (!cpf && !(phone && phone.length >= 10) && !email) return null;
+
+  const checkIn = waitlistCheckInAt(params.checkIn);
+  const checkOut = waitlistCheckOutAt(params.checkOut);
+  const candidates = await tx.waitlistEntry.findMany({
+    where: {
+      tenantId: params.tenantId,
+      roomCategoryId: params.roomCategoryId,
+      status: { in: ["WAITING", "NOTIFIED"] },
+      checkInDate: { lt: checkOut },
+      checkOutDate: { gt: checkIn },
+    },
+    select: { id: true, guestName: true, createdAt: true, guestCpf: true, guestPhone: true, guestEmail: true },
+    take: 100,
+  });
+
+  const dup = candidates.find(
+    (c) =>
+      (cpf && c.guestCpf?.replace(/\D/g, "") === cpf) ||
+      (phone && phone.length >= 10 && c.guestPhone?.replace(/\D/g, "") === phone) ||
+      (email && c.guestEmail?.trim().toLowerCase() === email)
+  );
+  return dup ? { id: dup.id, guestName: dup.guestName, createdAt: dup.createdAt } : null;
+}
+
 // A data de chegada não pode estar no passado — ancorada em Brasília, porque em produção o "hoje"
 // do processo roda em UTC (3h à frente da meia-noite BRT). Retorna a mensagem de erro, ou null.
 export function pastCheckInError(checkIn: Date): string | null {

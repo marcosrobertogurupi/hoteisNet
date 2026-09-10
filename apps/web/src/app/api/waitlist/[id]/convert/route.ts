@@ -18,8 +18,14 @@ const RESERVATION_TENANT_ID = "TNT-01";
 
 // POST /api/waitlist/:id/convert — cria a reserva a partir de uma entrada da fila (WAITING ou
 // NOTIFIED) e encerra a entrada como CONVERTED. Escolhe um quarto da categoria livre no período
-// (a mesma régua de prioridade da reserva) e a tarifa pelo nº de adultos. Sem lançamento de sinal
+// (a mesma régua de prioridade da reserva) e a tarifa pelo nº de hóspedes. Sem lançamento de sinal
 // aqui — a recepção adiciona pagamento depois pela edição da reserva, se houver.
+//
+// Permissão: só `getSessionUser` (sem `requireAdmin`) — de propósito. Converter a fila é criar uma
+// reserva, e `POST /api/reservations` também é liberado para qualquer operador autenticado do
+// tenant; exigir admin aqui seria MAIS restritivo que lançar a reserva na mão, sem ganho de
+// segurança (o isolamento por tenant já está garantido). `requireAdmin` continua valendo para
+// exclusão/cadastros mestres, não para operação de recepção.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getSessionUser(req);
