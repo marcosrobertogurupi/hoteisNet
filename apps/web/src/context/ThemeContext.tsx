@@ -4,6 +4,24 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 
 export type ThemeId = "dark" | "light-white" | "light-blue";
 
+// Chaves de localStorage usadas por versões anteriores para guardar credenciais em texto puro.
+// Nunca voltar a gravar nada aqui: são apagadas na primeira carga de cada navegador.
+const LEGACY_SECRET_KEYS = [
+  "hoteisnet_email_host",
+  "hoteisnet_email_port",
+  "hoteisnet_email_secure",
+  "hoteisnet_email_user",
+  "hoteisnet_email_pass",
+  "hoteisnet_email_from_name",
+  "hoteisnet_email_from_address",
+  "hoteisnet_email_footer",
+  "hoteisnet_email_opt_voucher",
+  "hoteisnet_email_opt_receipt",
+  "hoteisnet_email_opt_payment",
+  "hoteisnet_uazapi_server",
+  "hoteisnet_uazapi_token",
+];
+
 export interface ThemeConfig {
   id: ThemeId;
   name: string;
@@ -100,10 +118,6 @@ export interface ThemeContextType {
   earlyArrivalDefaultCharge: string;
   overnightArrivalDefaultCharge: string;
   earlyCheckinFixedFeeAmount: number;
-  uazapiServerUrl: string;
-  setUazapiServerUrl: (url: string) => void;
-  uazapiInstanceToken: string;
-  setUazapiInstanceToken: (token: string) => void;
   whatsappSoundEnabled: boolean;
   setWhatsappSoundEnabled: (val: boolean) => void;
   humanInterventionSoundEnabled: boolean;
@@ -111,29 +125,6 @@ export interface ThemeContextType {
   reservationToleranceHours: number;
   setReservationToleranceHours: (hours: number) => void;
 
-  // Envio de E-mail / SMTP
-  emailSmtpHost: string;
-  setEmailSmtpHost: (host: string) => void;
-  emailSmtpPort: number;
-  setEmailSmtpPort: (port: number) => void;
-  emailSmtpSecure: string; // "tls" | "ssl" | "none"
-  setEmailSmtpSecure: (sec: string) => void;
-  emailSmtpUser: string;
-  setEmailSmtpUser: (user: string) => void;
-  emailSmtpPass: string;
-  setEmailSmtpPass: (pass: string) => void;
-  emailFromName: string;
-  setEmailFromName: (name: string) => void;
-  emailFromAddress: string;
-  setEmailFromAddress: (email: string) => void;
-  emailFooterText: string;
-  setEmailFooterText: (text: string) => void;
-  sendVoucherEmailEnabled: boolean;
-  setSendVoucherEmailEnabled: (val: boolean) => void;
-  sendReceiptEmailEnabled: boolean;
-  setSendReceiptEmailEnabled: (val: boolean) => void;
-  sendPaymentConfirmEmailEnabled: boolean;
-  setSendPaymentConfirmEmailEnabled: (val: boolean) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -151,9 +142,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [overnightArrivalDefaultCharge, setOvernightArrivalDefaultChargeState] = useState<string>("EXTRA_NIGHT");
   const [earlyCheckinFixedFeeAmount, setEarlyCheckinFixedFeeAmountState] = useState<number>(0);
 
-  // Uazapi Integration default values (Subscriber settings, customizable per tenant)
-  const [uazapiServerUrl, setUazapiServerUrlState] = useState<string>("https://netservice.uazapi.com");
-  const [uazapiInstanceToken, setUazapiInstanceTokenState] = useState<string>("fbe5bfbb-226a-47a2-9d1d-6b657933318c");
   const [whatsappSoundEnabled, setWhatsappSoundEnabledState] = useState<boolean>(true);
   const [humanInterventionSoundEnabled, setHumanInterventionSoundEnabledState] = useState<boolean>(true);
 
@@ -161,17 +149,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [reservationToleranceHours, setReservationToleranceHoursState] = useState<number>(24);
 
   // Parâmetros de E-mail / SMTP do Assinante
-  const [emailSmtpHost, setEmailSmtpHostState] = useState<string>("smtp.gmail.com");
-  const [emailSmtpPort, setEmailSmtpPortState] = useState<number>(587);
-  const [emailSmtpSecure, setEmailSmtpSecureState] = useState<string>("tls");
-  const [emailSmtpUser, setEmailSmtpUserState] = useState<string>("");
-  const [emailSmtpPass, setEmailSmtpPassState] = useState<string>("");
-  const [emailFromName, setEmailFromNameState] = useState<string>("Pousada Sol & Mar - Reservas");
-  const [emailFromAddress, setEmailFromAddressState] = useState<string>("reserva@pousada.com.br");
-  const [emailFooterText, setEmailFooterTextState] = useState<string>("Obrigado por escolher a Pousada Sol & Mar! Em caso de dúvidas, entre em contato com nossa equipe.");
-  const [sendVoucherEmailEnabled, setSendVoucherEmailEnabledState] = useState<boolean>(true);
-  const [sendReceiptEmailEnabled, setSendReceiptEmailEnabledState] = useState<boolean>(true);
-  const [sendPaymentConfirmEmailEnabled, setSendPaymentConfirmEmailEnabledState] = useState<boolean>(true);
 
   // Load from localStorage on mount & sync HTML data-theme
   useEffect(() => {
@@ -205,12 +182,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       const savedCheckOut = localStorage.getItem("hoteisnet_checkout_time");
       if (savedCheckOut) setDefaultCheckOutTimeState(savedCheckOut);
 
-      const savedUazapiServer = localStorage.getItem("hoteisnet_uazapi_server");
-      if (savedUazapiServer) setUazapiServerUrlState(savedUazapiServer);
-
-      const savedUazapiToken = localStorage.getItem("hoteisnet_uazapi_token");
-      if (savedUazapiToken) setUazapiInstanceTokenState(savedUazapiToken);
-
       const savedWaSound = localStorage.getItem("hoteisnet_wa_sound_enabled");
       if (savedWaSound !== null) setWhatsappSoundEnabledState(savedWaSound === "true");
 
@@ -220,39 +191,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       const savedTolerance = localStorage.getItem("hoteisnet_reservation_tolerance");
       if (savedTolerance) setReservationToleranceHoursState(Number(savedTolerance));
 
-      // Configurações de E-mail
-      const savedHost = localStorage.getItem("hoteisnet_email_host");
-      if (savedHost) setEmailSmtpHostState(savedHost);
-
-      const savedPort = localStorage.getItem("hoteisnet_email_port");
-      if (savedPort) setEmailSmtpPortState(Number(savedPort));
-
-      const savedSecure = localStorage.getItem("hoteisnet_email_secure");
-      if (savedSecure) setEmailSmtpSecureState(savedSecure);
-
-      const savedUser = localStorage.getItem("hoteisnet_email_user");
-      if (savedUser) setEmailSmtpUserState(savedUser);
-
-      const savedPass = localStorage.getItem("hoteisnet_email_pass");
-      if (savedPass) setEmailSmtpPassState(savedPass);
-
-      const savedFromName = localStorage.getItem("hoteisnet_email_from_name");
-      if (savedFromName) setEmailFromNameState(savedFromName);
-
-      const savedFromAddress = localStorage.getItem("hoteisnet_email_from_address");
-      if (savedFromAddress) setEmailFromAddressState(savedFromAddress);
-
-      const savedFooter = localStorage.getItem("hoteisnet_email_footer");
-      if (savedFooter) setEmailFooterTextState(savedFooter);
-
-      const savedVoucherOpt = localStorage.getItem("hoteisnet_email_opt_voucher");
-      if (savedVoucherOpt !== null) setSendVoucherEmailEnabledState(savedVoucherOpt === "true");
-
-      const savedReceiptOpt = localStorage.getItem("hoteisnet_email_opt_receipt");
-      if (savedReceiptOpt !== null) setSendReceiptEmailEnabledState(savedReceiptOpt === "true");
-
-      const savedPayOpt = localStorage.getItem("hoteisnet_email_opt_payment");
-      if (savedPayOpt !== null) setSendPaymentConfirmEmailEnabledState(savedPayOpt === "true");
+      // Limpeza única das versões anteriores: a senha do e-mail do hotel e o token da instância
+      // de WhatsApp chegaram a ser gravados aqui em texto puro, legíveis por qualquer DevTools,
+      // extensão do navegador ou XSS. Hoje essas credenciais vivem só no servidor (EmailSetting /
+      // UazapiSetting) — este bloco apaga o que ficou nos navegadores que já rodaram a versão antiga.
+      for (const staleKey of LEGACY_SECRET_KEYS) {
+        localStorage.removeItem(staleKey);
+      }
     } catch (e) {
       console.error("Failed to load theme settings from localStorage", e);
     }
@@ -350,16 +295,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("hoteisnet_checkout_time", time);
   };
 
-  const setUazapiServerUrl = (url: string) => {
-    setUazapiServerUrlState(url);
-    localStorage.setItem("hoteisnet_uazapi_server", url);
-  };
-
-  const setUazapiInstanceToken = (token: string) => {
-    setUazapiInstanceTokenState(token);
-    localStorage.setItem("hoteisnet_uazapi_token", token);
-  };
-
   const setWhatsappSoundEnabled = (val: boolean) => {
     setWhatsappSoundEnabledState(val);
     localStorage.setItem("hoteisnet_wa_sound_enabled", String(val));
@@ -373,61 +308,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const setReservationToleranceHours = (hours: number) => {
     setReservationToleranceHoursState(hours);
     localStorage.setItem("hoteisnet_reservation_tolerance", String(hours));
-  };
-
-  const setEmailSmtpHost = (host: string) => {
-    setEmailSmtpHostState(host);
-    localStorage.setItem("hoteisnet_email_host", host);
-  };
-
-  const setEmailSmtpPort = (port: number) => {
-    setEmailSmtpPortState(port);
-    localStorage.setItem("hoteisnet_email_port", String(port));
-  };
-
-  const setEmailSmtpSecure = (sec: string) => {
-    setEmailSmtpSecureState(sec);
-    localStorage.setItem("hoteisnet_email_secure", sec);
-  };
-
-  const setEmailSmtpUser = (user: string) => {
-    setEmailSmtpUserState(user);
-    localStorage.setItem("hoteisnet_email_user", user);
-  };
-
-  const setEmailSmtpPass = (pass: string) => {
-    setEmailSmtpPassState(pass);
-    localStorage.setItem("hoteisnet_email_pass", pass);
-  };
-
-  const setEmailFromName = (name: string) => {
-    setEmailFromNameState(name);
-    localStorage.setItem("hoteisnet_email_from_name", name);
-  };
-
-  const setEmailFromAddress = (email: string) => {
-    setEmailFromAddressState(email);
-    localStorage.setItem("hoteisnet_email_from_address", email);
-  };
-
-  const setEmailFooterText = (text: string) => {
-    setEmailFooterTextState(text);
-    localStorage.setItem("hoteisnet_email_footer", text);
-  };
-
-  const setSendVoucherEmailEnabled = (val: boolean) => {
-    setSendVoucherEmailEnabledState(val);
-    localStorage.setItem("hoteisnet_email_opt_voucher", String(val));
-  };
-
-  const setSendReceiptEmailEnabled = (val: boolean) => {
-    setSendReceiptEmailEnabledState(val);
-    localStorage.setItem("hoteisnet_email_opt_receipt", String(val));
-  };
-
-  const setSendPaymentConfirmEmailEnabled = (val: boolean) => {
-    setSendPaymentConfirmEmailEnabledState(val);
-    localStorage.setItem("hoteisnet_email_opt_payment", String(val));
   };
 
   return (
@@ -452,38 +332,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         earlyArrivalDefaultCharge,
         overnightArrivalDefaultCharge,
         earlyCheckinFixedFeeAmount,
-        uazapiServerUrl,
-        setUazapiServerUrl,
-        uazapiInstanceToken,
-        setUazapiInstanceToken,
         whatsappSoundEnabled,
         setWhatsappSoundEnabled,
         humanInterventionSoundEnabled,
         setHumanInterventionSoundEnabled,
         reservationToleranceHours,
         setReservationToleranceHours,
-        emailSmtpHost,
-        setEmailSmtpHost,
-        emailSmtpPort,
-        setEmailSmtpPort,
-        emailSmtpSecure,
-        setEmailSmtpSecure,
-        emailSmtpUser,
-        setEmailSmtpUser,
-        emailSmtpPass,
-        setEmailSmtpPass,
-        emailFromName,
-        setEmailFromName,
-        emailFromAddress,
-        setEmailFromAddress,
-        emailFooterText,
-        setEmailFooterText,
-        sendVoucherEmailEnabled,
-        setSendVoucherEmailEnabled,
-        sendReceiptEmailEnabled,
-        setSendReceiptEmailEnabled,
-        sendPaymentConfirmEmailEnabled,
-        setSendPaymentConfirmEmailEnabled,
       }}
     >
       {children}

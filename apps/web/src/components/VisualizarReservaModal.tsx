@@ -40,15 +40,6 @@ export const VisualizarReservaModal: React.FC<VisualizarReservaModalProps> = ({
     hotelName,
     defaultCheckInTime,
     defaultCheckOutTime,
-    emailSmtpHost,
-    emailSmtpPort,
-    emailSmtpSecure,
-    emailSmtpUser,
-    emailSmtpPass,
-    emailFromName,
-    emailFromAddress,
-    emailFooterText,
-    sendVoucherEmailEnabled,
   } = useTheme();
 
   const hotelCnpj = "40.904.811/0001-31";
@@ -166,10 +157,6 @@ export const VisualizarReservaModal: React.FC<VisualizarReservaModalProps> = ({
 
   // 2. AÇÃO: ABRIR POPUP DE ENVIO POR E-MAIL
   const handleOpenEmailModal = () => {
-    if (!sendVoucherEmailEnabled) {
-      toast.warning("O envio de Voucher por e-mail está desativado nas Configurações da Área do Assinante.");
-      return;
-    }
     setEmailStatusMsg(null);
     setShowEmailModal(true);
   };
@@ -202,14 +189,6 @@ export const VisualizarReservaModal: React.FC<VisualizarReservaModalProps> = ({
           message: `Olá, ${reservation.guestName}! Segue em anexo a confirmação/voucher da sua reserva para o Quarto ${reservation.roomId || ""}.`,
           pdfBase64,
           filename: `Voucher_Reserva_Quarto_${reservation.roomId || "101"}.pdf`,
-          smtpHost: emailSmtpHost,
-          smtpPort: emailSmtpPort,
-          smtpSecure: emailSmtpSecure,
-          smtpUser: emailSmtpUser,
-          smtpPass: emailSmtpPass,
-          fromName: emailFromName || hotelName,
-          fromEmail: emailFromAddress,
-          footerText: emailFooterText,
         }),
       });
 

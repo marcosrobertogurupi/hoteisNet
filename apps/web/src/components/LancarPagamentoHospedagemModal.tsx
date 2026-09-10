@@ -125,17 +125,6 @@ export default function LancarPagamentoHospedagemModal({
   const {
     theme,
     hotelName,
-    uazapiServerUrl,
-    uazapiInstanceToken,
-    emailSmtpHost,
-    emailSmtpPort,
-    emailSmtpSecure,
-    emailSmtpUser,
-    emailSmtpPass,
-    emailFromName,
-    emailFromAddress,
-    emailFooterText,
-    sendPaymentConfirmEmailEnabled,
   } = useTheme();
   const toast = useToast();
   const confirmDialog = useConfirm();
@@ -394,10 +383,6 @@ export default function LancarPagamentoHospedagemModal({
     });
 
   const handleSendEmailPaymentReceipt = async (paymentsForRecibo: PaymentCreditItem[]) => {
-    if (!sendPaymentConfirmEmailEnabled) {
-      toast.warning("O envio de Confirmações de Pagamento por e-mail está desativado nas Configurações da Área do Assinante.");
-      return;
-    }
     if (paymentsForRecibo.length === 0) return;
 
     const recipient = await promptDialog({
@@ -427,14 +412,6 @@ export default function LancarPagamentoHospedagemModal({
           message: `Confirmamos o recebimento do pagamento no valor de R$ ${totalValor.toFixed(2)} referente ao Quarto ${stayData.roomNumber}. Segue em anexo o recibo em PDF.`,
           pdfBase64,
           filename: docFilename,
-          smtpHost: emailSmtpHost,
-          smtpPort: emailSmtpPort,
-          smtpSecure: emailSmtpSecure,
-          smtpUser: emailSmtpUser,
-          smtpPass: emailSmtpPass,
-          fromName: emailFromName || hotelName,
-          fromEmail: emailFromAddress,
-          footerText: emailFooterText,
         }),
       });
 
@@ -570,8 +547,6 @@ export default function LancarPagamentoHospedagemModal({
           filename: docFilename,
           guestName: stayData.primaryGuestName,
           roomNumber: stayData.roomNumber,
-          serverUrl: uazapiServerUrl,
-          instanceToken: uazapiInstanceToken,
         }),
       });
 

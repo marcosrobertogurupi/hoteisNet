@@ -64,6 +64,14 @@ Também foi aplicada em produção (23/08/2026, via `supabase db push`) uma migr
 
 ---
 
+### 2.4. Auditoria de Segurança de 09/09/2026 🟡 (correções em andamento)
+
+Uma segunda auditoria estática (202 rotas de API, 819 chamadas Prisma, 87 modelos, 21 migrations) confirmou que o isolamento multi-tenant do núcleo está bem construído — as regras do `CLAUDE.md` foram efetivamente aplicadas na maior parte do código, o middleware cobre `/api/**` e as 87 tabelas têm RLS habilitado. Os achados se concentraram nos pontos que escaparam do padrão. Correções aplicadas, na ordem:
+
+* **Credenciais de e-mail (crítico + alto)** — ver 3.13: `api/email/send` deixou de ser um relay SMTP aberto e as credenciais saíram do `localStorage` para o `EmailSetting`.
+
+Pendentes desta auditoria (rastreados no roadmap): revalidação do limite de desconto da reserva no servidor, `verify-admin` restrito ao tenant da sessão, atualização de dependências com CVE, `Reservation.tenantId` preenchido de verdade, revalidação da sessão da governança no banco, `requireAdmin` nas exclusões, política de senha/2FA, rate limit compartilhado e Content-Security-Policy.
+
 ## 3. Especificação das Funcionalidades (Feature Specifications)
 
 ### 3.1. Mapa Visual de Quartos (Room Map) ✅
@@ -351,10 +359,12 @@ Telas existentes em `app/app/cadastros/*`, com status de integração real:
 * 🟡 **Somente UI, sem persistência (pendentes de conexão):** Localidades.
 * **Tarifas ⚠️:** existem **dois caminhos de leitura paralelos e inconsistentes** — `/api/tariffs` lê a tabela `Tariff` via Prisma; `/api/reservations/tariffs` lê uma tabela `tariffs` via cliente Supabase direto (não Prisma). A tela `app/app/tariffs/page.tsx`, por sua vez, não chama nenhuma das duas — usa `CadastroTarifasModal` com uma constante `INITIAL_TARIFFS` fixa. **Pendente:** unificar em uma única fonte de dados (Prisma) e conectar a tela real à API.
 
-### 3.13. Integração de E-mail ✅
-* `api/email/send` monta e-mails HTML (voucher, recibo, confirmação de pagamento) com anexo PDF opcional em base64, via `nodemailer`/SMTP, usando credenciais informadas pelo chamador (padrão `smtp.gmail.com` quando não especificado).
-* `api/email/test` valida a conexão SMTP (`transporter.verify()`) e envia um e-mail de teste.
-* A tabela `EmailSetting` existe no schema mas ainda não foi confirmada como fonte das credenciais nessas rotas — hoje elas dependem do chamador enviar host/usuário/senha a cada chamada.
+### 3.13. Integração de E-mail ✅ (credenciais migradas para o banco em 09/09/2026)
+* As credenciais de SMTP do assinante são **autoritativas na tabela `EmailSetting`** e administradas por `GET/PATCH /api/tenant/email-settings` (exige `requireAdmin`). O `GET` nunca devolve a senha — devolve apenas `senhaConfigurada: true/false`; no `PATCH`, senha em branco significa "manter a atual". Até 09/09/2026 essas configurações viviam somente no `localStorage` do navegador, em texto puro, e eram reenviadas ao servidor a cada disparo.
+* `api/email/send` monta e-mails HTML (voucher, recibo, confirmação de pagamento) com anexo PDF opcional em base64 (limite de 8 MB) e envia por `lib/tenantEmail.ts` → `sendTenantEmail`, que resolve host/usuário/senha **exclusivamente** a partir do `EmailSetting` do tenant da sessão. O corpo da requisição descreve apenas destinatário, nome, assunto, tipo de documento, mensagem e o PDF. Os interruptores de envio por tipo de documento (`sendVoucherEnabled`, `sendReceiptEnabled`, `sendPaymentConfirmEnabled`) são verificados no servidor.
+* `api/email/test` valida a conexão SMTP (`transporter.verify()`) e envia um e-mail de teste. É a única rota que ainda recebe os campos SMTP no corpo, porque a tela de Configurações precisa testar credenciais antes de salvá-las; em compensação o e-mail de teste só é enviado para a **própria caixa configurada** (nunca para um destinatário livre) e a senha pode vir em branco para reusar a já salva. Exige `requireAdmin`.
+* A mesma `sendTenantEmail` atende a notificação da fila de espera (`api/waitlist/[id]/notify`), que antes nunca conseguia enviar porque o `EmailSetting` ficava sempre vazio.
+* **Migração operacional:** cada assinante precisa reinformar usuário e senha de aplicativo uma única vez em Configurações > E-mail, já que as credenciais antigas existiam apenas no navegador.
 
 ### 3.14. Consulta de CPF (Hub do Desenvolvedor) ✅
 * `api/stay/hub-consult-cpf` integra com a API paga do "Hub do Desenvolvedor" (`ws.hubdodesenvolvedor.com.br`) para resolver CPF em dados da Receita Federal (nome, nascimento, filiação, endereço, telefones, e-mails), agilizando o cadastro do hóspede.
