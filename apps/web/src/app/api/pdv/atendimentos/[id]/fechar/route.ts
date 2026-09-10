@@ -204,16 +204,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }
         // Net lançado no quarto = total - (adiantamentos + acerto em dinheiro/cartão) = roomAmount.
         await tx.stayCheckin.update({
-          where: { id: fresh.stayCheckinId },
+          where: { id: fresh.stayCheckinId, tenantId: session.tenantId! },
           data: { totalConsumption: { increment: roomAmount } },
         });
         await tx.comandaSession.update({
-          where: { id },
+          where: { id, tenantId: session.tenantId! },
           data: { status: "AGUARDANDO_FISCAL", closedAt: new Date(), paidAmount: alreadyCollected },
         });
       } else {
         await tx.comandaSession.update({
-          where: { id },
+          where: { id, tenantId: session.tenantId! },
           data: { status: "AGUARDANDO_FISCAL", closedAt: new Date(), paidAmount: round2(Number(fresh.total)) },
         });
       }

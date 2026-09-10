@@ -256,10 +256,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
     const setting = await prisma.uazapiSetting.findUnique({ where: { tenantId }, select: { webhookSecret: true } });
     if (!setting) return NextResponse.json({ success: true, ignored: "tenant-not-found" });
 
-    // Sem o segredo por-tenant (query param configurado em POST /api/uazapi/instance/webhook), a
-    // uazapi/quem quer que seja não é tratado como fonte confiável — evita que alguém forje
-    // mensagens de hóspede sabendo só o tenantId (sequencial/previsível) e acione o Agente de IA.
-    const receivedSecret = req.nextUrl.searchParams.get("secret");
+    // Sem o segredo por-tenant, a uazapi/quem quer que seja não é tratado como fonte confiável —
+    // evita que alguém forje mensagens de hóspede sabendo só o tenantId (sequencial/previsível) e
+    // acione o Agente de IA.
+    //
+    // O segredo é lido preferencialmente do cabeçalho `x-webhook-secret`: em query string ele fica
+    // registrado em log de proxy, de servidor e no histórico de qualquer intermediário. O query
+    // param segue aceito porque é o que a instância uazapi já configurada usa (o webhook dela é
+    // registrado como URL, ver POST /api/uazapi/instance/webhook) — ao trocar de provedor ou
+    // quando a uazapi permitir cabeçalhos no webhook, este fallback pode ser removido.
+    const receivedSecret = req.headers.get("x-webhook-secret") || req.nextUrl.searchParams.get("secret");
     if (!isValidWebhookSecret(receivedSecret, setting.webhookSecret)) {
       return NextResponse.json({ success: false, error: "Segredo do webhook inválido." }, { status: 401 });
     }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireTenantAdmin } from "@/lib/auth";
-import { isBlockedSmtpHost } from "@/lib/htmlEscape";
+import { isBlockedSmtpHostResolved } from "@/lib/smtpHostGuard";
 
 const SMTP_SECURE = ["tls", "ssl", "none"] as const;
 
@@ -72,7 +72,7 @@ export async function PATCH(req: NextRequest) {
       if (!host) {
         return NextResponse.json({ success: false, error: "O servidor de e-mail é obrigatório." }, { status: 400 });
       }
-      if (isBlockedSmtpHost(host)) {
+      if (await isBlockedSmtpHostResolved(host)) {
         return NextResponse.json({ success: false, error: "Servidor de e-mail inválido." }, { status: 400 });
       }
       data.smtpHost = host;

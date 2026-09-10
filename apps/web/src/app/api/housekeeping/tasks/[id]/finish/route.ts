@@ -100,8 +100,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         });
       }
 
+      // Filtro de tenant repetido na própria escrita (CLAUDE.md, Segurança §3).
       const updatedTask = await tx.housekeepingTask.update({
-        where: { id },
+        where: { id, tenantId: session.tenantId },
         data: {
           status: "DONE",
           finishedAt,
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       });
 
       if (task.type === "CHECKOUT" && task.room.status === "VACANT_DIRTY") {
-        await tx.room.update({ where: { id: task.roomId }, data: { status: "VACANT_CLEAN" } });
+        await tx.room.update({ where: { id: task.roomId, tenantId: session.tenantId }, data: { status: "VACANT_CLEAN" } });
       }
 
       return { updatedTask, minibar };

@@ -27,8 +27,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       );
     }
 
+    // Filtro de tenant repetido na PRÓPRIA escrita (CLAUDE.md, Segurança §3) — não basta a
+    // checagem de leitura acima.
     const updated = await prisma.housekeepingTask.update({
-      where: { id },
+      where: { id, tenantId: session.tenantId },
       data: { notes: typeof notes === "string" ? notes : null },
     });
 

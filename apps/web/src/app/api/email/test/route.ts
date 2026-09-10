@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 import { prisma } from "@/lib/prisma";
-import { getSessionUser, requireAdmin } from "@/lib/auth";
-import { escapeHtml, isBlockedSmtpHost } from "@/lib/htmlEscape";
+import { getSessionUser, requireTenantAdmin } from "@/lib/auth";
+import { escapeHtml } from "@/lib/htmlEscape";
+import { isBlockedSmtpHostResolved } from "@/lib/smtpHostGuard";
 
 // POST /api/email/test — só admin: usada exclusivamente para validar as próprias credenciais SMTP
 // do tenant a partir da tela de Configurações, nunca para envio arbitrário.
@@ -16,7 +17,7 @@ import { escapeHtml, isBlockedSmtpHost } from "@/lib/htmlEscape";
 export async function POST(request: NextRequest) {
   try {
     const session = await getSessionUser(request);
-    const adminError = requireAdmin(session);
+    const adminError = requireTenantAdmin(session);
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await request.json();
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (isBlockedSmtpHost(String(smtpHost))) {
+    if (await isBlockedSmtpHostResolved(String(smtpHost))) {
       return NextResponse.json({ success: false, error: "Servidor de e-mail inválido." }, { status: 400 });
     }
 

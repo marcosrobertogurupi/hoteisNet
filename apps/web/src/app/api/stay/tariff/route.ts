@@ -159,7 +159,7 @@ export async function PATCH(req: NextRequest) {
       const totalDaily = Number(chargesAgg._sum.amount || 0);
 
       const updatedStay = await tx.stayCheckin.update({
-        where: { id: stayCheckinId },
+        where: { id: stayCheckinId, tenantId: session.tenantId! },
         data: { totalDaily },
         include: { charges: { where: { chargeType: "DAILY" }, orderBy: { referenceDate: "asc" } } },
       });

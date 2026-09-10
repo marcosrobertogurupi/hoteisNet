@@ -215,7 +215,7 @@ export async function POST(req: NextRequest) {
       });
 
       if (["CHECKED_IN", "CHECKEDIN", "OCCUPIED"].includes(String(status).toUpperCase())) {
-        await tx.room.update({ where: { id: realRoomId }, data: { status: "OCCUPIED" } });
+        await tx.room.update({ where: { id: realRoomId, tenantId: session.tenantId! }, data: { status: "OCCUPIED" } });
       }
 
       if (validPayments.length > 0 && realCashRegisterId) {
@@ -501,11 +501,11 @@ export async function PATCH(req: NextRequest) {
 
         // depositPaid autoritativo = soma real dos adiantamentos que restaram.
         const agg = await tx.reservation_payments.aggregate({ where: { reservationId: id }, _sum: { amount: true } });
-        await tx.reservation.update({ where: { id }, data: { depositPaid: Number(agg._sum.amount || 0) } });
+        await tx.reservation.update({ where: { id, room: { tenantId: session.tenantId! } }, data: { depositPaid: Number(agg._sum.amount || 0) } });
       }
 
       if (status && realRoomId && ["CHECKED_IN", "CHECKEDIN", "OCCUPIED"].includes(String(status).toUpperCase())) {
-        await tx.room.update({ where: { id: realRoomId }, data: { status: "OCCUPIED" } });
+        await tx.room.update({ where: { id: realRoomId, tenantId: session.tenantId! }, data: { status: "OCCUPIED" } });
       }
     });
 

@@ -15,7 +15,7 @@ const GENERIC_AUTH_ERROR = "WhatsApp ou senha inválidos.";
 // (a governanta não tem e-mail). Emite cookie de sessão próprio, separado do login administrativo.
 export async function POST(req: NextRequest) {
   try {
-    const rate = checkRateLimit(`housekeeping-login:${getClientIp(req)}`, { max: 5, windowMs: 60_000 });
+    const rate = await checkRateLimit(`housekeeping-login:${getClientIp(req)}`, { max: 5, windowMs: 60_000 });
     if (!rate.allowed) {
       return NextResponse.json(
         { success: false, error: "Muitas tentativas. Tente novamente em instantes." },

@@ -14,6 +14,7 @@ import {
   isPlatformRole,
 } from "@/lib/platformAuth";
 import { verifyTotp } from "@/lib/totp";
+import { decryptSecret } from "@/lib/secretBox";
 import { logPlatformAction } from "@/lib/platformAudit";
 
 const GENERIC_AUTH_ERROR = "E-mail ou senha inválidos.";
@@ -24,7 +25,7 @@ const GENERIC_AUTH_ERROR = "E-mail ou senha inválidos.";
 export async function POST(req: NextRequest) {
   try {
     const ip = getClientIp(req);
-    const rate = checkRateLimit(`admin-login:${ip}`, { max: 5, windowMs: 60_000 });
+    const rate = await checkRateLimit(`admin-login:${ip}`, { max: 5, windowMs: 60_000 });
     if (!rate.allowed) {
       return NextResponse.json(
         { success: false, error: "Muitas tentativas. Tente novamente em instantes." },
@@ -57,7 +58,10 @@ export async function POST(req: NextRequest) {
       if (!mfaCode) {
         return NextResponse.json({ success: false, mfaRequired: true, error: "Informe o código do aplicativo autenticador." }, { status: 401 });
       }
-      if (!verifyTotp(user.mfaSecret, String(mfaCode))) {
+      // O segredo é gravado cifrado (lib/secretBox.ts); segredos legados em texto puro voltam
+      // como estão, para não derrubar o 2FA de quem já usava.
+      const totpSecret = decryptSecret(user.mfaSecret);
+      if (!totpSecret || !verifyTotp(totpSecret, String(mfaCode))) {
         return NextResponse.json({ success: false, mfaRequired: true, error: "Código de verificação inválido." }, { status: 401 });
       }
     }

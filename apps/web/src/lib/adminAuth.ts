@@ -36,7 +36,7 @@ export async function verifyAdminStepUp(
   // O rate limit mora aqui, e não em cada rota, para que nenhuma rota de step-up futura possa
   // esquecê-lo: toda porta que aceita e-mail + senha de administrador passa por este ponto
   // (CLAUDE.md, Segurança §8).
-  const rate = checkRateLimit(`admin-step-up:${getClientIp(req)}`, { max: 5, windowMs: 60_000 });
+  const rate = await checkRateLimit(`admin-step-up:${getClientIp(req)}`, { max: 5, windowMs: 60_000 });
   if (!rate.allowed) {
     return {
       ok: false,

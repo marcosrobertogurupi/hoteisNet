@@ -4,7 +4,7 @@
 // e disparar via nodemailer.
 import nodemailer from "nodemailer";
 import { prisma } from "@/lib/prisma";
-import { isBlockedSmtpHost } from "@/lib/htmlEscape";
+import { isBlockedSmtpHostResolved } from "@/lib/smtpHostGuard";
 
 export type TenantEmailResult =
   | { ok: true; messageId: string }
@@ -83,7 +83,7 @@ export async function sendTenantEmail({
   }
 
   const host = (setting.smtpHost || "smtp.gmail.com").trim();
-  if (isBlockedSmtpHost(host)) {
+  if (await isBlockedSmtpHostResolved(host)) {
     return { ok: false, reason: "blocked_host", message: "Servidor SMTP inválido." };
   }
 
