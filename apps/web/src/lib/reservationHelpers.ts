@@ -66,12 +66,16 @@ export function stayOccupiedUntil(stay: {
   const effective = billedThrough > stay.expectedCheckOut ? billedThrough : stay.expectedCheckOut;
 
   // Overstay (saída prevista já passou e a hospedagem continua aberta): o hóspede ainda está no
-  // quarto e o rollover de diárias avança na HORA exata do check-in — isso abria uma janela de
-  // minutos por dia (entre a hora do check-in e as 14h do padrão do hotel) em que
-  // `stayOccupiedUntil(s) > checkIn` dava falso e a fila de espera / o agente ofereciam um quarto
-  // com hóspede dentro (caso real: fila avisou um hóspede sobre um quarto ocupado). Enquanto a
-  // recepção não finaliza a hospedagem, a ocupação vai até o FIM do dia em Brasília — nunca uma
-  // hora quebrada — e no mínimo até o fim de hoje (protege contra rollover atrasado).
+  // quarto. O rollover automático (apps/worker/src/rollover.ts, roda a cada minuto e lança a
+  // diária de todas as hospedagens em aberto do tenant no horário de Tenant.dailyRolloverTime)
+  // mantém `dailiesCount` em dia na imensa maioria do tempo, mas esta função não pode confiar cegamente
+  // nisso: se o worker cair/atrasar, `billedThrough` (checkInDate + dailiesCount) fica parado no
+  // passado e `stayOccupiedUntil(s) > checkIn` passaria a dar falso — a fila de espera / o agente
+  // ofereceriam um quarto com hóspede dentro (caso real já ocorrido). Por isso, enquanto a
+  // recepção não finaliza a hospedagem, a ocupação vai no mínimo até o FIM do dia em Brasília,
+  // independente de `dailiesCount` — nunca uma hora quebrada. Quem precisa saber até qual DIA
+  // exibir a ocupação (ex.: barra do Mapa de Reservas) deve tratar o valor devolvido aqui como um
+  // limite EXCLUSIVO (ver conversão em lib/mapQueries.ts), não como o último dia ocupado.
   if (stay.expectedCheckOut.getTime() < Date.now()) {
     const latest = new Date(Math.max(effective.getTime(), Date.now()));
     return new Date(dateOnlyBrasilia(latest).getTime() + 24 * 60 * 60 * 1000); // meia-noite BRT do dia seguinte

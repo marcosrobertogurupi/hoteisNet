@@ -21,11 +21,21 @@ function occupiedUntilDate(
   // Régua única compartilhada com a checagem de disponibilidade do agente de IA (ver
   // stayOccupiedUntil / findBlockingOpenStay em lib/reservationHelpers.ts) — as duas nunca podem
   // divergir sobre "até quando o quarto está ocupado".
-  return stayOccupiedUntil({
+  const exclusiveBound = stayOccupiedUntil({
     checkInDate: stayCheckin.checkInDate,
     expectedCheckOut,
     dailiesCount: stayCheckin.dailiesCount,
   });
+  // `stayOccupiedUntil` devolve um limite EXCLUSIVO (usado em comparações "> checkInDate" para
+  // bloquear check-in) — no caso de overstay ele cai exatamente na meia-noite de Brasília do dia
+  // seguinte (proteção contra o rollover automático ainda não ter lançado a diária de hoje). O
+  // Mapa de Reservas, porém, usa só a DATA (YYYY-MM-DD) desse valor como último dia INCLUSIVO
+  // pintado na barra — sem este ajuste, meia-noite de amanhã virava "amanhã" na barra, mostrando
+  // um dia de ocupação a mais do que qualquer diária realmente lançada (StayCharge), confundindo
+  // com o modal "Alterar tarifa", que só lista diárias já lançadas. Subtrair 1ms antes de truncar
+  // devolve o último dia efetivamente coberto pelo limite exclusivo, sem alterar o resultado nos
+  // outros usos (que continuam comparando o limite exclusivo original).
+  return dateOnlyBrasilia(new Date(exclusiveBound.getTime() - 1));
 }
 
 /**
