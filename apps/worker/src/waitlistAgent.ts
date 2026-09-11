@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { sendUazapiText } from "./uazapiSend";
+import { stayOccupiedUntil } from "./stayOccupancy";
 
 const prisma = new PrismaClient();
 
@@ -17,27 +18,6 @@ function checkInAt(d: Date): Date {
 }
 function checkOutAt(d: Date): Date {
   return atBrasiliaTime(d.toISOString().slice(0, 10), DEFAULT_CHECK_OUT_TIME);
-}
-
-// Meia-noite (Brasília) do dia seguinte ao da data informada. Usado para "arredondar" a ocupação de
-// um overstay para o fim do dia. `en-CA` dá AAAA-MM-DD.
-function endOfDayBrasilia(d: Date): Date {
-  const ymd = d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-  return new Date(atBrasiliaTime(ymd, "00:00").getTime() + 24 * 60 * 60 * 1000);
-}
-
-// Ocupação EFETIVA de uma hospedagem — o maior valor entre a saída prevista e (check-in + diárias
-// já lançadas). Cobre overstay. Duplicado de apps/web/src/lib/reservationHelpers.ts (stayOccupiedUntil)
-// — o worker não importa apps/web (mesmo padrão de busyRoomIds em operationalAgent.ts). O ramo de
-// overstay (arredonda para o fim do dia BRT) precisa ficar idêntico ao do web.
-function stayOccupiedUntil(stay: { checkInDate: Date; expectedCheckOut: Date; dailiesCount: number }): Date {
-  const billedThrough = new Date(stay.checkInDate);
-  billedThrough.setDate(billedThrough.getDate() + stay.dailiesCount);
-  const effective = billedThrough > stay.expectedCheckOut ? billedThrough : stay.expectedCheckOut;
-  if (stay.expectedCheckOut.getTime() < Date.now()) {
-    return endOfDayBrasilia(new Date(Math.max(effective.getTime(), Date.now())));
-  }
-  return effective;
 }
 
 // Procura um quarto ativo da categoria genuinamente livre para todo o período pedido. A reserva tem
