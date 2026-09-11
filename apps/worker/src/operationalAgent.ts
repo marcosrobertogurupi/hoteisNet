@@ -8,6 +8,7 @@ import {
   AI_MODEL_FALLBACK,
   type GeminiUsageMetadata,
 } from "./aiUsage";
+import { stayOccupiedUntil } from "./stayOccupancy";
 
 const prisma = new PrismaClient();
 
@@ -157,8 +158,14 @@ function brDayLabel(d: Date): string {
 }
 
 // Ids de quartos (dentre os passados) ocupados no período — reserva ativa/futura que se sobrepõe
-// ou hospedagem em aberto que se sobrepõe. Mesma lógica de busyRoomIdsForPeriod em
-// apps/web/src/lib/aiAgent/tools.ts (o worker é um processo separado e não importa apps/web).
+// ou hospedagem em aberto cuja ocupação EFETIVA (stayOccupiedUntil, cobre overstay) alcança o
+// período. Mesma lógica de busyRoomIdsForPeriod em apps/web/src/lib/aiAgent/tools.ts (o worker é
+// um processo separado e não importa apps/web, daí a cópia local em ./stayOccupancy).
+//
+// NUNCA filtrar hospedagens abertas por `expectedCheckOut: { gt: checkIn }` cru: um hóspede em
+// overstay (saída prevista já passou, o caso comum) some da contagem de ocupados com esse filtro,
+// mesmo com `Room.status` ainda OCCUPIED — subestimava lotação e sugeria remanejar reservas para
+// quartos que na verdade ainda estavam ocupados.
 async function busyRoomIds(roomIds: string[], checkIn: Date, checkOut: Date): Promise<Set<string>> {
   if (roomIds.length === 0) return new Set();
   const [reservations, openStays] = await Promise.all([
@@ -172,11 +179,12 @@ async function busyRoomIds(roomIds: string[], checkIn: Date, checkOut: Date): Pr
       select: { roomId: true },
     }),
     prisma.stayCheckin.findMany({
-      where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut }, expectedCheckOut: { gt: checkIn } },
-      select: { roomId: true },
+      where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut } },
+      select: { roomId: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
     }),
   ]);
-  return new Set<string>([...reservations.map((r) => r.roomId), ...openStays.map((s) => s.roomId)]);
+  const busyByStay = openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId);
+  return new Set<string>([...reservations.map((r) => r.roomId), ...busyByStay]);
 }
 
 async function detectOccupiedRoomsWithIncomingReservation(tenantId: string): Promise<DetectedIssue[]> {
