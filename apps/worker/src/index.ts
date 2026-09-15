@@ -10,6 +10,7 @@ import { runWaitlistAgent } from "./waitlistAgent";
 import { runSaasDunning } from "./saasDunning";
 import { runSaasMonitor } from "./saasMonitor";
 import { runNoShowSweep } from "./noShowSweep";
+import { runReviewsSync } from "./reviewsSync";
 
 console.log("[worker] Virada de diária — worker iniciado.");
 
@@ -77,5 +78,14 @@ cron.schedule("12 * * * *", () => {
 cron.schedule("17 * * * *", () => {
   runNoShowSweep().catch((err) => {
     console.error("[worker] Erro ao rodar rotina de no-show:", err);
+  });
+});
+
+// Monitoramento de reviews (Google Maps, TripAdvisor, Booking, Facebook, Instagram, Reclame Aqui).
+// O cron dispara a cada 30min só para não deixar um conector devido esperando demais; o espaçamento
+// real entre chamadas pagas ao Apify é MIN_SYNC_INTERVAL_MINUTES dentro de reviewsSync.ts.
+cron.schedule("*/30 * * * *", () => {
+  runReviewsSync().catch((err) => {
+    console.error("[worker] Erro ao rodar sincronização de reviews:", err);
   });
 });

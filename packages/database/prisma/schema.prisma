@@ -264,6 +264,8 @@ model Tenant {
   fiscalDocuments            FiscalDocument[]
   stockCounts                StockCount[]
   waitlistEntries            WaitlistEntry[]
+  reviewChannelConnectors    ReviewChannelConnector[]
+  reviews                    Review[]
 
   @@map("tenants")
 }
@@ -1770,6 +1772,132 @@ model UazapiSetting {
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("uazapi_settings")
+}
+
+// Canais externos de review monitorados pelo módulo de Reputação (Cadastro → Reviews). A
+// estratégia de coleta por canal (API oficial, scraper terceirizado pago como Apify/Firecrawl, ou
+// scraper próprio) fica inteiramente no worker (apps/worker/src/reviewConnectors/*.ts) — este model
+// só guarda config/estado. Um por (tenantId, channel). Ver plano de implementação do módulo de
+// monitoramento de reviews (portado da arquitetura do projeto de referência "radar-views").
+enum ReviewChannel {
+  GOOGLE_MAPS
+  TRIPADVISOR
+  BOOKING
+  FACEBOOK
+  INSTAGRAM
+  RECLAME_AQUI
+}
+
+enum ReviewConnectorStatus {
+  PENDING_AUTH // ainda não configurado pelo assinante (sem externalId)
+  ACTIVE
+  PAUSED
+  ERROR
+  RUNNING // sincronização em andamento — nunca fica assim por muito tempo, ver watchdog em reviewsSync.ts
+}
+
+model ReviewChannelConnector {
+  id       String                @id @default(uuid())
+  tenantId String
+  channel  ReviewChannel
+  status   ReviewConnectorStatus @default(PENDING_AUTH)
+  // Identificador do negócio no canal — formato varia por canal (Place ID no Google Maps, URL de
+  // listagem no TripAdvisor, hotel_url no Booking...). Configurado pelo assinante em
+  // Cadastros → Reviews. null enquanto PENDING_AUTH.
+  externalId String?
+  // Config extra específica do canal (ex.: listingUrl auto-descoberta no TripAdvisor). Nunca guarda
+  // segredo/token de API aqui — regra 6 do CLAUDE.md (segredo de terceiro nunca em coluna livre sem
+  // necessidade; quando um canal precisar de OAuth próprio por tenant, isso ganha campo dedicado).
+  config       Json      @default("{}")
+  lastSyncAt   DateTime?
+  nextSyncAt   DateTime?
+  errorMessage String?
+  errorCount   Int       @default(0)
+  // Setado na PRIMEIRA vez que o conector entra em erro — inclusive quando o watchdog reseta um
+  // conector travado em RUNNING, nunca só no caminho "feliz" de falha. Usado para limitar o retry
+  // automático a uma janela de 72h desde o primeiro erro (ver reviewsSync.ts); sem isso um conector
+  // resetado pelo watchdog sem este campo ficaria fora do ciclo de retry para sempre — mesmo bug que
+  // o projeto de referência já sofreu em produção e documentou em duas migrations corretivas.
+  firstErrorAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reviews      Review[]
+  syncJobs     ReviewSyncJob[]
+
+  @@unique([tenantId, channel])
+  @@map("review_channel_connectors")
+}
+
+enum ReviewSentiment {
+  UNANALYZED
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+  CRITICAL
+}
+
+enum ReviewResponseStatus {
+  NONE
+  DRAFT // rascunho gerado pela IA, sem publicar
+  PENDING_APPROVAL // aguardando aprovação do gestor (nota baixa ou confiança baixa da IA)
+  PUBLISHED
+}
+
+// Review normalizado de qualquer canal — o pipeline de coleta (reviewsSync.ts) converge todo review
+// bruto de todo conector para este único model antes de gravar. Deduplicação por
+// (tenantId, channel, externalId): a mesma constraint que o projeto de referência usa, é o que
+// permite reprocessar uma sincronização sem duplicar registro.
+model Review {
+  id          String        @id @default(uuid())
+  tenantId    String
+  connectorId String
+  channel     ReviewChannel
+  // Id do review no canal de origem (nunca gerado por nós) — chave de deduplicação.
+  externalId String
+  rating     Decimal?      @db.Decimal(2, 1)
+  title      String?
+  body       String?
+  authorName String?
+  // Link para o review no canal de origem, quando o canal fornece.
+  url         String?
+  publishedAt DateTime
+  collectedAt DateTime      @default(now())
+  // Sentimento e rascunho de resposta entram na Fase 2 do módulo (análise com IA) — os campos já
+  // existem aqui para não exigir migration nova quando essa fase chegar.
+  sentiment       ReviewSentiment       @default(UNANALYZED)
+  sentimentResult Json?
+  responseText    String?
+  responseStatus  ReviewResponseStatus  @default(NONE)
+  // Payload bruto retornado pelo canal/serviço de coleta — nunca sobrescrito, só para auditoria e
+  // depuração de mapeamento; nunca exposto em resposta de API (ver select explícito nas rotas).
+  rawData Json?
+  tenant    Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connector ReviewChannelConnector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, channel, externalId])
+  @@index([tenantId, channel, publishedAt])
+  @@map("reviews")
+}
+
+// Log de cada execução de sincronização de um conector — não é fila (o worker do HoteisNet roda
+// como processo único, sem necessidade do FOR UPDATE SKIP LOCKED do projeto de referência), só
+// histórico para depuração e para a tela de Cadastros → Reviews mostrar a última sincronização.
+model ReviewSyncJob {
+  id             String    @id @default(uuid())
+  connectorId    String
+  tenantId       String
+  status         String    @default("running") // running | done | failed
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  reviewsFetched Int       @default(0)
+  reviewsNew     Int       @default(0)
+  reviewsUpdated Int       @default(0)
+  errorMessage   String?
+  connector      ReviewChannelConnector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+
+  @@index([connectorId, startedAt])
+  @@map("review_sync_jobs")
 }
 
 // Credenciais e configuração da transmissão eletrônica ao SNRHos (FNRH Digital, Ministério do
