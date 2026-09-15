@@ -43,7 +43,8 @@ const SENTIMENT_RESPONSE_SCHEMA = {
   required: ["sentiment", "dissatisfactionScore", "topics", "summary", "replyDraft", "replyConfidence"],
 };
 
-const CHANNEL_LABELS: Record<string, string> = {
+// Exportado para reviewsSync.ts reaproveitar na mensagem de alerta de review crítico.
+export const CHANNEL_LABELS: Record<string, string> = {
   GOOGLE_MAPS: "Google Maps",
   TRIPADVISOR: "TripAdvisor",
   BOOKING: "Booking.com",

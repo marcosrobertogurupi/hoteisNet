@@ -2022,6 +2022,9 @@ model OperationalAlertLog {
 enum EscalationSource {
   SUPPORT_AGENT
   OPERATIONAL_AGENT
+  // Review crítico detectado pela análise de sentimento (apps/worker/src/reviewSentiment.ts) —
+  // ver reviewsSync.ts. entityType = "REVIEW_CRITICAL", entityId = Review.id.
+  REVIEW_MONITOR
 }
 
 // Fila de "precisa de um humano agora" alimentada pelos dois agentes de IA — diferente do

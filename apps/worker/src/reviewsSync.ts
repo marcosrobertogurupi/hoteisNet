@@ -2,8 +2,8 @@
 // Reclame Aqui) — cada canal implementado vive em ./reviewConnectors/*.ts; este arquivo só
 // orquestra: escolhe conectores devidos, chama o conector certo, normaliza/deduplica e persiste.
 //
-// Todos os 6 canais do módulo estão implementados, com análise de sentimento por IA. Alertas de
-// review crítico (HumanEscalation) ainda não — próxima etapa.
+// Todos os 6 canais do módulo estão implementados, com análise de sentimento por IA e alerta de
+// review crítico (sino de HumanEscalation + WhatsApp).
 import { PrismaClient, ReviewChannel, ReviewChannelConnector, TenantStatus } from "@prisma/client";
 import { fetchGoogleMapsReviews } from "./reviewConnectors/googleMaps";
 import { fetchTripAdvisorReviews } from "./reviewConnectors/tripadvisor";
@@ -11,7 +11,8 @@ import { fetchBookingReviews } from "./reviewConnectors/booking";
 import { fetchFacebookReviews } from "./reviewConnectors/facebook";
 import { fetchFacebookCommentsViaGraph, fetchInstagramCommentsViaGraph } from "./reviewConnectors/metaGraph";
 import { fetchReclameAquiComplaints } from "./reviewConnectors/reclameAqui";
-import { analyzeReviewSentiment } from "./reviewSentiment";
+import { analyzeReviewSentiment, CHANNEL_LABELS, type ReviewSentimentResult } from "./reviewSentiment";
+import { sendUazapiText } from "./uazapiSend";
 import type { NormalizedReviewInput, ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
@@ -155,6 +156,74 @@ function filterRecentReviews(reviews: NormalizedReviewInput[]): NormalizedReview
   return reviews.filter((r) => r.publishedAt >= cutoff);
 }
 
+// Mesmo tipo/id usados no sino de escalação para dedup — nunca alerta o mesmo review duas vezes.
+const REVIEW_ESCALATION_ENTITY_TYPE = "REVIEW_CRITICAL";
+
+// "Rede de segurança" — dispara mesmo quando a IA não marcou "critical" explicitamente, para nunca
+// deixar passar um review realmente grave só porque a classificação de sentimento errou pra baixo
+// (mesmo padrão do projeto de referência que originou este módulo, onde essa rede pegou casos que
+// as regras configuráveis não cobriam). rating <= 1 cobre também o caminho rating-only (review sem
+// texto): a classificação determinística nunca marca "critical" sozinha, mas 1 estrela silencioso
+// ainda merece a atenção da equipe.
+function isCriticalReview(rating: number | null, sentiment: ReviewSentimentResult): boolean {
+  return sentiment.sentiment === "CRITICAL" || sentiment.dissatisfactionScore >= 80 || (rating != null && rating <= 1);
+}
+
+// Alerta a equipe (sino de intervenção humana + WhatsApp) quando um review recém-analisado bate no
+// critério de "crítico" — nunca lança: uma falha aqui não pode derrubar a sincronização de reviews.
+async function maybeCreateCriticalReviewAlert(params: {
+  tenantId: string;
+  hotelName: string;
+  channel: string;
+  review: { id: string; rating: number | null; authorName: string | null; url: string | null };
+  sentiment: ReviewSentimentResult;
+  alertPhone: string | null;
+}): Promise<void> {
+  if (!isCriticalReview(params.review.rating, params.sentiment)) return;
+
+  try {
+    // Dedup atômico: a constraint não existe aqui como em OperationalAlertLog, então a checagem é
+    // "já existe uma escalação para este review, resolvida ou não" — um review crítico só precisa
+    // ser levantado para a equipe uma vez na vida, não a cada ciclo de sincronização.
+    const already = await prisma.humanEscalation.findFirst({
+      where: { tenantId: params.tenantId, entityType: REVIEW_ESCALATION_ENTITY_TYPE, entityId: params.review.id },
+      select: { id: true },
+    });
+    if (already) return;
+
+    const channelLabel = CHANNEL_LABELS[params.channel] || params.channel;
+    const ratingLabel = params.review.rating != null ? `${params.review.rating}/5` : "sem nota";
+    const reason = `Review crítico em ${channelLabel} (${ratingLabel}) — ${params.sentiment.summary}`;
+
+    await prisma.humanEscalation.create({
+      data: {
+        tenantId: params.tenantId,
+        source: "REVIEW_MONITOR",
+        reason,
+        entityType: REVIEW_ESCALATION_ENTITY_TYPE,
+        entityId: params.review.id,
+      },
+    });
+
+    if (params.alertPhone) {
+      const message = [
+        `🚨 *Review crítico — ${params.hotelName}*`,
+        `Canal: ${channelLabel} (${ratingLabel})`,
+        `Hóspede: ${params.review.authorName || "anônimo"}`,
+        ``,
+        params.sentiment.summary,
+        ``,
+        `Veja o review completo e o rascunho de resposta em Reviews & Reputação no sistema.`,
+      ].join("\n");
+      await sendUazapiText(prisma, params.alertPhone, message, params.tenantId);
+    }
+
+    console.log(`[reviews-sync] alerta de review crítico criado — tenant=${params.tenantId} review=${params.review.id}`);
+  } catch (err: any) {
+    console.error(`[reviews-sync] falha ao criar alerta de review crítico — tenant=${params.tenantId}:`, err?.message || err);
+  }
+}
+
 async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
   await prisma.reviewChannelConnector.update({ where: { id: connector.id }, data: { status: "RUNNING" } });
 
@@ -174,13 +243,17 @@ async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
     // um próprio, para não multiplicar toggles de "desligar IA" que o admin precisa lembrar de checar).
     let hotelName = "o hotel";
     let aiBlocked = false;
+    // Mesmo alertPhone do agente operacional (AIAgentSetting.alertPhone) — reaproveitado em vez de
+    // criar um campo de telefone de alerta só para reviews, mesma razão de reaproveitar `blocked`.
+    let alertPhone: string | null = null;
     if (recentReviews.length > 0) {
       const tenant = await prisma.tenant.findUnique({
         where: { id: connector.tenantId },
-        select: { name: true, tradeName: true, aiAgentSettings: { select: { blocked: true } } },
+        select: { name: true, tradeName: true, aiAgentSettings: { select: { blocked: true, alertPhone: true } } },
       });
       hotelName = tenant?.tradeName || tenant?.name || hotelName;
       aiBlocked = tenant?.aiAgentSettings?.blocked ?? false;
+      alertPhone = tenant?.aiAgentSettings?.alertPhone ?? null;
     }
 
     let reviewsNew = 0;
@@ -207,8 +280,9 @@ async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
             authorName: r.authorName ?? null,
           });
 
-      await prisma.review.upsert({
+      const savedReview = await prisma.review.upsert({
         where: key,
+        select: { id: true },
         create: {
           tenantId: connector.tenantId,
           connectorId: connector.id,
@@ -252,6 +326,17 @@ async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
       });
       if (existing) reviewsUpdated++;
       else reviewsNew++;
+
+      if (sentiment) {
+        await maybeCreateCriticalReviewAlert({
+          tenantId: connector.tenantId,
+          hotelName,
+          channel: connector.channel,
+          review: { id: savedReview.id, rating: r.rating ?? null, authorName: r.authorName ?? null, url: r.url ?? null },
+          sentiment,
+          alertPhone,
+        });
+      }
     }
 
     await prisma.reviewSyncJob.update({
