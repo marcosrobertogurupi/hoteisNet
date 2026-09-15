@@ -2,25 +2,33 @@
 // Reclame Aqui) — cada canal implementado vive em ./reviewConnectors/*.ts; este arquivo só
 // orquestra: escolhe conectores devidos, chama o conector certo, normaliza/deduplica e persiste.
 //
-// GOOGLE_MAPS, TRIPADVISOR, BOOKING, FACEBOOK e INSTAGRAM estão implementados (fetchChannelReviews
-// trata os demais canais como "ainda não implementado", registrando isso como erro do ciclo — não
-// quebra o worker). Análise de sentimento e alertas (HumanEscalation) entram na Fase 2.
+// Todos os 6 canais do módulo estão implementados. Análise de sentimento e alertas
+// (HumanEscalation) entram na Fase 2.
 import { PrismaClient, ReviewChannel, ReviewChannelConnector, TenantStatus } from "@prisma/client";
 import { fetchGoogleMapsReviews } from "./reviewConnectors/googleMaps";
 import { fetchTripAdvisorReviews } from "./reviewConnectors/tripadvisor";
 import { fetchBookingReviews } from "./reviewConnectors/booking";
 import { fetchFacebookReviews } from "./reviewConnectors/facebook";
 import { fetchFacebookCommentsViaGraph, fetchInstagramCommentsViaGraph } from "./reviewConnectors/metaGraph";
-import type { ReviewConnectorResult } from "./reviewConnectors/types";
+import { fetchReclameAquiComplaints } from "./reviewConnectors/reclameAqui";
+import type { NormalizedReviewInput, ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
 
 const SYNC_BATCH_SIZE = 10;
-// Guard-rail de custo: nunca sincroniza o mesmo conector com menos que este intervalo, mesmo que o
-// cron dispare com mais frequência (o cron roda a cada 30min só para não deixar um conector devido
-// esperando até 2h se o ciclo anterior não pegou todos — MIN_SYNC_INTERVAL_MINUTES é quem de fato
-// espaça as chamadas pagas ao Apify).
-const MIN_SYNC_INTERVAL_MINUTES = 120;
+// Guard-rail de custo E decisão de produto (pedido explícito do assinante): cada conector é
+// sincronizado só 2x ao dia, nunca mais que isso — mesmo que o cron dispare com mais frequência (o
+// cron roda a cada 30min só para não deixar um conector devido esperando até 12h se o ciclo
+// anterior não pegou todos — MIN_SYNC_INTERVAL_MINUTES é quem de fato espaça as chamadas pagas ao
+// Apify/Graph API).
+const MIN_SYNC_INTERVAL_MINUTES = 12 * 60;
+// Nenhum canal importa histórico — pedido explícito do assinante: "o comportamento de todos os
+// canais é procurar reviews recentes e nunca histórico ... isso não importa para o hotel". Reviews
+// publicados antes desta janela são descartados no pós-processamento (filterRecentReviews), mesmo
+// que o conector/ator os tenha retornado — independe de cada canal saber ou não filtrar por data
+// nativamente (TripAdvisor e Booking não têm esse parâmetro no ator, ver comentário nos respectivos
+// conectores). Vale tanto na primeira sincronização (sem lastSyncAt) quanto nas seguintes.
+const RECENCY_WINDOW_DAYS = 30;
 // Conector travado em RUNNING por mais que isso é considerado uma sincronização que nunca terminou
 // (worker reiniciado/crash no meio do ciclo) e é resetado automaticamente pelo watchdog abaixo.
 const RUNNING_TIMEOUT_MINUTES = 20;
@@ -131,10 +139,19 @@ async function fetchChannelReviews(connector: ReviewChannelConnector): Promise<R
         });
       }
       return { reviewsFetched: 0, reviews: [], errorMessage: "Conecte o Instagram via OAuth em Cadastros → Reviews." };
+    case ReviewChannel.RECLAME_AQUI:
+      return fetchReclameAquiComplaints({ storeSlug: connector.externalId, sinceDate: connector.lastSyncAt });
     default:
-      // Reclame Aqui entra numa próxima etapa do módulo (ver plano de implementação).
       return { reviewsFetched: 0, reviews: [], errorMessage: `Canal ${connector.channel} ainda não implementado.` };
   }
+}
+
+// Descarta reviews publicados antes de RECENCY_WINDOW_DAYS, mesmo que o conector/ator os tenha
+// retornado — a garantia de "só recente" fica centralizada aqui em vez de espalhada por canal, já
+// que nem todo ator suporta corte de data nativo (ver comentário de RECENCY_WINDOW_DAYS acima).
+function filterRecentReviews(reviews: NormalizedReviewInput[]): NormalizedReviewInput[] {
+  const cutoff = new Date(Date.now() - RECENCY_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  return reviews.filter((r) => r.publishedAt >= cutoff);
 }
 
 async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
@@ -148,9 +165,11 @@ async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
     const result = await fetchChannelReviews(connector);
     if (result.errorMessage) throw new Error(result.errorMessage);
 
+    const recentReviews = filterRecentReviews(result.reviews);
+
     let reviewsNew = 0;
     let reviewsUpdated = 0;
-    for (const r of result.reviews) {
+    for (const r of recentReviews) {
       const key = { tenantId_channel_externalId: { tenantId: connector.tenantId, channel: connector.channel, externalId: r.externalId } };
       const existing = await prisma.review.findUnique({ where: key, select: { id: true, rating: true, body: true } });
 

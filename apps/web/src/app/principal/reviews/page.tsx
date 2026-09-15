@@ -77,9 +77,9 @@ const CHANNEL_INFO: Record<
   },
   RECLAME_AQUI: {
     label: "Reclame Aqui",
-    help: "Canal ainda não disponível para coleta — chega numa próxima etapa do módulo.",
-    placeholder: "Slug da empresa no Reclame Aqui",
-    implemented: false,
+    help: "Cole o slug da empresa na URL do Reclame Aqui (a parte depois de /empresa/).",
+    placeholder: "Ex: vivence-hotel-palmas",
+    implemented: true,
   },
 };
 
