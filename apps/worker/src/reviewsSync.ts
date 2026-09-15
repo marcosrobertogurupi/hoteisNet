@@ -2,11 +2,12 @@
 // Reclame Aqui) — cada canal implementado vive em ./reviewConnectors/*.ts; este arquivo só
 // orquestra: escolhe conectores devidos, chama o conector certo, normaliza/deduplica e persiste.
 //
-// Fase técnica 1 do módulo de reviews: só GOOGLE_MAPS está implementado (fetchChannelReviews trata
-// os demais canais como "ainda não implementado", registrando isso como erro do ciclo — não quebra
-// o worker). Análise de sentimento e alertas (HumanEscalation) entram na Fase 2.
+// GOOGLE_MAPS e TRIPADVISOR estão implementados (fetchChannelReviews trata os demais canais como
+// "ainda não implementado", registrando isso como erro do ciclo — não quebra o worker). Análise de
+// sentimento e alertas (HumanEscalation) entram na Fase 2.
 import { PrismaClient, ReviewChannel, ReviewChannelConnector, TenantStatus } from "@prisma/client";
 import { fetchGoogleMapsReviews } from "./reviewConnectors/googleMaps";
+import { fetchTripAdvisorReviews } from "./reviewConnectors/tripadvisor";
 import type { ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
@@ -99,9 +100,11 @@ async function fetchChannelReviews(connector: ReviewChannelConnector): Promise<R
   switch (connector.channel) {
     case ReviewChannel.GOOGLE_MAPS:
       return fetchGoogleMapsReviews({ placeId: connector.externalId, sinceDate: connector.lastSyncAt });
+    case ReviewChannel.TRIPADVISOR:
+      return fetchTripAdvisorReviews({ listingUrl: connector.externalId, sinceDate: connector.lastSyncAt });
     default:
-      // TripAdvisor, Booking, Facebook, Instagram e Reclame Aqui entram nas próximas etapas do
-      // módulo (ver plano de implementação) — cada um replicando o mesmo padrão de googleMaps.ts.
+      // Booking, Facebook, Instagram e Reclame Aqui entram nas próximas etapas do módulo (ver plano
+      // de implementação) — cada um replicando o mesmo padrão de googleMaps.ts/tripadvisor.ts.
       return { reviewsFetched: 0, reviews: [], errorMessage: `Canal ${connector.channel} ainda não implementado.` };
   }
 }

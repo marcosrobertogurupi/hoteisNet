@@ -43,9 +43,9 @@ const CHANNEL_INFO: Record<ReviewChannel, { label: string; help: string; placeho
   },
   TRIPADVISOR: {
     label: "TripAdvisor",
-    help: "Canal ainda não disponível para coleta — chega numa próxima etapa do módulo.",
-    placeholder: "URL da página do hotel no TripAdvisor",
-    implemented: false,
+    help: "Cole a URL completa da página do hotel no TripAdvisor.",
+    placeholder: "https://www.tripadvisor.com.br/Hotel_Review-...",
+    implemented: true,
   },
   BOOKING: {
     label: "Booking.com",
