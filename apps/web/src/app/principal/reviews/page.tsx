@@ -30,7 +30,17 @@ interface ReviewItem {
   publishedAt: string;
   sentiment: string;
   responseStatus: string;
+  responseText: string | null;
 }
+
+// Cor por sentimento — dois conjuntos (claro/escuro) porque o projeto segue tema via `isDark`
+// booleano (ThemeContext), não a variante `dark:` do Tailwind (ver o resto deste arquivo/projeto).
+const SENTIMENT_INFO: Record<string, { label: string; dark: string; light: string }> = {
+  POSITIVE: { label: "Positivo", dark: "bg-emerald-500/15 text-emerald-400", light: "bg-emerald-50 text-emerald-700" },
+  NEUTRAL: { label: "Neutro", dark: "bg-slate-700/40 text-slate-300", light: "bg-slate-100 text-slate-600" },
+  NEGATIVE: { label: "Negativo", dark: "bg-orange-500/15 text-orange-400", light: "bg-orange-50 text-orange-700" },
+  CRITICAL: { label: "Crítico", dark: "bg-rose-500/15 text-rose-400", light: "bg-rose-50 text-rose-700" },
+};
 
 // Rótulo, ajuda de configuração e exemplo mostrados no card de cada canal. "help" explica qual
 // identificador o assinante precisa colar — cada canal usa um formato diferente (ver
@@ -370,6 +380,11 @@ function ReviewsPageInner() {
                     <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isDark ? "bg-slate-800 text-slate-300" : "bg-slate-100 text-slate-700"}`}>
                       {CHANNEL_INFO[r.channel].label}
                     </span>
+                    {SENTIMENT_INFO[r.sentiment] && (
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${isDark ? SENTIMENT_INFO[r.sentiment].dark : SENTIMENT_INFO[r.sentiment].light}`}>
+                        {SENTIMENT_INFO[r.sentiment].label}
+                      </span>
+                    )}
                     {r.rating !== null && (
                       <span className="flex items-center gap-1 text-xs font-bold text-amber-500">
                         <Star className="w-3.5 h-3.5 fill-amber-500" /> {r.rating}
@@ -380,6 +395,12 @@ function ReviewsPageInner() {
                   <span className={`text-[11px] ${isDark ? "text-slate-500" : "text-slate-500"}`}>{formatDate(r.publishedAt)}</span>
                 </div>
                 {r.body && <p className={`text-sm ${isDark ? "text-slate-300" : "text-slate-700"}`}>{r.body}</p>}
+                {isAdmin && r.responseStatus === "PENDING_APPROVAL" && r.responseText && (
+                  <div className={`mt-1 p-3 rounded-xl border text-xs ${isDark ? "bg-slate-950/60 border-slate-800" : "bg-slate-50 border-slate-200"}`}>
+                    <p className={`font-bold mb-1 ${isDark ? "text-teal-400" : "text-teal-700"}`}>Rascunho de resposta (IA) — aguardando aprovação</p>
+                    <p className={isDark ? "text-slate-300" : "text-slate-700"}>{r.responseText}</p>
+                  </div>
+                )}
               </div>
             ))}
 

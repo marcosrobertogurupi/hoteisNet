@@ -8,7 +8,8 @@ const PAGE_SIZE = 30;
 // GET /api/tenant/reviews?channel=GOOGLE_MAPS&page=1 — lista os reviews coletados do tenant da
 // sessão, mais recentes primeiro. Qualquer usuário autenticado do tenant pode ver (leitura, sem
 // requireAdmin — quem configura o canal é admin, ver ./connectors/route.ts). select explícito (regra
-// de performance/egress do projeto): rawData e sentimentResult nunca saem daqui.
+// de performance/egress do projeto): rawData e o JSON bruto de sentimentResult nunca saem daqui —
+// só os campos já achatados (sentiment, responseText, responseStatus) que a tela realmente desenha.
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
@@ -40,6 +41,7 @@ export async function GET(req: NextRequest) {
           publishedAt: true,
           sentiment: true,
           responseStatus: true,
+          responseText: true,
         },
         orderBy: { publishedAt: "desc" },
         skip: (page - 1) * PAGE_SIZE,
