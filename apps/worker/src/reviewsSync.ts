@@ -2,8 +2,8 @@
 // Reclame Aqui) — cada canal implementado vive em ./reviewConnectors/*.ts; este arquivo só
 // orquestra: escolhe conectores devidos, chama o conector certo, normaliza/deduplica e persiste.
 //
-// Todos os 6 canais do módulo estão implementados. Análise de sentimento e alertas
-// (HumanEscalation) entram na Fase 2.
+// Todos os 6 canais do módulo estão implementados, com análise de sentimento por IA. Alertas de
+// review crítico (HumanEscalation) ainda não — próxima etapa.
 import { PrismaClient, ReviewChannel, ReviewChannelConnector, TenantStatus } from "@prisma/client";
 import { fetchGoogleMapsReviews } from "./reviewConnectors/googleMaps";
 import { fetchTripAdvisorReviews } from "./reviewConnectors/tripadvisor";
@@ -11,6 +11,7 @@ import { fetchBookingReviews } from "./reviewConnectors/booking";
 import { fetchFacebookReviews } from "./reviewConnectors/facebook";
 import { fetchFacebookCommentsViaGraph, fetchInstagramCommentsViaGraph } from "./reviewConnectors/metaGraph";
 import { fetchReclameAquiComplaints } from "./reviewConnectors/reclameAqui";
+import { analyzeReviewSentiment } from "./reviewSentiment";
 import type { NormalizedReviewInput, ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
@@ -167,18 +168,44 @@ async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
 
     const recentReviews = filterRecentReviews(result.reviews);
 
+    // Buscado uma vez por ciclo de sincronização (não por review) — usado para o prompt da IA e
+    // para respeitar o kill switch do assinante (AIAgentSetting.blocked desliga os dois agentes de
+    // IA do hotel; a análise de sentimento de reviews entra nesse mesmo interruptor em vez de ganhar
+    // um próprio, para não multiplicar toggles de "desligar IA" que o admin precisa lembrar de checar).
+    let hotelName = "o hotel";
+    let aiBlocked = false;
+    if (recentReviews.length > 0) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: connector.tenantId },
+        select: { name: true, tradeName: true, aiAgentSettings: { select: { blocked: true } } },
+      });
+      hotelName = tenant?.tradeName || tenant?.name || hotelName;
+      aiBlocked = tenant?.aiAgentSettings?.blocked ?? false;
+    }
+
     let reviewsNew = 0;
     let reviewsUpdated = 0;
     for (const r of recentReviews) {
       const key = { tenantId_channel_externalId: { tenantId: connector.tenantId, channel: connector.channel, externalId: r.externalId } };
       const existing = await prisma.review.findUnique({ where: key, select: { id: true, rating: true, body: true } });
 
-      // Só reprocessa/reescreve quando nota ou texto mudaram desde a última coleta — evita write
-      // desnecessário (e, na Fase 2, reprocessamento de sentimento) para um review que já conhecemos
-      // e não mudou. Mesma otimização do projeto de referência que originou este módulo.
+      // Só reprocessa/reescreve (inclusive a análise de sentimento) quando nota ou texto mudaram
+      // desde a última coleta — evita write e chamada de IA desnecessários para um review que já
+      // conhecemos e não mudou. Mesma otimização do projeto de referência que originou este módulo.
       const unchanged =
         !!existing && Number(existing.rating ?? -1) === (r.rating ?? -1) && (existing.body || "") === (r.body || "");
       if (unchanged) continue;
+
+      const sentiment = aiBlocked
+        ? null
+        : await analyzeReviewSentiment(prisma, {
+            tenantId: connector.tenantId,
+            hotelName,
+            channel: connector.channel,
+            rating: r.rating ?? null,
+            body: r.body ?? null,
+            authorName: r.authorName ?? null,
+          });
 
       await prisma.review.upsert({
         where: key,
@@ -194,6 +221,16 @@ async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
           url: r.url,
           publishedAt: r.publishedAt,
           rawData: r.rawData as any,
+          ...(sentiment
+            ? {
+                sentiment: sentiment.sentiment,
+                sentimentResult: sentiment as any,
+                // Rascunho fica sempre pendente de aprovação nesta fase — nada publica de fato no
+                // canal ainda (ver comentário no topo de reviewSentiment.ts).
+                responseText: sentiment.replyDraft,
+                responseStatus: sentiment.replyDraft ? "PENDING_APPROVAL" : "NONE",
+              }
+            : {}),
         },
         update: {
           rating: r.rating,
@@ -203,6 +240,14 @@ async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
           url: r.url,
           rawData: r.rawData as any,
           collectedAt: new Date(),
+          ...(sentiment
+            ? {
+                sentiment: sentiment.sentiment,
+                sentimentResult: sentiment as any,
+                responseText: sentiment.replyDraft,
+                responseStatus: sentiment.replyDraft ? "PENDING_APPROVAL" : "NONE",
+              }
+            : {}),
         },
       });
       if (existing) reviewsUpdated++;

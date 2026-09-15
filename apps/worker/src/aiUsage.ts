@@ -10,6 +10,7 @@ import type { PrismaClient } from "@prisma/client";
 export const WORKER_AI_FEATURES = {
   OPERATIONAL_MONITORING: "operational_monitoring",
   OPERATIONAL_KNOWLEDGE_DRIFT: "operational_knowledge_drift",
+  REVIEW_SENTIMENT_ANALYSIS: "review_sentiment_analysis",
 } as const;
 export type WorkerAiFeature = (typeof WORKER_AI_FEATURES)[keyof typeof WORKER_AI_FEATURES];
 

@@ -11,6 +11,11 @@ export const AI_FEATURES = {
   PLATFORM_SUPPORT: "platform_support",
   OPERATIONAL_MONITORING: "operational_monitoring",
   OPERATIONAL_KNOWLEDGE_DRIFT: "operational_knowledge_drift",
+  // Módulo de reviews (apps/worker/src/reviewSentiment.ts) — chamado do worker, não daqui, mas a
+  // chave precisa existir aqui também para o admin master escolher/fixar modelo na tela de
+  // Configurações (AiModelSettings.tsx lê AI_FEATURE_LIST). Mantida em sincronia manual com
+  // WORKER_AI_FEATURES em apps/worker/src/aiUsage.ts — mesmo padrão dos recursos operacionais.
+  REVIEW_SENTIMENT_ANALYSIS: "review_sentiment_analysis",
 } as const;
 
 export type AiFeature = (typeof AI_FEATURES)[keyof typeof AI_FEATURES];
