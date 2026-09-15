@@ -203,6 +203,13 @@ model Tenant {
   // stockedRoomPosLocationId aponta o PDV de onde o estoque dos itens vendidos é baixado.
   stockedRoomEnabled           Boolean               @default(false)
   stockedRoomPosLocationId     String?
+  // Funil de satisfação pós-checkout (módulo de reviews) — quando ligado, o worker manda uma
+  // pergunta de 1 a 5 por WhatsApp horas depois do check-out efetivo (StayCheckin.actualCheckOut).
+  // Nota alta redireciona para um review público (Google Maps/TripAdvisor); nota baixa vira
+  // atendimento interno (HumanEscalation) em vez de virar reclamação pública. Desligado por
+  // padrão — precisa de pelo menos um canal com Place ID/URL configurado para fazer sentido.
+  reviewFeedbackEnabled        Boolean               @default(false)
+  reviewFeedbackRequests      ReviewFeedbackRequest[]
   accountPlans               AccountPlan[]
   aiAgentSettings            AIAgentSetting?
   aiUsageLogs                AIUsageLog[]
@@ -1378,6 +1385,7 @@ model StayCheckin {
   whatsappMessages          WhatsappMessage[]
   accountsReceivable        AccountsReceivable[]
   guestBalanceEntries       GuestBalanceEntry[]
+  reviewFeedbackRequests    ReviewFeedbackRequest[]
   comandaSessions           ComandaSession[]
   minibarChecks             RoomMinibarCheck[]
 
@@ -1906,6 +1914,33 @@ model ReviewSyncJob {
 
   @@index([connectorId, startedAt])
   @@map("review_sync_jobs")
+}
+
+// Funil de satisfação pós-checkout — link público de 1 pergunta (nota de 1 a 5) enviado por
+// WhatsApp depois do check-out efetivo (apps/worker/src/reviewFeedbackFunnel.ts), resolvido em
+// GET/POST /api/public/review-feedback/[token]. Mesmo modelo de link público já usado no
+// pré-check-in (PreCheckinLink): token opaco de 32 bytes, nunca aceita tenantId/stayCheckinId do
+// cliente — tudo resolvido a partir do token no servidor. Nota alta redireciona para um review
+// público (Google Maps/TripAdvisor); nota baixa vira HumanEscalation em vez de review público.
+model ReviewFeedbackRequest {
+  id              String        @id @default(uuid())
+  tenantId        String
+  stayCheckinId   String
+  token           String        @unique
+  status          String        @default("PENDING") // PENDING | OPENED | COMPLETED | EXPIRED
+  satisfaction    Int? // 1-5, preenchido quando o hóspede responde
+  outcome         String? // "REDIRECTED_TO_REVIEW" | "ESCALATED_INTERNALLY"
+  redirectChannel ReviewChannel?
+  expiresAt       DateTime
+  sentAt          DateTime?
+  openedAt        DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stayCheckin     StayCheckin   @relation(fields: [stayCheckinId], references: [id], onDelete: Cascade)
+
+  @@index([stayCheckinId])
+  @@map("review_feedback_requests")
 }
 
 // Credenciais e configuração da transmissão eletrônica ao SNRHos (FNRH Digital, Ministério do
