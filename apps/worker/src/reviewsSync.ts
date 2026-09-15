@@ -2,13 +2,15 @@
 // Reclame Aqui) — cada canal implementado vive em ./reviewConnectors/*.ts; este arquivo só
 // orquestra: escolhe conectores devidos, chama o conector certo, normaliza/deduplica e persiste.
 //
-// GOOGLE_MAPS, TRIPADVISOR e BOOKING estão implementados (fetchChannelReviews trata os demais
-// canais como "ainda não implementado", registrando isso como erro do ciclo — não quebra o worker).
-// Análise de sentimento e alertas (HumanEscalation) entram na Fase 2.
+// GOOGLE_MAPS, TRIPADVISOR, BOOKING, FACEBOOK e INSTAGRAM estão implementados (fetchChannelReviews
+// trata os demais canais como "ainda não implementado", registrando isso como erro do ciclo — não
+// quebra o worker). Análise de sentimento e alertas (HumanEscalation) entram na Fase 2.
 import { PrismaClient, ReviewChannel, ReviewChannelConnector, TenantStatus } from "@prisma/client";
 import { fetchGoogleMapsReviews } from "./reviewConnectors/googleMaps";
 import { fetchTripAdvisorReviews } from "./reviewConnectors/tripadvisor";
 import { fetchBookingReviews } from "./reviewConnectors/booking";
+import { fetchFacebookReviews } from "./reviewConnectors/facebook";
+import { fetchFacebookCommentsViaGraph, fetchInstagramCommentsViaGraph } from "./reviewConnectors/metaGraph";
 import type { ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
@@ -105,9 +107,32 @@ async function fetchChannelReviews(connector: ReviewChannelConnector): Promise<R
       return fetchTripAdvisorReviews({ listingUrl: connector.externalId, sinceDate: connector.lastSyncAt });
     case ReviewChannel.BOOKING:
       return fetchBookingReviews({ hotelUrl: connector.externalId, sinceDate: connector.lastSyncAt });
+    case ReviewChannel.FACEBOOK:
+      // Camada 1 (API oficial via OAuth) tem prioridade sobre a camada 2 (Apify) por instrução
+      // explícita do assinante — inverso da ordem usada no projeto de referência que originou este
+      // módulo, onde Apify era a estratégia principal e a Graph API só o fallback.
+      if (connector.oauthAccessTokenEnc) {
+        return fetchFacebookCommentsViaGraph({
+          pageId: connector.externalId!,
+          tokenEnc: connector.oauthAccessTokenEnc,
+          sinceDate: connector.lastSyncAt,
+        });
+      }
+      return fetchFacebookReviews({ pageUrl: connector.externalId, sinceDate: connector.lastSyncAt });
+    case ReviewChannel.INSTAGRAM:
+      // Sem fallback Apify nesta fase — Instagram não tem um conceito nativo de "review" como os
+      // demais canais (nem sequer nota), só comentários/menções; a coleta via Apify desse tipo de
+      // dado fica para uma próxima etapa se a OAuth não se mostrar suficiente na prática.
+      if (connector.oauthAccessTokenEnc) {
+        return fetchInstagramCommentsViaGraph({
+          igUserId: connector.externalId!,
+          tokenEnc: connector.oauthAccessTokenEnc,
+          sinceDate: connector.lastSyncAt,
+        });
+      }
+      return { reviewsFetched: 0, reviews: [], errorMessage: "Conecte o Instagram via OAuth em Cadastros → Reviews." };
     default:
-      // Facebook, Instagram e Reclame Aqui entram nas próximas etapas do módulo (ver plano de
-      // implementação) — cada um replicando o mesmo padrão dos conectores já implementados.
+      // Reclame Aqui entra numa próxima etapa do módulo (ver plano de implementação).
       return { reviewsFetched: 0, reviews: [], errorMessage: `Canal ${connector.channel} ainda não implementado.` };
   }
 }

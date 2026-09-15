@@ -1807,8 +1807,16 @@ model ReviewChannelConnector {
   externalId String?
   // Config extra específica do canal (ex.: listingUrl auto-descoberta no TripAdvisor). Nunca guarda
   // segredo/token de API aqui — regra 6 do CLAUDE.md (segredo de terceiro nunca em coluna livre sem
-  // necessidade; quando um canal precisar de OAuth próprio por tenant, isso ganha campo dedicado).
+  // necessidade; quando um canal precisar de OAuth próprio por tenant, isso ganha campo dedicado,
+  // ver oauthAccessTokenEnc abaixo).
   config       Json      @default("{}")
+  // Token de acesso OAuth (Page Access Token da Meta, usado tanto para Facebook quanto para a conta
+  // Instagram Business vinculada à mesma página) — cifrado com apps/web/src/lib/secretBox.ts
+  // (AES-256-GCM) antes de gravar, nunca em texto puro. null enquanto o assinante não conectou via
+  // OAuth (canal ainda funciona só pelo fallback Apify, quando implementado). Preenchido pelo
+  // callback de OAuth em GET /api/tenant/reviews/meta/callback.
+  oauthAccessTokenEnc  String?
+  oauthTokenExpiresAt  DateTime?
   lastSyncAt   DateTime?
   nextSyncAt   DateTime?
   errorMessage String?

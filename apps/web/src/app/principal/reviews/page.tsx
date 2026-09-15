@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Star, RefreshCw, CheckCircle2, AlertTriangle, Circle, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Star, RefreshCw, CheckCircle2, AlertTriangle, Circle, Loader2, ChevronLeft, ChevronRight, Facebook } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
 import { useToast } from "@/context/ToastContext";
@@ -34,7 +35,10 @@ interface ReviewItem {
 // Rótulo, ajuda de configuração e exemplo mostrados no card de cada canal. "help" explica qual
 // identificador o assinante precisa colar — cada canal usa um formato diferente (ver
 // apps/worker/src/reviewConnectors/*.ts para o que cada um espera).
-const CHANNEL_INFO: Record<ReviewChannel, { label: string; help: string; placeholder: string; implemented: boolean }> = {
+const CHANNEL_INFO: Record<
+  ReviewChannel,
+  { label: string; help: string; placeholder: string; implemented: boolean; oauth?: boolean }
+> = {
   GOOGLE_MAPS: {
     label: "Google Maps",
     help: "Cole o Place ID do seu hotel no Google Maps.",
@@ -53,17 +57,23 @@ const CHANNEL_INFO: Record<ReviewChannel, { label: string; help: string; placeho
     placeholder: "https://www.booking.com/hotel/br/...",
     implemented: true,
   },
+  // Facebook e Instagram usam uma única conexão via OAuth (o Facebook conectado entrega também o
+  // Instagram Business vinculado à mesma página, quando existir) — ver
+  // apps/web/src/app/api/tenant/reviews/meta/connect/route.ts. Sem input de texto: o botão navega
+  // direto para o fluxo de autorização do Facebook.
   FACEBOOK: {
     label: "Facebook",
-    help: "Canal ainda não disponível para coleta — chega numa próxima etapa do módulo.",
-    placeholder: "URL da página do Facebook",
-    implemented: false,
+    help: "Conecte a página do Facebook do hotel — a mesma conexão já traz o Instagram vinculado, se houver.",
+    placeholder: "",
+    implemented: true,
+    oauth: true,
   },
   INSTAGRAM: {
     label: "Instagram",
-    help: "Canal ainda não disponível para coleta — chega numa próxima etapa do módulo.",
-    placeholder: "@usuário do Instagram",
-    implemented: false,
+    help: "Conectado automaticamente junto com o Facebook (Instagram Business vinculado à página).",
+    placeholder: "",
+    implemented: true,
+    oauth: true,
   },
   RECLAME_AQUI: {
     label: "Reclame Aqui",
@@ -86,12 +96,43 @@ function formatDate(iso: string | null): string {
   return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+const META_ERROR_LABELS: Record<string, string> = {
+  conexao_recusada: "Conexão com o Facebook recusada ou cancelada.",
+  state_invalido: "Sessão da conexão expirou — tente novamente.",
+  app_nao_configurado: "Integração com o Facebook não configurada — contate o suporte.",
+  nenhuma_pagina_encontrada: "Nenhuma página do Facebook encontrada nessa conta.",
+  falha_na_conexao: "Falha ao concluir a conexão com o Facebook.",
+};
+
 export default function ReviewsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ReviewsPageInner />
+    </Suspense>
+  );
+}
+
+function ReviewsPageInner() {
   const { theme } = useTheme();
   const isDark = theme.isDark;
   const { user } = useSession();
   const toast = useToast();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const isAdmin = user ? ["SUPER_ADMIN", "TENANT_ADMIN"].includes(user.role) : false;
+
+  // Retorno do OAuth do Facebook (GET /api/tenant/reviews/meta/callback) — mostra o resultado uma
+  // única vez e limpa a query string, senão o toast reaparece a cada re-render/navegação de volta.
+  useEffect(() => {
+    const sucesso = searchParams.get("meta_sucesso");
+    const erro = searchParams.get("meta_erro");
+    if (!sucesso && !erro) return;
+    if (sucesso === "facebook_e_instagram_conectados") toast.success("Facebook e Instagram conectados com sucesso.");
+    else if (sucesso === "facebook_conectado") toast.success("Facebook conectado com sucesso.");
+    else if (erro) toast.error(META_ERROR_LABELS[erro] || "Não foi possível conectar ao Facebook.");
+    router.replace("/principal/reviews");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [editingChannel, setEditingChannel] = useState<ReviewChannel | null>(null);
@@ -224,7 +265,27 @@ export default function ReviewsPage() {
                       <p className={`text-[11px] ${isDark ? "text-slate-500" : "text-slate-500"}`}>{info.help}</p>
                     )}
 
-                    {info.implemented && !isEditing && (
+                    {info.oauth && (
+                      <>
+                        <p className={`text-[11px] ${isDark ? "text-slate-400" : "text-slate-600"}`}>{info.help}</p>
+                        {c.status === "ACTIVE" && (
+                          <p className={`text-[11px] ${isDark ? "text-slate-500" : "text-slate-500"}`}>
+                            Última coleta: {formatDate(c.lastSyncAt)}
+                          </p>
+                        )}
+                        {c.errorMessage && <p className="text-[11px] text-rose-500 truncate" title={c.errorMessage}>{c.errorMessage}</p>}
+                        {c.channel === "FACEBOOK" && (
+                          <a
+                            href="/api/tenant/reviews/meta/connect"
+                            className="w-full mt-1 px-3 py-1.5 rounded-lg text-xs font-bold transition bg-[#1877F2] hover:bg-[#0d65d9] text-white flex items-center justify-center gap-1.5"
+                          >
+                            <Facebook className="w-3.5 h-3.5" /> {c.status === "ACTIVE" ? "Reconectar" : "Conectar via Facebook"}
+                          </a>
+                        )}
+                      </>
+                    )}
+
+                    {info.implemented && !info.oauth && !isEditing && (
                       <>
                         <p className={`text-[11px] truncate ${isDark ? "text-slate-400" : "text-slate-600"}`} title={c.externalId || undefined}>
                           {c.externalId ? `ID: ${c.externalId}` : info.help}
@@ -242,7 +303,7 @@ export default function ReviewsPage() {
                       </>
                     )}
 
-                    {info.implemented && isEditing && (
+                    {info.implemented && !info.oauth && isEditing && (
                       <div className="space-y-2">
                         <input
                           type="text"
