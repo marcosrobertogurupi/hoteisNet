@@ -1,5 +1,17 @@
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import {
+  ArrowRight,
+  BedDouble,
+  CalendarCheck,
+  FileSignature,
+  MessageCircle,
+  Radar,
+  Users,
+  Sparkles,
+  Wallet,
+  PackageSearch,
+  type LucideIcon,
+} from "lucide-react";
 
 const serif = { fontFamily: "'Newsreader', Georgia, 'Times New Roman', serif" } as const;
 const sans = { fontFamily: "'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif" } as const;
@@ -25,11 +37,72 @@ const CELL_DOT: Record<string, string | null> = {
 const PINGING = new Set([1, 6, 9]);
 
 const FEATURES = [
-  "FNRH Digital & SNRHos",
-  "Automação WhatsApp",
-  "Faturamento empresarial",
-  "Mapa de quartos Gantt",
-  "Agente de IA autônomo",
+  "Ficha do hóspede sem papel",
+  "Atendimento automático no WhatsApp",
+  "Faturamento para empresas parceiras",
+  "Mapa de quartos em tempo real",
+  "Um vigia que nunca dorme",
+  "Fila de espera avisada na hora",
+  "Governança que se organiza sozinha",
+];
+
+const FEATURE_CARDS: Array<{
+  icon: LucideIcon;
+  title: string;
+  desc: string;
+  autonomous?: boolean;
+}> = [
+  {
+    icon: BedDouble,
+    title: "Mapa de quartos ao vivo",
+    desc: "O status de cada quarto muda de cor sozinho conforme a operação acontece. Um clique resolve: marcar como limpo, lançar um consumo, fazer o check-out.",
+  },
+  {
+    icon: CalendarCheck,
+    title: "Reservas sem risco de conflito",
+    desc: "Toda tentativa de reservar um quarto que já está ocupado naquele período é barrada na hora, sem precisar de ninguém conferindo a planilha.",
+    autonomous: true,
+  },
+  {
+    icon: FileSignature,
+    title: "Ficha do hóspede, preenchida à distância",
+    desc: "Horas antes da chegada, o hóspede recebe um link pelo WhatsApp, preenche os próprios dados e assina pelo celular. O envio ao órgão do governo responsável acontece sozinho, sem ninguém precisar lembrar.",
+    autonomous: true,
+  },
+  {
+    icon: MessageCircle,
+    title: "Atendimento pelo WhatsApp a qualquer hora",
+    desc: "Um assistente automático informa disponibilidade e preços, envia fotos dos quartos e pode até fechar a reserva sozinho, sempre dentro das regras que você define. Quando algo foge do script, a recepção é avisada na hora.",
+    autonomous: true,
+  },
+  {
+    icon: Radar,
+    title: "Um vigia que nunca tira folga",
+    desc: "A operação é observada 24 horas por dia: um quarto parado demais na limpeza, um prazo perto de vencer, o WhatsApp do hotel fora do ar — o aviso chega para quem precisa saber assim que o problema aparece.",
+    autonomous: true,
+  },
+  {
+    icon: Users,
+    title: "Fila de espera que se resolve sozinha",
+    desc: "Sem vaga para o período pedido, o hóspede entra numa fila de espera. Assim que um quarto libera, o primeiro da fila é avisado automaticamente — sem planilha, sem ninguém de olho no calendário.",
+    autonomous: true,
+  },
+  {
+    icon: Sparkles,
+    title: "Governança organizada sozinha",
+    desc: "Todo dia, a arrumação dos quartos ocupados é distribuída automaticamente entre a equipe de limpeza, e os quartos com chegada prevista para hoje sobem para o topo da fila por conta própria.",
+    autonomous: true,
+  },
+  {
+    icon: Wallet,
+    title: "Financeiro sempre fechado",
+    desc: "Caixa da recepção, contas a pagar e a receber, faturamento para empresas parceiras — tudo em um só lugar, com cada centavo rastreado por operador e por turno.",
+  },
+  {
+    icon: PackageSearch,
+    title: "Loja e estoque ligados ao quarto",
+    desc: "O consumo do frigobar ou do restaurante entra direto na conta do hóspede, e o estoque de cada ponto de venda se atualiza sozinho.",
+  },
 ];
 
 export default function HomePage() {
@@ -109,7 +182,7 @@ export default function HomePage() {
                 Hoteis.Net
               </span>
               <span className="mt-1.5 block whitespace-nowrap text-[9px] uppercase tracking-[0.18em] text-[#6B6862] md:text-[11px] md:tracking-[0.2em]">
-                Plataforma Cloud PMS
+                Gestão Hoteleira na Nuvem
               </span>
             </div>
           </div>
@@ -122,7 +195,7 @@ export default function HomePage() {
               Portal SuperAdmin
             </Link>
             <Link
-              href="/app"
+              href="/principal"
               className="hn-cta whitespace-nowrap rounded-full border border-[#1C1B18] px-4 py-2 text-xs font-semibold text-[#1C1B18] hover:bg-[#1C1B18] hover:text-[#FBFAF7] md:px-5 md:py-2.5 md:text-sm"
             >
               Acesso Assinantes
@@ -134,25 +207,25 @@ export default function HomePage() {
         <section className="grid grid-cols-1 items-center gap-9 pb-16 md:grid-cols-12 md:pb-[76px]">
           <div className="md:col-span-7">
             <p className="hn-rise mb-6 text-xs uppercase tracking-[0.16em] text-[#6B6862]" style={{ animationDelay: "80ms" }}>
-              PMS na nuvem&nbsp;&nbsp;·&nbsp;&nbsp;hotéis e pousadas
+              Gestão hoteleira na nuvem&nbsp;&nbsp;·&nbsp;&nbsp;hotéis e pousadas
             </p>
             <h1
               style={{ ...serif, animationDelay: "150ms" }}
               className="hn-rise text-[40px] font-medium leading-[1.05] tracking-tight md:text-[56px]"
             >
               Gestão hoteleira completa,{" "}
-              <span className="italic text-[#0F6E68]">do check&#8209;in à nota fiscal</span>.
+              <span className="italic text-[#0F6E68]">com boa parte da rotina no automático</span>.
             </h1>
             <p
               className="hn-rise mt-6 max-w-[30rem] text-base leading-relaxed text-[#4A4842] md:text-[17px]"
               style={{ animationDelay: "240ms" }}
             >
-              Mapa de quartos interativo, FNRH com assinatura digital, faturamento para
-              empresas e um agente de IA que atende seus hóspedes no WhatsApp.
+              Mapa de quartos em tempo real, ficha do hóspede assinada pelo próprio celular e um
+              assistente que atende no WhatsApp e cuida da operação sozinho, 24 horas por dia.
             </p>
             <div className="hn-rise mt-8 flex flex-wrap gap-3.5" style={{ animationDelay: "330ms" }}>
               <Link
-                href="/app"
+                href="/principal"
                 className="hn-cta rounded-full bg-[#0F6E68] px-7 py-3 text-sm font-semibold text-[#FBFAF7] shadow-[0_10px_30px_-12px_rgba(15,110,104,0.6)] hover:bg-[#0B534E] hover:shadow-[0_16px_36px_-12px_rgba(15,110,104,0.7)]"
               >
                 Acessar plataforma
@@ -204,10 +277,53 @@ export default function HomePage() {
           </div>
         </section>
 
+        {/* Recursos — operação com boa parte no automático */}
+        <section className="pb-16 md:pb-[76px]">
+          <div className="hn-rise mb-10 max-w-2xl" style={{ animationDelay: "460ms" }}>
+            <p className="mb-3 text-xs uppercase tracking-[0.16em] text-[#6B6862]">Operação do dia a dia</p>
+            <h2 style={serif} className="text-[28px] font-medium leading-tight tracking-tight md:text-[38px]">
+              Uma equipe extra que <span className="italic text-[#0F6E68]">trabalha sozinha</span> nos bastidores.
+            </h2>
+            <p className="mt-4 text-[15px] leading-relaxed text-[#4A4842] md:text-base">
+              Boa parte da rotina do hotel acontece sem ninguém precisar acionar nada. Enquanto sua
+              equipe cuida do hóspede, o sistema cuida do resto — e avisa na hora quando algo
+              precisa de uma decisão sua.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {FEATURE_CARDS.map((f, i) => {
+              const Icon = f.icon;
+              return (
+                <div
+                  key={f.title}
+                  className="hn-card hn-rise flex flex-col rounded-[20px] border border-[#E7E3DA] bg-white p-7"
+                  style={{ animationDelay: `${520 + i * 60}ms` }}
+                >
+                  <div className="mb-4 flex items-center justify-between">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#F1EEE7] text-[#0F6E68]">
+                      <Icon className="h-5 w-5" />
+                    </span>
+                    {f.autonomous && (
+                      <span className="rounded-full bg-[#FBF1DC] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#C98A2B]">
+                        Trabalha sozinho
+                      </span>
+                    )}
+                  </div>
+                  <h3 style={serif} className="mb-2 text-[18px] font-medium leading-snug">
+                    {f.title}
+                  </h3>
+                  <p className="text-[13.5px] leading-relaxed text-[#4A4842]">{f.desc}</p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
         {/* Portais */}
         <section className="grid grid-cols-1 gap-5 pb-14 md:grid-cols-2">
           <Link
-            href="/app"
+            href="/principal"
             className="hn-card hn-rise group flex flex-col rounded-[20px] border border-[#E7E3DA] bg-white p-8"
             style={{ animationDelay: "500ms" }}
           >
@@ -216,11 +332,11 @@ export default function HomePage() {
               <ArrowRight className="hn-arrow h-5 w-5 text-[#C9C3B6]" />
             </h2>
             <p className="mb-6 text-sm leading-relaxed text-[#4A4842]">
-              Reservas, mapa de quartos, check&#8209;in FNRH, governança, consumo e suporte
-              por IA — a operação do hotel em um só lugar.
+              Reservas, mapa de quartos, ficha digital do hóspede, governança, consumo e um
+              assistente automático de atendimento — a operação do hotel em um só lugar.
             </p>
             <div className="mt-auto flex items-center justify-between border-t border-[#EFEBE2] pt-4 text-xs text-[#6B6862]">
-              <span>Ambiente operacional PMS</span>
+              <span>Ambiente operacional do hotel</span>
               <span style={mono} className="text-[#0F6E68]">app.hoteisnet.com</span>
             </div>
           </Link>
@@ -231,15 +347,15 @@ export default function HomePage() {
             style={{ animationDelay: "580ms" }}
           >
             <h2 style={serif} className="mb-2.5 flex items-center justify-between text-[25px] font-medium">
-              Portal SuperAdmin SaaS
+              Portal SuperAdmin
               <ArrowRight className="hn-arrow h-5 w-5 text-[#C9C3B6]" />
             </h2>
             <p className="mb-6 text-sm leading-relaxed text-[#4A4842]">
-              Gestão de assinantes, faturamento MRR / ARR, telemetria de consumo de IA e
-              central de suporte master.
+              Gestão dos hotéis assinantes, faturamento, acompanhamento do assistente de IA e
+              central de suporte da plataforma.
             </p>
             <div className="mt-auto flex items-center justify-between border-t border-[#EFEBE2] pt-4 text-xs text-[#6B6862]">
-              <span>Console de gestão SaaS</span>
+              <span>Central de gestão da plataforma</span>
               <span style={mono} className="text-[#0F6E68]">admin.hoteisnet.com</span>
             </div>
           </Link>
