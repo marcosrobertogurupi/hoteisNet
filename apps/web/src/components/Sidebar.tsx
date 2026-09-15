@@ -26,6 +26,7 @@ import {
   FileCheck2,
   UtensilsCrossed,
   ClipboardCheck,
+  Star,
   type LucideIcon,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
@@ -117,6 +118,7 @@ export default function Sidebar() {
         { href: "/app/stock", label: "Controle de Estoque", icon: Package },
         { href: "/app/stock/contagens", label: "Conferência de Contagem de Estoque", icon: ClipboardCheck, iconColor: c("text-emerald-600", "text-[#10B981]") },
         { href: "/app/fiscal", label: "Fiscal & PDV", icon: FileText, iconColor: c("text-cyan-600", "text-[#38BDF8]") },
+        { href: "/principal/reviews", label: "Reviews & Reputação", icon: Star, iconColor: c("text-amber-600", "text-[#F59E0B]") },
         { href: "/app/settings", label: "Configurações do Sistema", icon: Settings, iconColor: c("text-amber-600", "text-[#F59E0B]") },
         { href: "/app/support", label: "SUPORTE ao Sistema", icon: LifeBuoy, iconColor: "text-[#F59E0B]", pulse: true },
       ],

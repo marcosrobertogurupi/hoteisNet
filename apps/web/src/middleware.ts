@@ -31,6 +31,11 @@ const PUBLIC_API_PREFIXES = [
   // Agente fiscal do PDV do restaurante: autentica com o token do caixa (Bearer), verificado
   // em lib/agentAuth.ts — cada rota /api/pdv/agente/* faz a própria checagem.
   "/api/pdv/agente/",
+  // Callback do OAuth da Meta (Facebook/Instagram) — o Facebook redireciona o navegador do
+  // admin de volta para cá após o consentimento; é uma navegação de topo entre domínios, então o
+  // cookie de sessão pode não chegar (SameSite/ITP). A rota nunca confia em sessão: o tenantId vem
+  // só do `state` que ela mesma gerou em /api/tenant/reviews/meta/connect (esse sim, admin only).
+  "/api/tenant/reviews/meta/callback",
 ];
 
 // Rotas de governança (app mobile da housekeeper) usam um cookie de sessão próprio,
