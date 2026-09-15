@@ -49,9 +49,9 @@ const CHANNEL_INFO: Record<ReviewChannel, { label: string; help: string; placeho
   },
   BOOKING: {
     label: "Booking.com",
-    help: "Canal ainda não disponível para coleta — chega numa próxima etapa do módulo.",
-    placeholder: "URL do hotel no Booking.com",
-    implemented: false,
+    help: "Cole a URL completa da página do hotel no Booking.com.",
+    placeholder: "https://www.booking.com/hotel/br/...",
+    implemented: true,
   },
   FACEBOOK: {
     label: "Facebook",

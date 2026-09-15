@@ -2,12 +2,13 @@
 // Reclame Aqui) — cada canal implementado vive em ./reviewConnectors/*.ts; este arquivo só
 // orquestra: escolhe conectores devidos, chama o conector certo, normaliza/deduplica e persiste.
 //
-// GOOGLE_MAPS e TRIPADVISOR estão implementados (fetchChannelReviews trata os demais canais como
-// "ainda não implementado", registrando isso como erro do ciclo — não quebra o worker). Análise de
-// sentimento e alertas (HumanEscalation) entram na Fase 2.
+// GOOGLE_MAPS, TRIPADVISOR e BOOKING estão implementados (fetchChannelReviews trata os demais
+// canais como "ainda não implementado", registrando isso como erro do ciclo — não quebra o worker).
+// Análise de sentimento e alertas (HumanEscalation) entram na Fase 2.
 import { PrismaClient, ReviewChannel, ReviewChannelConnector, TenantStatus } from "@prisma/client";
 import { fetchGoogleMapsReviews } from "./reviewConnectors/googleMaps";
 import { fetchTripAdvisorReviews } from "./reviewConnectors/tripadvisor";
+import { fetchBookingReviews } from "./reviewConnectors/booking";
 import type { ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
@@ -102,9 +103,11 @@ async function fetchChannelReviews(connector: ReviewChannelConnector): Promise<R
       return fetchGoogleMapsReviews({ placeId: connector.externalId, sinceDate: connector.lastSyncAt });
     case ReviewChannel.TRIPADVISOR:
       return fetchTripAdvisorReviews({ listingUrl: connector.externalId, sinceDate: connector.lastSyncAt });
+    case ReviewChannel.BOOKING:
+      return fetchBookingReviews({ hotelUrl: connector.externalId, sinceDate: connector.lastSyncAt });
     default:
-      // Booking, Facebook, Instagram e Reclame Aqui entram nas próximas etapas do módulo (ver plano
-      // de implementação) — cada um replicando o mesmo padrão de googleMaps.ts/tripadvisor.ts.
+      // Facebook, Instagram e Reclame Aqui entram nas próximas etapas do módulo (ver plano de
+      // implementação) — cada um replicando o mesmo padrão dos conectores já implementados.
       return { reviewsFetched: 0, reviews: [], errorMessage: `Canal ${connector.channel} ainda não implementado.` };
   }
 }
