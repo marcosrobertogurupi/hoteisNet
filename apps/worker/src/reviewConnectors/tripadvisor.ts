@@ -15,7 +15,11 @@ import type { NormalizedReviewInput, ReviewConnectorResult } from "./types";
 const APIFY_TOKEN = process.env.APIFY_TOKEN || "";
 const ACTOR_ID = "web_wanderer~tripadvisor-reviews-scraper";
 // Teto de reviews por sincronização — guard-rail de custo, mesmo raciocínio de googleMaps.ts.
-const MAX_REVIEWS_PER_SYNC = 100;
+// Bem menor em sincronizações incrementais (conector já rodou antes): o normal de um ciclo de 12h é
+// 0-5 reviews novos, não 100 — pedir 100 a cada ciclo pagava e descartava dezenas de reviews antigos
+// a cada sincronização (achado real em produção em 16/09/2026, ver PRD.md Fase 29).
+const MAX_REVIEWS_BACKFILL = 100;
+const MAX_REVIEWS_INCREMENTAL = 20;
 const APIFY_TIMEOUT_MS = 150_000;
 
 // Formato do item devolvido pelo ator (campos em snake_case) — confirmado contra uma execução real
@@ -34,10 +38,6 @@ interface ApifyTripAdvisorReviewItem {
 
 export async function fetchTripAdvisorReviews(params: {
   listingUrl: string | null;
-  // Aceito por simetria com googleMaps.ts, mas não usado: o input schema deste ator (confirmado na
-  // documentação do Apify Store) não tem parâmetro de corte de data — a sincronização incremental
-  // depende só da deduplicação por rating/body já feita em reviewsSync.ts, não de pedir ao ator só
-  // o que é novo.
   sinceDate: Date | null;
 }): Promise<ReviewConnectorResult> {
   if (!APIFY_TOKEN) {
@@ -54,12 +54,30 @@ export async function fetchTripAdvisorReviews(params: {
   //    em vez do idioma original do review — crítico para um hotel brasileiro.
   //  - sortBy: "most_recent" (não "newest" — outro nome de valor específico deste ator).
   //  - include_personal_information: sem isso, author/author_username vêm vazios.
+  //
+  // Corte de data: a documentação pública deste ator não confirma um parâmetro de corte por data, e
+  // sem ele o ator devolvia até 100 reviews a cada sincronização, mesmo com só 0-5 reviews novos
+  // desde o último ciclo — cobrados pela Apify e descartados depois por filterRecentReviews em
+  // reviewsSync.ts (achado real em produção em 16/09/2026). Manda vários nomes candidatos ao mesmo
+  // tempo (custo zero se o ator ignorar os que não reconhece) — mesma estratégia defensiva do
+  // projeto de referência que originou este módulo (radar-views/Reputei) diante de um schema de ator
+  // da comunidade não totalmente documentado. Some com o teto bem menor em sincronizações
+  // incrementais (MAX_REVIEWS_INCREMENTAL) como segunda linha de defesa contra o mesmo problema.
+  const reviewsStartDate = params.sinceDate
+    ? new Date(params.sinceDate.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const maxReviews = params.sinceDate ? MAX_REVIEWS_INCREMENTAL : MAX_REVIEWS_BACKFILL;
+
   const input = {
     startUrls: [{ url: params.listingUrl }],
-    maxReviewsPerLocation: MAX_REVIEWS_PER_SYNC,
+    maxReviewsPerLocation: maxReviews,
     sortBy: "most_recent",
     showOriginalReviews: true,
     include_personal_information: true,
+    startDate: reviewsStartDate,
+    reviewsStartDate,
+    publishedAfter: reviewsStartDate,
+    dateFrom: reviewsStartDate,
   };
 
   const url = `https://api.apify.com/v2/acts/${ACTOR_ID}/run-sync-get-dataset-items?token=${encodeURIComponent(APIFY_TOKEN)}`;

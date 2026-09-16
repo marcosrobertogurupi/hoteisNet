@@ -45,14 +45,22 @@ export async function fetchGoogleMapsReviews(params: {
     return { reviewsFetched: 0, reviews: [], errorMessage: "Place ID do Google Maps não configurado." };
   }
 
+  // Corte de data: sincronizações incrementais usam lastSyncAt com 1 dia de margem de segurança (o
+  // ator só aceita corte por dia, não por hora — a margem evita perder reviews publicados mais cedo
+  // no mesmo dia do último sync). Sem lastSyncAt (primeira sincronização do conector), usa o mesmo
+  // corte de 30 dias do resto do módulo em vez de deixar o ator devolver o histórico inteiro (que
+  // seria cobrado pela Apify e só descartado depois por filterRecentReviews em reviewsSync.ts) —
+  // mesma estratégia do projeto de referência que originou este módulo (radar-views/Reputei).
+  const reviewsStartDate = params.sinceDate
+    ? new Date(params.sinceDate.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
   const input = {
     placeIds: [params.placeId],
     maxReviews: MAX_REVIEWS_PER_SYNC,
     reviewsSort: "newest",
     language: "pt-BR",
-    // Corte de data em sincronizações incrementais — evita rebuscar o histórico inteiro a cada
-    // ciclo. Sem lastSyncAt (primeira sincronização), o ator traz o padrão dele (mais recentes).
-    ...(params.sinceDate ? { reviewsStartDate: params.sinceDate.toISOString().slice(0, 10) } : {}),
+    reviewsStartDate,
   };
 
   const url = `https://api.apify.com/v2/acts/${ACTOR_ID}/run-sync-get-dataset-items?token=${encodeURIComponent(APIFY_TOKEN)}`;
