@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import type { prisma } from "@/lib/prisma";
 
 // Helpers do PDV do restaurante (Fase 1): resolução de item vendável do catálogo e recálculo
 // dos totais de um atendimento (ComandaSession).
@@ -100,7 +101,7 @@ export type ResolvedItem = {
 // SEMPRE filtrando pelo tenant — nunca confia no id cru vindo do cliente. Retorna null se não
 // achar. O perfil fiscal é opcional aqui; quem barra a venda sem perfil é a rota de fechamento.
 export async function resolveSellableItem(
-  tx: Prisma.TransactionClient,
+  tx: Prisma.TransactionClient | typeof prisma,
   tenantId: string,
   ref: { dishId?: string | null; productId?: string | null; barcode?: string | null }
 ): Promise<ResolvedItem | null> {

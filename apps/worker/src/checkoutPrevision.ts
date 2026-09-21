@@ -47,7 +47,7 @@ export async function runCheckoutPrevision(): Promise<void> {
 
     const openStays = await prisma.stayCheckin.findMany({
       where: { tenantId: settings.tenantId, isClosed: false },
-      include: { primaryGuest: true, room: true },
+      include: { primaryGuest: true, room: { omit: { photos: true } } },
     });
 
     for (const stay of openStays) {

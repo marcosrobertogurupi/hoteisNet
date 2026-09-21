@@ -1,7 +1,8 @@
-import type { Prisma, PrismaClient, ComandaPaymentMethod, PdvPaymentCategory } from "@prisma/client";
+import type { Prisma, ComandaPaymentMethod, PdvPaymentCategory } from "@prisma/client";
+import type { prisma } from "@/lib/prisma";
 import { round2 } from "@/lib/pdvSale";
 
-type Db = Prisma.TransactionClient | PrismaClient;
+type Db = Prisma.TransactionClient | typeof prisma;
 
 // Lançamento de pagamentos de comanda no caixa. Compartilhado pelo pagamento parcial
 // (adiantamento numa comanda aberta) e pelo acerto no fechamento. Cada linha de pagamento gera

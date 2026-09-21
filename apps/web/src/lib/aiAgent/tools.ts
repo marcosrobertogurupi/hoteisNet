@@ -726,6 +726,7 @@ async function sendRoomPhotos(tenantId: string, guestPhone: string, categoryName
 
   const room = await prisma.room.findFirst({
     where: { tenantId, categoryId: category.id, active: true, photos: { isEmpty: false } },
+    select: { photos: true },
   });
   if (!room || room.photos.length === 0) {
     return { sucesso: false, erro: `Não há fotos cadastradas para a categoria ${category.name}.` };

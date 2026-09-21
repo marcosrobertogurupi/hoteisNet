@@ -194,6 +194,7 @@ export async function POST(req: NextRequest) {
         notes: observacao || null,
       },
       include: { category: true, checkins: true },
+      omit: { photos: false },
     });
 
     return NextResponse.json({ success: true, room: formatRoom(created) }, { status: 201 });
@@ -302,6 +303,9 @@ export async function PATCH(req: NextRequest) {
       prisma.room.findFirst({
         where: { OR: [{ number: target }, { id: target }], tenantId: session.tenantId! },
         include: { category: true, checkins: true },
+        // Só o cadastro de apartamentos (que edita fotos) precisa delas de volta; troca de status
+        // vinda do Mapa de Quartos não.
+        omit: { photos: photos === undefined },
       })
     );
 
