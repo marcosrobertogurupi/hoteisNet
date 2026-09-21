@@ -1,7 +1,9 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
+import { normalizeRoomPhotos, removeRoomPhotoObjects, RoomPhotoError } from "@/lib/roomPhotoStorage";
 
 // Reexecuta uma operação do Prisma uma vez em caso de falha de conexão com o banco
 // (ex.: reconexão "fria" do pool do Supabase após período ocioso), evitando expor
@@ -179,22 +181,44 @@ export async function POST(req: NextRequest) {
     const effectiveTenantId = session!.tenantId!;
     const categoryId = await resolveCategoryId(effectiveTenantId, categoria || "Standard");
 
-    const created = await prisma.room.create({
-      data: {
-        tenantId: effectiveTenantId,
-        categoryId,
-        number: String(numero).trim(),
-        floor: andar || null,
-        bloco: bloco || null,
-        camasCasal: camasCasal ?? 0,
-        camasSolteiro: camasSolteiro ?? 0,
-        caracteristicas: caracteristicas || [],
-        photos: photos || [],
-        status: (mapStatusToDb(status) as any) || "VACANT_CLEAN",
-        notes: observacao || null,
-      },
-      include: { category: true, checkins: true },
-    });
+    // Fotos vão para o Storage (Room.photos guarda só as URLs) — o id do quarto é gerado aqui
+    // para o caminho do arquivo já carregar o quarto a que pertence.
+    const roomId = randomUUID();
+    let photoUrls: string[];
+    try {
+      photoUrls = (await normalizeRoomPhotos(effectiveTenantId, roomId, photos ?? [])).photos;
+    } catch (photoErr) {
+      if (photoErr instanceof RoomPhotoError) {
+        return NextResponse.json({ success: false, error: photoErr.message }, { status: 400 });
+      }
+      throw photoErr;
+    }
+
+    let created;
+    try {
+      created = await prisma.room.create({
+        data: {
+          id: roomId,
+          tenantId: effectiveTenantId,
+          categoryId,
+          number: String(numero).trim(),
+          floor: andar || null,
+          bloco: bloco || null,
+          camasCasal: camasCasal ?? 0,
+          camasSolteiro: camasSolteiro ?? 0,
+          caracteristicas: caracteristicas || [],
+          photos: photoUrls,
+          status: (mapStatusToDb(status) as any) || "VACANT_CLEAN",
+          notes: observacao || null,
+        },
+        include: { category: true, checkins: true },
+        omit: { photos: false },
+      });
+    } catch (createErr) {
+      // Quarto não foi criado (ex.: número duplicado): não deixar as fotos recém-enviadas órfãs.
+      await removeRoomPhotoObjects(effectiveTenantId, photoUrls);
+      throw createErr;
+    }
 
     return NextResponse.json({ success: true, room: formatRoom(created) }, { status: 201 });
   } catch (error: any) {
@@ -269,28 +293,67 @@ export async function PATCH(req: NextRequest) {
     if (camasCasal !== undefined) data.camasCasal = camasCasal;
     if (camasSolteiro !== undefined) data.camasSolteiro = camasSolteiro;
     if (caracteristicas !== undefined) data.caracteristicas = caracteristicas;
-    if (photos !== undefined) data.photos = photos;
     if (categoria !== undefined) {
       data.categoryId = await resolveCategoryId(session.tenantId, categoria);
     }
 
+    // Fotos: data URIs novas sobem para o Storage, URLs já existentes do próprio hotel são mantidas
+    // (Room.photos guarda só URLs). As fotos que saíram da lista viram órfãs e são apagadas do
+    // Storage depois que a gravação no banco der certo.
+    let previousPhotos: string[] = [];
+    let uploadedNow: string[] = [];
+    if (photos !== undefined) {
+      const current = await withDbRetry(() =>
+        prisma.room.findFirst({
+          where: { OR: [{ number: target }, { id: target }], tenantId: session.tenantId! },
+          select: { id: true, photos: true },
+        })
+      );
+      if (!current) {
+        return NextResponse.json({ success: false, error: `Quarto ${target} não encontrado.` }, { status: 404 });
+      }
+      try {
+        const normalized = await normalizeRoomPhotos(session.tenantId, current.id, photos);
+        data.photos = normalized.photos;
+        uploadedNow = normalized.uploaded;
+        previousPhotos = current.photos;
+      } catch (photoErr) {
+        if (photoErr instanceof RoomPhotoError) {
+          return NextResponse.json({ success: false, error: photoErr.message }, { status: 400 });
+        }
+        throw photoErr;
+      }
+    }
+
     // 1. Atualizar no Prisma — sempre restrito ao tenant da sessão, senão um número de quarto
     // comum (ex: "101") podia editar o quarto de outro hotel.
-    const updated = await withDbRetry(() =>
-      prisma.room.updateMany({
-        where: {
-          OR: [
-            { number: target },
-            { id: target },
-          ],
-          tenantId: session.tenantId!,
-        },
-        data,
-      })
-    );
+    let updated;
+    try {
+      updated = await withDbRetry(() =>
+        prisma.room.updateMany({
+          where: {
+            OR: [
+              { number: target },
+              { id: target },
+            ],
+            tenantId: session.tenantId!,
+          },
+          data,
+        })
+      );
+    } catch (updateErr) {
+      await removeRoomPhotoObjects(session.tenantId, uploadedNow);
+      throw updateErr;
+    }
 
     if (updated.count === 0) {
+      await removeRoomPhotoObjects(session.tenantId, uploadedNow);
       return NextResponse.json({ success: false, error: `Quarto ${target} não encontrado.` }, { status: 404 });
+    }
+
+    if (Array.isArray(data.photos)) {
+      const kept = new Set(data.photos as string[]);
+      await removeRoomPhotoObjects(session.tenantId, previousPhotos.filter((url) => !kept.has(url)));
     }
 
     // Prisma e o PostgREST do Supabase apontam para o MESMO banco — o updateMany acima já gravou.
@@ -302,6 +365,9 @@ export async function PATCH(req: NextRequest) {
       prisma.room.findFirst({
         where: { OR: [{ number: target }, { id: target }], tenantId: session.tenantId! },
         include: { category: true, checkins: true },
+        // Só o cadastro de apartamentos (que edita fotos) precisa delas de volta; troca de status
+        // vinda do Mapa de Quartos não.
+        omit: { photos: photos === undefined },
       })
     );
 
@@ -350,6 +416,12 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ success: false, error: "ID do quarto é obrigatório." }, { status: 400 });
     }
 
+    // Lê as fotos antes de apagar para limpar o Storage depois (o quarto some, os arquivos não).
+    const existing = await prisma.room.findFirst({
+      where: { id, tenantId: session!.tenantId! },
+      select: { photos: true },
+    });
+
     let deleted;
     try {
       deleted = await prisma.room.deleteMany({ where: { id, tenantId: session!.tenantId! } });
@@ -368,6 +440,8 @@ export async function DELETE(req: NextRequest) {
     }
 
     // (sem "sync" via supabaseAdmin — Prisma e PostgREST usam o mesmo banco; o deleteMany já apagou)
+
+    if (existing?.photos.length) await removeRoomPhotoObjects(session!.tenantId!, existing.photos);
 
     await logActivity({
       tenantId: session!.tenantId!,

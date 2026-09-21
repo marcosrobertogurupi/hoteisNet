@@ -387,6 +387,7 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   const maintenanceCutoff = new Date(now.getTime() - MAINTENANCE_STUCK_HOURS * 60 * 60 * 1000);
   const stuckMaintenance = await prisma.room.findMany({
     where: { tenantId, active: true, status: "MAINTENANCE", updatedAt: { lt: maintenanceCutoff } },
+    omit: { photos: true },
   });
   for (const room of stuckMaintenance) {
     issues.push({
@@ -400,6 +401,7 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   const dirtyCutoff = new Date(now.getTime() - DIRTY_STUCK_HOURS * 60 * 60 * 1000);
   const stuckDirty = await prisma.room.findMany({
     where: { tenantId, active: true, status: "VACANT_DIRTY", updatedAt: { lt: dirtyCutoff } },
+    omit: { photos: true },
   });
   for (const room of stuckDirty) {
     issues.push({

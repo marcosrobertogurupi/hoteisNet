@@ -59,9 +59,10 @@ export async function fetchAsBase64(url: string): Promise<string | null> {
   }
 }
 
-// Envia uma imagem já salva como data URI base64 (mesmo formato em que `Room.photos` é gravado
-// pelo upload do cadastro de apartamentos — ver CadastroApartamentoModal.tsx) via
-// POST {serverUrl}/send/media, type "image". Mesmo endpoint já usado para PDF em send-reserva.
+// Envia uma imagem via POST {serverUrl}/send/media, type "image" (mesmo endpoint já usado para PDF
+// em send-reserva). `imageDataUri` é o que estiver em `Room.photos`: a URL pública do Supabase Storage
+// (lib/roomPhotoStorage.ts) ou, em quartos ainda não migrados, um data URI base64 — o campo `file`
+// da uazapi aceita os dois.
 export async function sendUazapiImage(phone: string, imageDataUri: string, caption: string | undefined, tenantId?: string): Promise<boolean> {
   if (!phone || !imageDataUri) return false;
 

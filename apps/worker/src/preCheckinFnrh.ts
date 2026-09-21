@@ -38,7 +38,7 @@ export async function runPreCheckinFnrh(): Promise<void> {
       guestPhone: { not: null },
       checkInDate: { gte: now, lte: searchWindowEnd },
     },
-    include: { room: { include: { tenant: { include: { whatsappMessageSettings: true } } } } },
+    include: { room: { omit: { photos: true }, include: { tenant: { include: { whatsappMessageSettings: true } } } } },
   });
 
   for (const reservation of candidates) {

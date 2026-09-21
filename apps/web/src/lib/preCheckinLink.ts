@@ -1,5 +1,6 @@
 import { randomBytes } from "crypto";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { prisma } from "@/lib/prisma";
 
 // Resolve a URL pública do app para montar o link de pré-check-in enviado ao hóspede.
 // Prioriza NEXT_PUBLIC_APP_URL (configurável), cai para VERCEL_URL (preenchida automaticamente
@@ -14,7 +15,7 @@ export function resolveAppBaseUrl(): string {
   return "http://localhost:3000";
 }
 
-type TxClient = PrismaClient | Prisma.TransactionClient;
+type TxClient = typeof prisma | Prisma.TransactionClient;
 
 // Gera um novo link de pré-check-in para a reserva, revogando qualquer link ainda ativo
 // (PENDING/OPENED) que essa mesma reserva já tivesse — só o link mais recente enviado ao
