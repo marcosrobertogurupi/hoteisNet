@@ -37,6 +37,16 @@ const CSP_HEADER_KEY =
   process.env.CSP_ENFORCE === "true" ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only";
 
 const nextConfig = {
+  // O painel do assinante morava em /app e passou a viver em /principal. Favoritos, links de
+  // e-mail/WhatsApp e o `?next=` de sessões antigas ainda apontam para /app/**, então o redirect é
+  // permanente (308) e preserva o restante do caminho e a query string. Redirects do next.config
+  // rodam antes do middleware, e `/app/:path*` só casa o segmento exato "app" — nunca /api nem /apps.
+  async redirects() {
+    return [
+      { source: "/app", destination: "/principal", permanent: true },
+      { source: "/app/:path*", destination: "/principal/:path*", permanent: true },
+    ];
+  },
   async headers() {
     const baseSecurityHeaders = [
       { key: "X-Frame-Options", value: "DENY" },

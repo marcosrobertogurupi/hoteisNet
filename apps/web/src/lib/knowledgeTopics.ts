@@ -1,7 +1,7 @@
 // As 12 áreas canônicas de dúvida de hóspede no atendimento por WhatsApp (levantamento do setor —
 // ver o material de origem "Dúvidas mais recorrentes de hóspedes no atendimento via WhatsApp").
 // Cada tenant tem um HotelKnowledgeTopic por chave; a tela Base de Conhecimento
-// (/app/cadastros/base-conhecimento) semeia cada tópico com o texto-guia abaixo na primeira vez
+// (/principal/cadastros/base-conhecimento) semeia cada tópico com o texto-guia abaixo na primeira vez
 // que é aberta, e o hotel substitui pelo conteúdo real. O agente de atendimento consulta apenas
 // trechos relevantes (via search_knowledge_base), nunca o documento inteiro.
 import type { KnowledgeTopicKey } from "@prisma/client";

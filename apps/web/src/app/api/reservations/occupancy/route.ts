@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 
 // Quartos nesses status contam como "ocupados" — mesma definição usada no Mapa de
-// Quartos (ver counts.OCCUPIED em apps/web/src/app/app/page.tsx) e no worker de snapshot.
+// Quartos (ver counts.OCCUPIED em apps/web/src/app/principal/page.tsx) e no worker de snapshot.
 const OCCUPIED_STATUSES = ["OCCUPIED", "OCCUPIED_CLEANING"];
 
 // GET /api/reservations/occupancy?tenantId=...&hours=24

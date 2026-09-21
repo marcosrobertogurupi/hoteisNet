@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Users, Loader2, Plus, X, Check, KeyRound, Copy, Plug, CheckCircle2, XCircle, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
 import { useConfirm } from "@/context/ConfirmContext";
-import { cadastroUI } from "../../app/cadastros/_ui";
+import { cadastroUI } from "../../principal/cadastros/_ui";
 
 const c = cadastroUI(false);
 

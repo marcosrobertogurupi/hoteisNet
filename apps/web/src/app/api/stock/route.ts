@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
         id: true,
         name: true,
         // Classificação vem do grupo cadastrado; `category` (texto livre) só como fallback
-        // para produtos antigos ainda sem grupo — ver /app/cadastros/produtos.
+        // para produtos antigos ainda sem grupo — ver /principal/cadastros/produtos.
         category: true,
         group: { select: { name: true } },
         generalStock: true,

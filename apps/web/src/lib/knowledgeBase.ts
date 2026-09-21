@@ -1,4 +1,4 @@
-// Helpers da Base de Conhecimento do Hotel (tela /app/cadastros/base-conhecimento).
+// Helpers da Base de Conhecimento do Hotel (tela /principal/cadastros/base-conhecimento).
 //
 // Dois níveis, ambos por tenant:
 //  1. HotelKnowledgeTopic — 12 "documentos" de texto livre, um por área canônica de dúvida

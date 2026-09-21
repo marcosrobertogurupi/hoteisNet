@@ -2065,7 +2065,7 @@ enum EscalationSource {
 // Fila de "precisa de um humano agora" alimentada pelos dois agentes de IA — diferente do
 // AuditLog (que só registra fatos imutáveis do que o agente já fez), aqui existe um estado mutável
 // (pendente → resolvida) que alimenta o sino de alerta visual/sonoro no Mapa de Quartos e Mapa de
-// Reservas (ver apps/web/src/app/app/layout.tsx). Resolução é sempre manual (staff clica "resolver"),
+// Reservas (ver apps/web/src/app/principal/layout.tsx). Resolução é sempre manual (staff clica "resolver"),
 // sem detecção automática nesta v1.
 model HumanEscalation {
   id         String           @id @default(uuid())

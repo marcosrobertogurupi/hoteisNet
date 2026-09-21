@@ -247,7 +247,7 @@ export default function CadastroApartamentoModal({
               <div className="flex items-center justify-between">
                 <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Categoria / Tipo de UH</label>
                 <Link
-                  href="/app/cadastros/categorias-apartamento"
+                  href="/principal/cadastros/categorias-apartamento"
                   target="_blank"
                   className="text-[10px] font-semibold text-teal-600 dark:text-teal-400 hover:underline inline-flex items-center gap-1"
                 >
@@ -272,7 +272,7 @@ export default function CadastroApartamentoModal({
               <div className="flex items-center justify-between">
                 <label className={`text-xs font-semibold ${isDark ? "text-slate-300" : "text-slate-700"}`}>Andar</label>
                 <Link
-                  href="/app/cadastros/andares"
+                  href="/principal/cadastros/andares"
                   target="_blank"
                   className="text-[10px] font-semibold text-teal-600 dark:text-teal-400 hover:underline inline-flex items-center gap-1"
                 >

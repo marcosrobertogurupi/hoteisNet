@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Scale } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
-import { cadastroUI } from "../../app/cadastros/_ui";
+import { cadastroUI } from "../../principal/cadastros/_ui";
 
 const c = cadastroUI(false);
 const usd = (v: number) => `US$ ${v.toFixed(2)}`;

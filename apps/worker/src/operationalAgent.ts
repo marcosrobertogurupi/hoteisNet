@@ -925,7 +925,7 @@ async function runOperationalAgentInner(): Promise<void> {
       if (toNotify.length === 0 && kbAutoNotes.length === 0) continue;
 
       // Alimenta o sino de alerta visual/sonoro do Mapa de Quartos/Reservas (ver
-      // apps/web/src/app/app/layout.tsx). Só para os problemas recém-reivindicados por este ciclo,
+      // apps/web/src/app/principal/layout.tsx). Só para os problemas recém-reivindicados por este ciclo,
       // e ainda assim pulando entidades que já têm uma escalação aberta (defesa extra além da
       // trava do log — cobre qualquer caminho futuro que recrie escalação).
       if (claimed.length > 0) {
