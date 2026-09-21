@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { recordEgress } from "@/lib/egressMeter";
+import { after, NextResponse } from "next/server";
+import { egressFlushDue, flushEgress, recordEgress } from "@/lib/egressMeter";
 
 // Resposta JSON que registra o tamanho do payload no medidor de egress por assinante
 // (lib/egressMeter.ts → tenant_egress_daily, exibido no painel admin). Usar nas rotas de
@@ -14,6 +14,9 @@ export function jsonForTenant(
     try {
       const json = JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
       recordEgress(tenantId, json ? Buffer.byteLength(json) : 0);
+      // `after` mantém a função viva até o flush terminar — sem ele a instância serverless pode ser
+      // congelada com a escrita no meio.
+      if (egressFlushDue()) after(() => flushEgress());
     } catch {
       /* medição nunca pode derrubar a resposta */
     }
