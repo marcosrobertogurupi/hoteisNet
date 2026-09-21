@@ -11,6 +11,7 @@ import { runSaasDunning } from "./saasDunning";
 import { runSaasMonitor } from "./saasMonitor";
 import { runNoShowSweep } from "./noShowSweep";
 import { runReviewsSync } from "./reviewsSync";
+import { runReviewFeedbackFunnel } from "./reviewFeedbackFunnel";
 
 console.log("[worker] Virada de diária — worker iniciado.");
 
@@ -88,5 +89,13 @@ cron.schedule("17 * * * *", () => {
 cron.schedule("*/30 * * * *", () => {
   runReviewsSync().catch((err) => {
     console.error("[worker] Erro ao rodar sincronização de reviews:", err);
+  });
+});
+
+// Funil de satisfação pós-checkout — dispara horas depois do check-out efetivo, não precisa de
+// frescor de minuto a minuto. 15 min é suficiente pra não atrasar demais o envio.
+cron.schedule("*/15 * * * *", () => {
+  runReviewFeedbackFunnel().catch((err) => {
+    console.error("[worker] Erro ao rodar funil de satisfação pós-checkout:", err);
   });
 });
