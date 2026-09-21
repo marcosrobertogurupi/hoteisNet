@@ -7,7 +7,7 @@ import { useAppVersion } from "@/lib/useAppVersion";
 import { reloadForUpdate } from "@/lib/reloadForUpdate";
 
 // Aviso de versão desatualizada + atualização obrigatória. Montado nos layouts do app do hotel
-// (/app) e dos apps satélite (/housekeeping, /contagem). A verificação em si vive em
+// (/principal) e dos apps satélite (/housekeeping, /contagem). A verificação em si vive em
 // useAppVersion (determinística, sem IA).
 //
 //  - Versão nova disponível (não crítica) → faixa fina no rodapé, com "Atualizar agora" e um X

@@ -14,7 +14,7 @@ const prisma = new PrismaClient();
 
 const TENANT_ID = 'tenant-hoteisnet-demo';
 // A página de Reservas do frontend busca/cria reservas sempre com este tenantId fixo
-// (ver apps/web/src/app/app/reservations/page.tsx e ReservationGridMap.tsx), mesmo hospedando
+// (ver apps/web/src/app/principal/reservations/page.tsx e ReservationGridMap.tsx), mesmo hospedando
 // quartos do tenant "tenant-hoteisnet-demo" — é a convenção existente no app, não um bug deste script.
 const RESERVATION_TENANT_ID = 'TNT-01';
 const OCCUPANCY_TARGET = 0.8;

@@ -163,7 +163,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <UserCog className="w-4 h-4" /> Você tem uma personificação ativa: <b>{impersonating.tenantName}</b>
             </span>
             <span className="flex items-center gap-3">
-              <a href="/app" className="underline hover:no-underline">abrir o sistema do hotel</a>
+              <a href="/principal" className="underline hover:no-underline">abrir o sistema do hotel</a>
               <button onClick={stopImpersonation} className="px-2 py-0.5 rounded bg-amber-950 text-amber-50 hover:bg-amber-900">
                 encerrar
               </button>

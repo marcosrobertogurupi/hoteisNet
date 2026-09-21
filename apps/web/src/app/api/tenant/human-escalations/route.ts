@@ -4,7 +4,7 @@ import { getSessionUser } from "@/lib/auth";
 
 // GET /api/tenant/human-escalations?resolved=false — fila de "precisa de um humano agora",
 // alimentada pelo Agente de Atendimento (escalate_to_human) e pelo Agente Operacional (worker).
-// Usada pelo sino de alerta em apps/web/src/app/app/layout.tsx (Mapa de Quartos/Reservas).
+// Usada pelo sino de alerta em apps/web/src/app/principal/layout.tsx (Mapa de Quartos/Reservas).
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);

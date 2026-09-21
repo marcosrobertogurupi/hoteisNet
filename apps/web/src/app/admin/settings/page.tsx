@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Settings, Loader2, RotateCw, ShieldAlert, X, IdCard, Cpu } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
-import { cadastroUI } from "../../app/cadastros/_ui";
+import { cadastroUI } from "../../principal/cadastros/_ui";
 import AiModelSettings from "./AiModelSettings";
 
 const c = cadastroUI(false);

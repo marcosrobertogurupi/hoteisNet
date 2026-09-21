@@ -66,7 +66,7 @@ export default function LoginForm({ variant = "page", headline, subhead, onAuthe
         return;
       }
 
-      const next = searchParams.get("next") || "/app";
+      const next = searchParams.get("next") || "/principal";
       // Navegação "dura" (não client-side router.push): garante uma requisição HTTP real
       // que carrega o cookie de sessão recém-emitido antes do middleware avaliar a rota.
       window.location.href = next;

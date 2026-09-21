@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 // Quartos nesses status contam como "ocupados" para a taxa de ocupação — mesma
-// definição usada no Mapa de Quartos do frontend (ver counts.OCCUPIED em apps/web/src/app/app/page.tsx).
+// definição usada no Mapa de Quartos do frontend (ver counts.OCCUPIED em apps/web/src/app/principal/page.tsx).
 const OCCUPIED_STATUSES = ["OCCUPIED", "OCCUPIED_CLEANING"];
 
 /**

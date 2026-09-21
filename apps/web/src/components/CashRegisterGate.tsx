@@ -8,7 +8,7 @@ import { useToast } from "@/context/ToastContext";
 import { useTheme } from "@/context/ThemeContext";
 import { CAIXA_CHANGED_EVENT } from "@/lib/caixaEvents";
 
-// Bloqueia o app inteiro (todas as rotas de /app) enquanto o usuário autenticado não tiver um
+// Bloqueia o app inteiro (todas as rotas de /principal) enquanto o usuário autenticado não tiver um
 // caixa aberto — nenhum usuário, incluindo admin/super admin, pode operar o sistema sem um caixa
 // próprio aberto. Reavalia a cada navegação e sempre que o evento CAIXA_CHANGED_EVENT é disparado
 // (abertura, fechamento ou impressão do fechamento do caixa).
@@ -48,7 +48,7 @@ export default function CashRegisterGate({ children }: { children: React.ReactNo
     if (user) checkSessao();
   }, [user, checkSessao, pathname]);
 
-  // O middleware do Edge libera as páginas de /app enquanto o JWT do cookie tem assinatura
+  // O middleware do Edge libera as páginas de /principal enquanto o JWT do cookie tem assinatura
   // válida e não expirou, mas /api/auth/me revalida no banco (usuário ainda ativo, tokenVersion
   // do token igual ao atual, assinante não suspenso — ver getSessionUser). Quando essa
   // revalidação nega (401), sem este redirecionamento a tela abaixo ("checking") ficaria

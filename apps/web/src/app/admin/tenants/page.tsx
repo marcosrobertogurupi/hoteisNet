@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Building2, Plus, Search, X, Check, Loader2, Copy, KeyRound, Pencil, LogIn } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
-import { cadastroUI } from "../../app/cadastros/_ui";
+import { cadastroUI } from "../../principal/cadastros/_ui";
 
 const c = cadastroUI(false); // painel admin: tema claro fixo
 
@@ -125,7 +125,7 @@ export default function AdminTenantsPage() {
         return;
       }
       toast.success(`Entrando como ${label}…`);
-      window.location.href = data.redirectTo || "/app";
+      window.location.href = data.redirectTo || "/principal";
     } catch {
       toast.error("Falha de rede ao personificar.");
     } finally {

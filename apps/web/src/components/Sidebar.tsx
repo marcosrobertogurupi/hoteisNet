@@ -81,23 +81,23 @@ export default function Sidebar() {
     {
       title: "Hospedagem",
       items: [
-        { href: "/app", label: "Mapa de Quartos", icon: CalendarDays },
-        { href: "/app/reservations", label: "Mapa de Reservas", icon: Users },
-        { href: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard, iconColor: c("text-indigo-600", "text-[#8B5CF6]") },
-        { href: "/app/relatorios", label: "Relatórios", icon: FileBarChart, iconColor: c("text-violet-600", "text-[#A78BFA]") },
-        { href: "/app/tarefas-administrativas/fnrh", label: "Controle de FNRH", icon: FileCheck2, iconColor: c("text-emerald-600", "text-[#10B981]") },
-        { href: "/app/veiculos", label: "Busca de Veículos", icon: Car, iconColor: c("text-sky-600", "text-[#0EA5E9]") },
+        { href: "/principal", label: "Mapa de Quartos", icon: CalendarDays },
+        { href: "/principal/reservations", label: "Mapa de Reservas", icon: Users },
+        { href: "/principal/dashboard", label: "Dashboard", icon: LayoutDashboard, iconColor: c("text-indigo-600", "text-[#8B5CF6]") },
+        { href: "/principal/relatorios", label: "Relatórios", icon: FileBarChart, iconColor: c("text-violet-600", "text-[#A78BFA]") },
+        { href: "/principal/tarefas-administrativas/fnrh", label: "Controle de FNRH", icon: FileCheck2, iconColor: c("text-emerald-600", "text-[#10B981]") },
+        { href: "/principal/veiculos", label: "Busca de Veículos", icon: Car, iconColor: c("text-sky-600", "text-[#0EA5E9]") },
       ],
     },
     {
       title: "Financeiro",
       items: [
-        { href: "/app/cash-register", label: "Caixa Aberto", icon: DollarSign, iconColor: c("text-amber-600", "text-[#F59E0B]") },
+        { href: "/principal/cash-register", label: "Caixa Aberto", icon: DollarSign, iconColor: c("text-amber-600", "text-[#F59E0B]") },
         ...(isAdmin
           ? [
-              { href: "/app/cash-register-geral", label: "Caixa Geral", icon: DollarSign, iconColor: c("text-emerald-600", "text-[#10B981]") },
-              { href: "/app/cadastros/contas-pagar", label: "Contas a Pagar", icon: Wallet, iconColor: c("text-rose-600", "text-[#F43F5E]") },
-              { href: "/app/cadastros/contas-receber", label: "Contas a Receber", icon: Receipt, iconColor: c("text-amber-600", "text-[#F59E0B]") },
+              { href: "/principal/cash-register-geral", label: "Caixa Geral", icon: DollarSign, iconColor: c("text-emerald-600", "text-[#10B981]") },
+              { href: "/principal/cadastros/contas-pagar", label: "Contas a Pagar", icon: Wallet, iconColor: c("text-rose-600", "text-[#F43F5E]") },
+              { href: "/principal/cadastros/contas-receber", label: "Contas a Receber", icon: Receipt, iconColor: c("text-amber-600", "text-[#F59E0B]") },
             ]
           : []),
       ],
@@ -105,22 +105,22 @@ export default function Sidebar() {
     {
       title: "Cadastro",
       items: [
-        { href: "/app/cadastros", label: "Central de Cadastros", icon: FolderKanban, iconColor: c("text-indigo-600", "text-[#8B5CF6]") },
-        { href: "/app/cadastros/empresas", label: "Cadastro de Empresas", icon: Building2, iconColor: c("text-indigo-600", "text-[#8B5CF6]") },
-        { href: "/app/cadastros/hospedes", label: "Cadastro de Hóspedes", icon: UserRound, iconColor: c("text-sky-600", "text-[#38BDF8]") },
+        { href: "/principal/cadastros", label: "Central de Cadastros", icon: FolderKanban, iconColor: c("text-indigo-600", "text-[#8B5CF6]") },
+        { href: "/principal/cadastros/empresas", label: "Cadastro de Empresas", icon: Building2, iconColor: c("text-indigo-600", "text-[#8B5CF6]") },
+        { href: "/principal/cadastros/hospedes", label: "Cadastro de Hóspedes", icon: UserRound, iconColor: c("text-sky-600", "text-[#38BDF8]") },
       ],
     },
     {
       title: "Tarefas administrativas",
       items: [
-        { href: "/app/governance", label: "Governança", icon: BedDouble },
-        { href: "/app/pdv", label: "PDV Vendas", icon: UtensilsCrossed, iconColor: c("text-orange-600", "text-[#FB923C]") },
-        { href: "/app/stock", label: "Controle de Estoque", icon: Package },
-        { href: "/app/stock/contagens", label: "Conferência de Contagem de Estoque", icon: ClipboardCheck, iconColor: c("text-emerald-600", "text-[#10B981]") },
-        { href: "/app/fiscal", label: "Fiscal & PDV", icon: FileText, iconColor: c("text-cyan-600", "text-[#38BDF8]") },
+        { href: "/principal/governance", label: "Governança", icon: BedDouble },
+        { href: "/principal/pdv", label: "PDV Vendas", icon: UtensilsCrossed, iconColor: c("text-orange-600", "text-[#FB923C]") },
+        { href: "/principal/stock", label: "Controle de Estoque", icon: Package },
+        { href: "/principal/stock/contagens", label: "Conferência de Contagem de Estoque", icon: ClipboardCheck, iconColor: c("text-emerald-600", "text-[#10B981]") },
+        { href: "/principal/fiscal", label: "Fiscal & PDV", icon: FileText, iconColor: c("text-cyan-600", "text-[#38BDF8]") },
         { href: "/principal/reviews", label: "Reviews & Reputação", icon: Star, iconColor: c("text-amber-600", "text-[#F59E0B]") },
-        { href: "/app/settings", label: "Configurações do Sistema", icon: Settings, iconColor: c("text-amber-600", "text-[#F59E0B]") },
-        { href: "/app/support", label: "SUPORTE ao Sistema", icon: LifeBuoy, iconColor: "text-[#F59E0B]", pulse: true },
+        { href: "/principal/settings", label: "Configurações do Sistema", icon: Settings, iconColor: c("text-amber-600", "text-[#F59E0B]") },
+        { href: "/principal/support", label: "SUPORTE ao Sistema", icon: LifeBuoy, iconColor: "text-[#F59E0B]", pulse: true },
       ],
     },
   ];

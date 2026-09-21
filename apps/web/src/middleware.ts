@@ -7,7 +7,7 @@ import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib
 import { verifyStockCountSessionToken, STOCK_COUNT_SESSION_COOKIE } from "@/lib/stockCountAuth";
 
 // Prefixos de rota liberados só para admin (Configurações, Usuários, Módulo Fiscal).
-const ADMIN_ONLY_PREFIXES = ["/app/settings", "/app/cadastros/usuarios", "/app/fiscal"];
+const ADMIN_ONLY_PREFIXES = ["/principal/settings", "/principal/cadastros/usuarios", "/principal/fiscal"];
 
 // Únicas rotas de API que não exigem sessão — autenticadas por outro meio (token de URL,
 // segredo de webhook, token de caixa) ou são o próprio endpoint de login. Ver CLAUDE.md, regra 1.
@@ -123,7 +123,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // --- Páginas do app do assinante (/app/**) ---
+  // --- Páginas do app do assinante (/principal/**) ---
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await verifySessionToken(token) : null;
 
@@ -135,7 +135,7 @@ export async function middleware(req: NextRequest) {
 
   const isAdminOnlyPath = ADMIN_ONLY_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   if (isAdminOnlyPath && !isAdminRole(session.role)) {
-    const appUrl = new URL("/app", req.url);
+    const appUrl = new URL("/principal", req.url);
     appUrl.searchParams.set("acesso_negado", "1");
     return NextResponse.redirect(appUrl);
   }
@@ -144,5 +144,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/app/:path*", "/admin/:path*", "/api/:path*"],
+  matcher: ["/principal/:path*", "/admin/:path*", "/api/:path*"],
 };

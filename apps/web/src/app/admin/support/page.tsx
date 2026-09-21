@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { LifeBuoy, Send, Loader2, CheckCircle2, BookOpen, Plus, Trash2, Power } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
-import { cadastroUI } from "../../app/cadastros/_ui";
+import { cadastroUI } from "../../principal/cadastros/_ui";
 
 const c = cadastroUI(false);
 

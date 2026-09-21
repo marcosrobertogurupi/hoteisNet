@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { DollarSign, Plus, X, Check, Loader2, Pencil, Trash2, Power } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
 import { useConfirm } from "@/context/ConfirmContext";
-import { cadastroUI } from "../../app/cadastros/_ui";
+import { cadastroUI } from "../../principal/cadastros/_ui";
 
 const c = cadastroUI(false);
 

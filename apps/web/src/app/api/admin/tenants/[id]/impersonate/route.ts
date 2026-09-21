@@ -70,7 +70,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     tenantName: tenantLabel,
   });
 
-  const res = NextResponse.json({ success: true, tenantName: tenantLabel, redirectTo: "/app" });
+  const res = NextResponse.json({ success: true, tenantName: tenantLabel, redirectTo: "/principal" });
   const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax" as const, path: "/" };
   res.cookies.set(SESSION_COOKIE, sessionToken, { ...cookieBase, maxAge: SESSION_COOKIE_MAX_AGE });
   res.cookies.set(IMPERSONATION_COOKIE, impersonationToken, { ...cookieBase, maxAge: IMPERSONATION_COOKIE_MAX_AGE });

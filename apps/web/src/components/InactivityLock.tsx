@@ -11,7 +11,7 @@ import LoginForm, { AuthenticatedUser } from "@/components/LoginForm";
 // embaçada atrás. Quem autenticar assume o terminal (troca de sessão completa) — inclusive um
 // operador diferente do que estava logado, útil para lançamentos de caixa em recepção compartilhada.
 //
-// Montado em app/layout.tsx, portanto só vale para /app/** (a operação do hotel), nunca /admin/**.
+// Montado em principal/layout.tsx, portanto só vale para /principal/** (a operação do hotel), nunca /admin/**.
 
 const LOCK_EVENT_KEY = "hoteisnet_screen_lock_event";
 const ACTIVITY_EVENTS = ["mousemove", "mousedown", "keydown", "wheel", "touchstart", "scroll"] as const;

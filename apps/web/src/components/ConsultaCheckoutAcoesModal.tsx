@@ -125,7 +125,7 @@ export const ConsultaCheckoutAcoesModal: React.FC<ConsultaCheckoutAcoesModalProp
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   // Descrições (uppercase) das formas de pagamento cadastradas como Parcelamento (ex.: FATURA) —
   // usado para separar, no Resumo de Hospedagem, o que foi pago de fato do que foi faturado para a
-  // empresa conveniada, exatamente como no Mapa de Quartos (apps/web/src/app/app/page.tsx).
+  // empresa conveniada, exatamente como no Mapa de Quartos (apps/web/src/app/principal/page.tsx).
   const [installmentPaymentMethodNames, setInstallmentPaymentMethodNames] = useState<Set<string>>(new Set());
   const [showResumoModal, setShowResumoModal] = useState(false);
 
