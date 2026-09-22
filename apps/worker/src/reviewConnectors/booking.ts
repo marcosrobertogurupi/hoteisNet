@@ -80,6 +80,15 @@ export async function fetchBookingReviews(params: {
   // tempo (custo zero se o ator ignorar os que não reconhece) — mesma estratégia defensiva do
   // projeto de referência que originou este módulo (radar-views/Reputei). Some com o teto bem menor
   // em sincronizações incrementais (MAX_REVIEWS_INCREMENTAL) como segunda linha de defesa.
+  //
+  // NUNCA mandar `sortBy`/`sort` para este ator: são reservados para ordenar resultado de BUSCA de
+  // hotel (`bayesian_review_score`, `distance_from_search`, `class_asc`, `price`,
+  // `review_score_and_price`, `class_and_price`), não para ordenar reviews de um hotel já
+  // identificado por URL — o ator rejeita qualquer outro valor com erro de validação de input.
+  // Regressão real em produção (17-22/09/2026): `sortBy: "newest"` quebrou 100% das sincronizações
+  // do Booking por 5 dias seguidos (toda tentativa falhava com INVALID INPUT antes de sequer coletar
+  // um review), sem nenhum alerta visível fora do console da Apify — só descoberto porque o
+  // assinante conferiu o console manualmente.
   const reviewsStartDate = params.sinceDate
     ? new Date(params.sinceDate.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -88,8 +97,6 @@ export async function fetchBookingReviews(params: {
   const input = {
     startUrls: [{ url: params.hotelUrl }],
     maxReviewsPerHotel: maxReviews,
-    sortBy: "newest",
-    sort: "newest",
     startDate: reviewsStartDate,
     reviewsStartDate,
     publishedAfter: reviewsStartDate,
