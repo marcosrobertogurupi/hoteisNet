@@ -55,6 +55,7 @@ import LancarPagamentoHospedagemModal from "@/components/LancarPagamentoHospedag
 import ConferenciaFrigobarModal from "@/components/ConferenciaFrigobarModal";
 import LancarReservaModal from "@/components/LancarReservaModal";
 import TransferenciaDebitoModal from "@/components/TransferenciaDebitoModal";
+import TransferenciaQuartoModal from "@/components/TransferenciaQuartoModal";
 import HistoricoLimpezaModal from "@/components/HistoricoLimpezaModal";
 import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/SelecaoReservaQuartoModal";
 import LoadingOverlay from "@/components/LoadingOverlay";
@@ -515,7 +516,7 @@ export default function TenantDashboardPage() {
 
   // Busca a hospedagem ativa real do quarto ao abrir Extrato/Resumo/Pagamento/Alterar Tarifa/Alterar Período/Consumo — evita usar dados de amostra
   useEffect(() => {
-    if ((showExtratoModal || showResumoModal || showLancarPagamentoModal || showMinibarCheckModal || showAlterarTarifaModal || showAlterarPeriodoModal || showConsumptionModal || showTransferDebitoModal || showWppModal) && activeRoom) {
+    if ((showExtratoModal || showResumoModal || showLancarPagamentoModal || showMinibarCheckModal || showAlterarTarifaModal || showAlterarPeriodoModal || showConsumptionModal || showTransferDebitoModal || showTransferModal || showWppModal) && activeRoom) {
       // Não zera activeStayDetail/activeStayPayments quando é o MESMO quarto já carregado (ex.: Consumo
       // aberto por cima do modal de Pagamento) — zerar desmontaria o modal em edição. Mas ao TROCAR de
       // quarto (ex.: fechar Extrato do 217 e abrir do 220) é preciso zerar antes de buscar: senão o
@@ -558,6 +559,7 @@ export default function TenantDashboardPage() {
             setShowAlterarPeriodoModal(false);
             setShowConsumptionModal(false);
             setShowTransferDebitoModal(false);
+            setShowTransferModal(false);
             setShowWppModal(false);
             return;
           }
@@ -617,13 +619,14 @@ export default function TenantDashboardPage() {
           setShowAlterarPeriodoModal(false);
           setShowConsumptionModal(false);
           setShowTransferDebitoModal(false);
+          setShowTransferModal(false);
           setShowWppModal(false);
         } finally {
           setIsLoadingStayModal(false);
         }
       })();
     }
-  }, [showExtratoModal, showResumoModal, showLancarPagamentoModal, showMinibarCheckModal, showAlterarTarifaModal, showAlterarPeriodoModal, showConsumptionModal, showTransferDebitoModal, showWppModal, activeRoom]);
+  }, [showExtratoModal, showResumoModal, showLancarPagamentoModal, showMinibarCheckModal, showAlterarTarifaModal, showAlterarPeriodoModal, showConsumptionModal, showTransferDebitoModal, showTransferModal, showWppModal, activeRoom]);
 
   const handleOpenContextMenu = (e: React.MouseEvent, room: RoomItem) => {
     e.preventDefault();
@@ -862,6 +865,14 @@ export default function TenantDashboardPage() {
     return rooms
       .filter(r => (r.status === "OCCUPIED" || r.status === "OCCUPIED_CLEANING") && r.guest && r.number !== activeRoom?.number)
       .map(r => ({ number: r.number, guestName: r.guest as string }));
+  }, [rooms, activeRoom]);
+
+  // Destinos da Transferência de Quarto: só quartos livres e limpos (regra do usuário). O servidor
+  // revalida isso e ainda checa reserva sobreposta antes de gravar.
+  const transferRoomDestinationOptions = useMemo(() => {
+    return rooms
+      .filter(r => r.status === "VACANT_CLEAN" && r.active !== false && r.number !== activeRoom?.number)
+      .map(r => ({ id: r.id, number: r.number, category: r.category, floor: r.floor }));
   }, [rooms, activeRoom]);
 
   const filterTabs = [
@@ -2713,6 +2724,31 @@ export default function TenantDashboardPage() {
             outrosDebitos: activeStayDetail.otherDebits,
           }}
           destinationRoomOptions={transferDestinationOptions}
+          onTransferSuccess={() => {
+            syncRoomsFromDatabase();
+            setActiveStayDetail(null);
+            setActiveStayPayments([]);
+            lastFetchedRoomNumberRef.current = null;
+          }}
+        />
+      )}
+
+      {/* TRANSFERÊNCIA DE QUARTO (WINDEV WIN_TRANSFERENCIAQUARTO) */}
+      {showTransferModal && activeRoom && activeStayDetail && (
+        <TransferenciaQuartoModal
+          isOpen={showTransferModal}
+          onClose={() => setShowTransferModal(false)}
+          sourceStay={{
+            stayCheckinId: activeStayDetail.id,
+            roomNumber: activeRoom.number,
+            roomCategory: activeRoom.category,
+            guestName: activeStayDetail.guest.fullName,
+            checkInDate: activeStayDetail.checkInDate,
+            expectedCheckOutDate: activeStayDetail.expectedCheckOut,
+            dailyCount: activeStayDetail.dailiesCount,
+            secondaryGuestNames: activeStayDetail.secondaryGuests.map(g => g.name),
+          }}
+          destinationRoomOptions={transferRoomDestinationOptions}
           onTransferSuccess={() => {
             syncRoomsFromDatabase();
             setActiveStayDetail(null);
