@@ -49,9 +49,9 @@ export async function GET(req: NextRequest) {
 
     // Reinicia a cota mensal automaticamente quando o ciclo atual é de um mês anterior.
     const now = new Date();
-    const cycleExpired =
-      tenant.cpfQueryCycleStart.getUTCFullYear() !== now.getUTCFullYear() ||
-      tenant.cpfQueryCycleStart.getUTCMonth() !== now.getUTCMonth();
+    // Mês de referência em Brasília (não UTC): em UTC a cota virava às 21h do último dia do mês.
+    const brMonth = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }).slice(0, 7);
+    const cycleExpired = brMonth(tenant.cpfQueryCycleStart) !== brMonth(now);
 
     if (cycleExpired) {
       tenant = await prisma.tenant.update({
@@ -86,6 +86,28 @@ export async function GET(req: NextRequest) {
       "";
 
     if (hubToken && hubToken.trim() !== "" && !hubToken.includes("your-")) {
+      // Reserva a consulta na cota ANTES de chamar a Hub, num único UPDATE condicional — a checagem
+      // "usado < cota" acima e o incremento depois da resposta eram passos separados, então várias
+      // consultas simultâneas passavam todas pela checagem e estouravam a cota (crédito pago pela
+      // plataforma). Se a consulta não trouxer dados, a reserva é devolvida.
+      const reserved = await prisma.tenant.updateMany({
+        where: { id: tenant.id, cpfQueryUsed: { lt: prisma.tenant.fields.cpfQueryQuotaMonthly } },
+        data: { cpfQueryUsed: { increment: 1 } },
+      });
+      if (reserved.count === 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            quotaExceeded: true,
+            tenantUsage: { used: tenant.cpfQueryQuotaMonthly, limit: tenant.cpfQueryQuotaMonthly },
+            message: `O limite mensal de consultas de CPF do seu hotel (${tenant.cpfQueryQuotaMonthly} consultas) foi atingido. Entre em contato com o suporte para aumentar sua cota.`,
+          },
+          { status: 429 }
+        );
+      }
+      const releaseReservation = () =>
+        prisma.tenant.updateMany({ where: { id: tenant!.id, cpfQueryUsed: { gt: 0 } }, data: { cpfQueryUsed: { decrement: 1 } } });
+
       try {
         // Endpoint principal: /v2/cadastropf/ (ficha completa com endereço, telefones, e-mails)
         // Endpoint secundário: /v2/cpf/ (situação cadastral padrão da Receita Federal)
@@ -106,14 +128,15 @@ export async function GET(req: NextRequest) {
               break;
             }
           } catch (err) {
-            console.warn(`Attempt failed for ${endpointUrl}:`, err);
+            // Nunca logar endpointUrl: ele carrega o token master da Hub na query string.
+            console.warn("[hub-consult-cpf] tentativa falhou:", endpointUrl.includes("/cadastropf/") ? "cadastropf" : "cpf", (err as any)?.message || err);
           }
         }
 
         if (fetchSuccess && data && (data.status === true || data.status === "true")) {
-          const updatedTenant = await prisma.tenant.update({
+          // Consulta já contabilizada na reserva acima.
+          const updatedTenant = await prisma.tenant.findUniqueOrThrow({
             where: { id: tenant.id },
-            data: { cpfQueryUsed: { increment: 1 } },
             select: { cpfQueryUsed: true, cpfQueryQuotaMonthly: true },
           });
 
@@ -227,6 +250,7 @@ export async function GET(req: NextRequest) {
             },
           });
         } else {
+          await releaseReservation();
           return NextResponse.json(
             {
               success: false,
@@ -240,6 +264,7 @@ export async function GET(req: NextRequest) {
           );
         }
       } catch (err: any) {
+        await releaseReservation().catch(() => {});
         return NextResponse.json(
           {
             success: false,

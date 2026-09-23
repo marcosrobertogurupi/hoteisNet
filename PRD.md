@@ -105,6 +105,13 @@ Terceira auditoria (213 rotas de API + worker), com foco reforçado nas funçõe
 * **Limite de desconto no check-in (médio)** — a base do percentual usava o `totalAmount` do body, que podia ser inflado; passou a ser calculada no servidor (diárias do período + chegada antecipada).
 * **Lançamentos em hospedagem encerrada (alto)** — check-out bloqueado enquanto houver comanda de hóspede aberta no PDV; fechar/reabrir comanda de hóspede recusa hospedagem encerrada; `POST`/`DELETE /api/stay/consumo` revalidam hospedagem aberta após o lock. O `POST` de consumo também passou a validar `productId`/`posLocationId` contra o tenant (a baixa de estoque podia cair em PDV de outro hotel) e o `DELETE` recusa linhas vindas de comanda do PDV (estorno pela reabertura da comanda) e registra auditoria.
 
+**Fase 2 — Segurança crítica ✅**
+* **OAuth da Meta com `state` assinado (crítico)** — o `state` que leva o tenantId até o callback público `/api/tenant/reviews/meta/callback` era JSON em base64 puro: qualquer pessoa montava `{"tenantId":"<outro hotel>"}` e sobrescrevia os conectores de Facebook/Instagram de outro assinante. Agora é assinado com HMAC e expira em 15 min (`lib/oauthState.ts`).
+* **Link público de pré-check-in (alto)** — um link já concluído não expira e o `GET` continuava devolvendo CPF, RG, endereço e nascimento para sempre; agora, com a FNRH já preenchida, só devolve o aviso "já preenchido". No `POST`, o CPF digitado que pertence a outro hóspede já cadastrado (não o da reserva) só preenche campos vazios — o link não reescreve mais o cadastro de terceiros. A busca do hóspede passou a considerar o CPF formatado e só dígitos (`cpfMatchVariants`), evitando cadastros duplicados.
+* **Webhook do Asaas (alto)** — eventos `OVERDUE`/`CHARGEBACK`/`REFUNDED` rebaixavam para `OVERDUE` um assinante já `SUSPENDED`/`CANCELLED`, devolvendo o acesso (e a régua não suspendia de novo). Agora só rebaixam `TRIAL`/`ACTIVE`. A extensão de acesso por pagamento passou a ser idempotente de forma atômica (só a entrega que faz a fatura transicionar para pago estende), e eventos fora de ordem não rebaixam fatura já paga.
+* **Consulta de CPF na Hub (médio)** — o log de falha imprimia a URL com o token master da Hub; a cota mensal passou a ser reservada num `UPDATE` condicional antes da chamada (antes, consultas simultâneas furavam a cota) e o ciclo mensal é contado no mês de Brasília.
+* **Municípios (médio)** — cadastro global compartilhado por todos os assinantes: alteração e exclusão passaram a ser exclusivas da equipe da plataforma; o hotel ainda pode incluir um município que falte.
+
 ## 3. Especificação das Funcionalidades (Feature Specifications)
 
 ### 3.1. Mapa Visual de Quartos (Room Map) ✅

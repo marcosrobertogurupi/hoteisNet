@@ -3,12 +3,21 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 
-// PUT /api/cadastros/municipios/[id] — restrito a administradores.
+// PUT /api/cadastros/municipios/[id] — restrito à equipe da plataforma (cadastro global).
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getSessionUser(request);
     const adminError = requireAdmin(session);
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    // Município é cadastro GLOBAL (compartilhado por todos os assinantes, sem tenantId): alterar ou
+    // excluir um afeta a FNRH e o módulo fiscal de todos os hotéis. Por isso só a equipe da
+    // plataforma (SUPER_ADMIN) edita/exclui; o administrador do hotel pode incluir um que falte.
+    if (session!.role !== "SUPER_ADMIN") {
+      return NextResponse.json(
+        { success: false, error: "Municípios são um cadastro compartilhado — alteração e exclusão são feitas pelo suporte da plataforma." },
+        { status: 403 }
+      );
+    }
 
     const { id } = await params;
     const body = await request.json();
@@ -57,12 +66,21 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   }
 }
 
-// DELETE /api/cadastros/municipios/[id] — restrito a administradores.
+// DELETE /api/cadastros/municipios/[id] — restrito à equipe da plataforma (cadastro global).
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getSessionUser(request);
     const adminError = requireAdmin(session);
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
+    // Município é cadastro GLOBAL (compartilhado por todos os assinantes, sem tenantId): alterar ou
+    // excluir um afeta a FNRH e o módulo fiscal de todos os hotéis. Por isso só a equipe da
+    // plataforma (SUPER_ADMIN) edita/exclui; o administrador do hotel pode incluir um que falte.
+    if (session!.role !== "SUPER_ADMIN") {
+      return NextResponse.json(
+        { success: false, error: "Municípios são um cadastro compartilhado — alteração e exclusão são feitas pelo suporte da plataforma." },
+        { status: 403 }
+      );
+    }
 
     const { id } = await params;
     const existing = await prisma.municipality.findUnique({ where: { id } });

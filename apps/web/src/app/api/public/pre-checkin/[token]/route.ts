@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { supabaseAdmin } from "@/utils/supabaseAdmin";
 import { validatePreCheckinToken } from "@/lib/preCheckinLink";
-import { validateCPF } from "@/lib/documentValidation";
+import { validateCPF, cpfMatchVariants } from "@/lib/documentValidation";
 
 // Rota pública (sem sessão — fora do matcher de middleware.ts) usada pela tela self-checkin/[token]
 // para o hóspede abrir o link recebido via WhatsApp e preencher a FNRH antes de chegar ao hotel.
@@ -30,19 +30,41 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { reservation } = validation.link;
   const tenant = reservation.room.tenant;
 
+  // Link já usado: devolve só o aviso "já preenchido" — NUNCA os dados pessoais. Um link concluído
+  // não expira (fica no histórico do WhatsApp do hóspede, pode ser encaminhado), e antes o GET
+  // continuava entregando CPF, RG, endereço e nascimento a quem o abrisse, para sempre. A tela
+  // (self-checkin/[token]) não usa nada além do nome do hotel nesse estado.
+  if (validation.link.status === "COMPLETED") {
+    return NextResponse.json({
+      success: true,
+      alreadyCompleted: true,
+      hotel: { name: tenant.tradeName || tenant.name, logoUrl: tenant.logoUrl },
+    });
+  }
+
   const existingRecord = await prisma.fNRHRecord.findFirst({
     where: { reservationId: reservation.id },
-    include: { guest: true },
+    select: { id: true },
     orderBy: { createdAt: "desc" },
   });
 
-  const guest = existingRecord?.guest || (reservation.guestId
+  // FNRH já preenchida para esta reserva: a tela mostra só "já preenchido" — mesma regra acima,
+  // nenhum dado pessoal sai daqui.
+  if (existingRecord) {
+    return NextResponse.json({
+      success: true,
+      alreadyCompleted: true,
+      hotel: { name: tenant.tradeName || tenant.name, logoUrl: tenant.logoUrl },
+    });
+  }
+
+  const guest = (reservation.guestId
     ? await prisma.guest.findUnique({ where: { id: reservation.guestId } })
     : null);
 
   return NextResponse.json({
     success: true,
-    alreadyCompleted: !!existingRecord,
+    alreadyCompleted: false,
     hotel: { name: tenant.tradeName || tenant.name, logoUrl: tenant.logoUrl },
     reservation: {
       reservationNumber: reservation.reservationNumber,
@@ -76,16 +98,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
           occupation: guest.occupation,
         }
       : { fullName: reservation.guestName, cpf: reservation.guestCpf, phone: reservation.guestPhone },
-    fnrh: existingRecord
-      ? {
-          travelReason: existingRecord.travelReason,
-          transportMode: existingRecord.transportMode,
-          lastOriginCity: existingRecord.lastOriginCity,
-          lastOriginState: existingRecord.lastOriginState,
-          nextDestinationCity: existingRecord.nextDestinationCity,
-          nextDestinationState: existingRecord.nextDestinationState,
-        }
-      : null,
+    fnrh: null,
   });
 }
 
@@ -115,28 +128,41 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
       const cpf = cpfDigits;
 
-      const guest = await tx.guest.findFirst({ where: { tenantId, cpf } });
+      // CPF é gravado formatado pelo check-in ("000.000.000-00") e só com dígitos por aqui — busca
+      // pelas duas formas, senão o mesmo hóspede virava um cadastro duplicado.
+      const guest = await tx.guest.findFirst({ where: { tenantId, cpf: { in: cpfMatchVariants(cpf) } } });
+
+      // Quem tem o link é autoritativo só sobre o PRÓPRIO cadastro. Se o CPF digitado pertence a um
+      // hóspede já cadastrado que NÃO é o desta reserva, o link não pode reescrever os dados dele —
+      // senão qualquer portador de um link de pré-check-in alterava (nome, telefone, e-mail,
+      // endereço) o cadastro de outra pessoa do hotel só sabendo o CPF. Nesse caso o formulário só
+      // PREENCHE o que estiver vazio; o que a recepção/o próprio hóspede já cadastrou prevalece.
+      const onlyFillBlanks = !!guest && link.reservation.guestId !== guest.id;
 
       // O hóspede está preenchendo a própria FNRH — o que ele digita é autoritativo. Mas um campo
       // deixado EM BRANCO no formulário nunca deve APAGAR um valor que a recepção já cadastrou:
       // `keep` mantém o valor existente quando o formulário veio vazio (só sobrescreve com o que
       // o hóspede de fato informou), e no cadastro novo cai no default.
       const keep = <T,>(submitted: T | null | undefined, existing: T | null | undefined): T | null => {
+        const hasExisting = existing !== undefined && existing !== null && existing !== ("" as unknown as T);
+        if (onlyFillBlanks && hasExisting) return existing as T;
         if (submitted !== undefined && submitted !== null && submitted !== ("" as unknown as T)) return submitted;
         return existing ?? null;
       };
 
       const guestData = {
         tenantId,
-        fullName: String(body.fullName || guest?.fullName || link.reservation.guestName || "").toUpperCase(),
-        cpf,
+        fullName: String(
+          (onlyFillBlanks ? guest?.fullName : null) || body.fullName || guest?.fullName || link.reservation.guestName || ""
+        ).toUpperCase(),
+        cpf: guest?.cpf || cpf,
         passport: keep<string>(body.passport, guest?.passport),
-        birthDate: body.birthDate ? new Date(body.birthDate) : (guest?.birthDate ?? null),
+        birthDate: (onlyFillBlanks && guest?.birthDate) ? guest.birthDate : body.birthDate ? new Date(body.birthDate) : (guest?.birthDate ?? null),
         gender: keep<string>(body.gender, guest?.gender),
         email: keep<string>(body.email, guest?.email),
         phone: keep<string>(body.phone, guest?.phone),
         whatsappPhone: keep<string>(body.phone, guest?.whatsappPhone),
-        hasWhatsapp: body.phone ? true : (guest?.hasWhatsapp ?? false),
+        hasWhatsapp: onlyFillBlanks ? (guest?.hasWhatsapp || !!body.phone) : body.phone ? true : (guest?.hasWhatsapp ?? false),
         zipCode: keep<string>(body.zipCode, guest?.zipCode),
         street: keep<string>(body.street, guest?.street),
         number: keep<string>(body.number, guest?.number),
@@ -144,13 +170,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         city: keep<string>(body.city, guest?.city),
         state: keep<string>(body.state, guest?.state),
         // Colunas não-nulas (têm default no schema): nunca podem virar null.
-        country: body.country || guest?.country || "Brasil",
+        country: (onlyFillBlanks ? guest?.country : null) || body.country || guest?.country || "Brasil",
         rgNumber: keep<string>(body.rgNumber, guest?.rgNumber),
         rgIssuer: keep<string>(body.rgIssuer, guest?.rgIssuer),
         rgIssuerState: keep<string>(body.rgIssuerState, guest?.rgIssuerState),
-        nationality: body.nationality || guest?.nationality || "BR",
-        raceColor: body.raceColor || guest?.raceColor || "NAOINFORMAR",
-        disability: body.disability || guest?.disability || "NAOINFORMAR",
+        nationality: (onlyFillBlanks ? guest?.nationality : null) || body.nationality || guest?.nationality || "BR",
+        raceColor: (onlyFillBlanks ? guest?.raceColor : null) || body.raceColor || guest?.raceColor || "NAOINFORMAR",
+        disability: (onlyFillBlanks ? guest?.disability : null) || body.disability || guest?.disability || "NAOINFORMAR",
         occupation: keep<string>(body.occupation, guest?.occupation),
       };
 
