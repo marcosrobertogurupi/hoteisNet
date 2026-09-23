@@ -119,6 +119,18 @@ Terceira auditoria (213 rotas de API + worker), com foco reforçado nas funçõe
 * **Virada de diária recuperável (alto)** — o job só rodava no minuto exato de `dailyRolloverTime`; um deploy/reinício naquele minuto deixava o dia sem diária em todos os quartos. Agora qualquer ciclo após o horário lança o que falta (inclusive dias perdidos, uma diária por dia), com a linha da hospedagem travada e revalidada (nunca lança em hospedagem recém-fechada).
 * **No-show (médio)** — só marca a reserva de ontem a partir das 06:00 (chegada de madrugada deixava de encontrar o quarto) e filtra por data no banco em vez de trazer todas as reservas de todos os hotéis a cada hora.
 
+**Fase 4 — Integridade financeira ✅**
+* **Baixa de Contas a Pagar/Receber (médio)** — o operador vinha do body (`operatorId`/`operatorName`), permitindo registrar a baixa em nome de outro; agora é sempre o usuário da sessão (`resolveOperator`). A linha do título é travada na transação, evitando que duas baixas simultâneas quitem além do saldo.
+* **Forma de pagamento não cadastrada (médio)** — `processPaymentLine` aceitava qualquer texto e o lançamento somava no caixa físico como forma "normal"; agora exige a forma cadastrada no hotel (mesma regra do sinal de reserva).
+* **Fechamento de caixa (médio)** — passou a ser uma transação com a linha do caixa travada (um segundo fechamento concorrente não refaz o saldo) e a auditoria registra o valor contado pelo operador e a diferença (sobra/falta), que antes se perdiam no fechamento cego.
+
+**Pendências desta auditoria (decisão do negócio ou mudança maior):**
+* Contas da plataforma (`tenantId` nulo, ex.: `SUPER_ADMIN`) ainda entram pelo login do assinante sem o 2FA exigido no painel `/admin` e, por `/api/users`, gerenciam usuários de todos os hotéis. Bloquear esse login é a correção, mas depende de a equipe usar a personificação do painel no lugar do login direto.
+* Horário das datas de check-in/check-out: a tela envia data/hora sem fuso e o servidor (UTC na Vercel) interpreta como UTC — a confirmar no banco se os horários gravados estão 3h deslocados antes de corrigir (a correção muda a exibição de dados já gravados).
+* `caixa/remover-pagamento` ainda apaga o lançamento fisicamente (inclusive de caixa já fechado), em vez de estorno marcado e visível.
+* Exclusão de consumo do quarto continua liberada para usuário padrão (a tela oferece a exclusão a qualquer operador) — avaliar se deve exigir administrador.
+* Trocar a tarifa por uma mais barata na alteração de período não passa pelo limite de desconto (a base é a própria tarifa nova).
+
 ## 3. Especificação das Funcionalidades (Feature Specifications)
 
 ### 3.1. Mapa Visual de Quartos (Room Map) ✅

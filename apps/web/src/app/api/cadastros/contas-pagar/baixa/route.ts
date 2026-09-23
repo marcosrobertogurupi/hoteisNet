@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/cadastros/contas-pagar/baixa — registra a baixa (quitação, total ou parcial) de um
 // título de contas a pagar. Suporta juros/desconto, no mesmo padrão da baixa de Contas a Receber.
@@ -14,7 +15,10 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { accountsPayableId, amount, paidAt, interest, discount, paymentMethodDescription, operatorId, operatorName } = body;
+    const { accountsPayableId, amount, paidAt, interest, discount, paymentMethodDescription } = body;
+    // Operador = usuário autenticado, nunca o operatorId/operatorName do body (ver lib/operator.ts) —
+    // antes qualquer terminal gravava a baixa em nome de outro operador.
+    const { operatorId, operatorName } = resolveOperator(session);
 
     if (!accountsPayableId) {
       return NextResponse.json({ success: false, error: "Título de contas a pagar é obrigatório." }, { status: 400 });
@@ -29,6 +33,9 @@ export async function POST(req: NextRequest) {
     const paidAtDate = paidAt ? new Date(`${paidAt}T12:00:00Z`) : new Date();
 
     const result = await txWithRetry(async (tx) => {
+      // Trava a linha do título: duas baixas simultâneas liam o mesmo saldo devedor e as duas
+      // passavam na checagem abaixo, quitando mais do que o valor do título.
+      await tx.$queryRaw`SELECT id FROM accounts_payable WHERE id = ${accountsPayableId} AND "tenantId" = ${session.tenantId!} FOR UPDATE`;
       const payable = await tx.accountsPayable.findFirst({ where: { id: accountsPayableId, tenantId: session.tenantId! } });
       if (!payable) throw new Error("Título de contas a pagar não encontrado.");
       if (payable.isPaid) throw new Error("Este título já está totalmente quitado.");
