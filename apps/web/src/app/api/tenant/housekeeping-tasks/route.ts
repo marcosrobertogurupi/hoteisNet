@@ -138,10 +138,11 @@ export async function POST(req: NextRequest) {
     // uma atribuição direta da recepção é uma exceção que ela não esperaria — o agente operacional
     // avisa por WhatsApp. Só quando a governanta de fato muda (arrastar de novo a mesma pessoa não
     // repete o aviso). Dispara depois da resposta (after()) e nunca falha a atribuição se o envio
-    // der erro. No modo "Recepção define" não avisa: lá toda limpeza chega assim e a governanta
-    // já acompanha a própria lista no app.
+    // der erro. Na reatribuição, a governanta anterior também é avisada. No modo "Recepção define"
+    // não avisa: lá toda limpeza chega assim e a governanta já acompanha a própria lista no app.
     if (existing?.housekeeperId !== housekeeperId) {
       const operator = { userId: session.userId, name: session.name };
+      const previousHousekeeperId = existing?.housekeeperId ?? null;
       after(async () => {
         try {
           const hkSetting = await prisma.housekeepingSetting.findUnique({
@@ -171,6 +172,34 @@ export async function POST(req: NextRequest) {
               details: { assignedByUserId: operator.userId, housekeeperId: housekeeper.id, taskId: task.id, sent },
             },
           });
+
+          // Reatribuição: a governanta que estava com o quarto também é avisada de que ele saiu
+          // da responsabilidade dela, para não ir até o quarto à toa.
+          if (previousHousekeeperId) {
+            const previous = await prisma.housekeeper.findFirst({
+              where: { id: previousHousekeeperId, tenantId: resolvedTenantId, active: true },
+              select: { id: true, name: true, whatsapp: true },
+            });
+            if (previous) {
+              const whatPrev = taskType === "OCCUPIED" ? `a arrumação do quarto ${roomNumber}` : `a limpeza do quarto ${roomNumber}`;
+              const prevMessage = `Olá ${previous.name}! A recepção passou ${whatPrev} para ${housekeeper.name}. Você não precisa mais cuidar desse quarto.`;
+              const prevSent = await sendUazapiText(previous.whatsapp, prevMessage, resolvedTenantId);
+
+              await prisma.auditLog.create({
+                data: {
+                  tenantId: resolvedTenantId,
+                  userName: "Agente Operacional",
+                  action: "AGENT_HOUSEKEEPING_UNASSIGNMENT_NOTICE",
+                  entityType: "ROOM",
+                  entityId: roomId,
+                  description: prevSent
+                    ? `Governanta ${previous.name} avisada por WhatsApp de que o quarto ${roomNumber} passou para ${housekeeper.name} (feito por ${operator.name}).`
+                    : `Não foi possível avisar por WhatsApp a governanta ${previous.name} de que o quarto ${roomNumber} passou para ${housekeeper.name} (feito por ${operator.name}).`,
+                  details: { assignedByUserId: operator.userId, housekeeperId: previous.id, newHousekeeperId: housekeeper.id, taskId: task.id, sent: prevSent },
+                },
+              });
+            }
+          }
         } catch (err) {
           console.error("[POST /api/tenant/housekeeping-tasks] Erro ao avisar governanta por WhatsApp:", err);
         }
