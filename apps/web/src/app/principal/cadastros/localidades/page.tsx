@@ -2,10 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Globe, Plus, Search, Edit3, Trash2, ArrowLeft, X, Loader2, ChevronLeft, ChevronRight, Lock } from "lucide-react";
+import { Globe, Plus, Search, ArrowLeft, X, Loader2, ChevronLeft, ChevronRight, Lock, Info } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
-import { useConfirm } from "@/context/ConfirmContext";
 import { cadastroUI } from "../_ui";
 
 interface Municipality {
@@ -24,7 +23,6 @@ export default function LocalidadesPage() {
   const isDark = theme.isDark;
   const ui = cadastroUI(isDark);
   const { isAdmin } = useSession();
-  const confirm = useConfirm();
 
   const [municipalities, setMunicipalities] = useState<Municipality[]>([]);
   const [total, setTotal] = useState(0);
@@ -34,7 +32,6 @@ export default function LocalidadesPage() {
   const [loading, setLoading] = useState(true);
 
   const [showModal, setShowModal] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -71,15 +68,7 @@ export default function LocalidadesPage() {
   }, [page]);
 
   const openNewModal = () => {
-    setEditingId(null);
     setForm(EMPTY_FORM);
-    setFormError(null);
-    setShowModal(true);
-  };
-
-  const openEditModal = (m: Municipality) => {
-    setEditingId(m.id);
-    setForm({ name: m.name, ibgeCode: m.ibgeCode, uf: m.uf, dddCode: m.dddCode || "" });
     setFormError(null);
     setShowModal(true);
   };
@@ -88,10 +77,8 @@ export default function LocalidadesPage() {
     setSaving(true);
     setFormError(null);
     try {
-      const url = editingId ? `/api/cadastros/municipios/${editingId}` : "/api/cadastros/municipios";
-      const method = editingId ? "PUT" : "POST";
-      const res = await fetch(url, {
-        method,
+      const res = await fetch("/api/cadastros/municipios", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
@@ -106,26 +93,6 @@ export default function LocalidadesPage() {
       setFormError(err.message || "Erro de conexão ao salvar município.");
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleDelete = async (m: Municipality) => {
-    const ok = await confirm({
-      title: "Excluir município",
-      message: `Excluir "${m.name}/${m.uf}" (código IBGE ${m.ibgeCode})? Esta é uma lista compartilhada por todos os assinantes.`,
-      variant: "danger",
-      confirmLabel: "Excluir",
-    });
-    if (!ok) return;
-
-    try {
-      const res = await fetch(`/api/cadastros/municipios/${m.id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (data.success) {
-        fetchMunicipalities(search, page);
-      }
-    } catch (err) {
-      console.error("Erro ao excluir município:", err);
     }
   };
 
@@ -174,9 +141,25 @@ export default function LocalidadesPage() {
             </button>
           ) : (
             <span className={`text-xs flex items-center gap-1.5 ${ui.empty}`}>
-              <Lock className="w-3.5 h-3.5" /> Incluir/editar restrito a administradores
+              <Lock className="w-3.5 h-3.5" /> Incluir cidade é restrito a administradores
             </span>
           )}
+        </div>
+
+        {/* A tabela é a mesma para todos os hotéis: alterar ou excluir um município mudaria a FNRH e
+            a nota fiscal de todos os assinantes, por isso isso fica com o suporte da plataforma. O
+            hotel continua podendo INCLUIR uma cidade que esteja faltando. */}
+        <div
+          className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-xs ${
+            isDark ? "bg-blue-500/10 border-blue-500/20 text-blue-200" : "bg-blue-50 border-blue-200 text-blue-800"
+          }`}
+        >
+          <Info className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            Esta tabela é compartilhada por todos os hotéis que usam o sistema. Para <b>corrigir ou excluir</b> um
+            município, fale com o suporte do Hoteis.Net.
+            {isAdmin && " Se uma cidade estiver faltando, você pode incluí-la pelo botão acima."}
+          </span>
         </div>
 
         <div className="relative">
@@ -202,19 +185,18 @@ export default function LocalidadesPage() {
                   <th className="px-5 py-3.5">Cidade / Município</th>
                   <th className="px-5 py-3.5">UF / Estado</th>
                   <th className="px-5 py-3.5">País</th>
-                  {isAdmin && <th className="px-5 py-3.5 text-right">Ações</th>}
                 </tr>
               </thead>
               <tbody className={`divide-y ${ui.tdivide}`}>
                 {loading ? (
                   <tr>
-                    <td colSpan={5} className={`px-5 py-10 text-center ${ui.empty}`}>
+                    <td colSpan={4} className={`px-5 py-10 text-center ${ui.empty}`}>
                       <Loader2 className="w-5 h-5 animate-spin inline-block" />
                     </td>
                   </tr>
                 ) : municipalities.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className={`px-5 py-10 text-center ${ui.empty}`}>
+                    <td colSpan={4} className={`px-5 py-10 text-center ${ui.empty}`}>
                       Nenhum município encontrado.
                     </td>
                   </tr>
@@ -225,28 +207,6 @@ export default function LocalidadesPage() {
                       <td className={`px-5 py-4 font-bold text-sm ${ui.strong}`}>{m.name}</td>
                       <td className={`px-5 py-4 font-mono ${ui.muted}`}>{m.uf}</td>
                       <td className={`px-5 py-4 ${ui.muted}`}>{m.country}</td>
-                      {isAdmin && (
-                        <td className="px-5 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => openEditModal(m)}
-                              className={`p-2 rounded-xl transition ${
-                                isDark ? "bg-slate-800 text-blue-400 hover:bg-blue-600 hover:text-white" : "bg-slate-100 text-blue-700 hover:bg-blue-600 hover:text-white"
-                              }`}
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(m)}
-                              className={`p-2 rounded-xl transition ${
-                                isDark ? "bg-slate-800 text-rose-400 hover:bg-rose-600 hover:text-white" : "bg-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white"
-                              }`}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      )}
                     </tr>
                   ))
                 )}
@@ -284,7 +244,7 @@ export default function LocalidadesPage() {
         <div className={ui.modalBackdrop} onClick={() => setShowModal(false)}>
           <div onClick={(e) => e.stopPropagation()} className={`${ui.modalCard} max-w-md`}>
             <div className={`flex items-center justify-between p-5 border-b ${ui.modalDivider}`}>
-              <h3 className="font-bold text-sm">{editingId ? "Editar Município" : "Novo Município"}</h3>
+              <h3 className="font-bold text-sm">Novo Município</h3>
               <button
                 onClick={() => setShowModal(false)}
                 className={isDark ? "text-slate-500 hover:text-white" : "text-slate-400 hover:text-slate-900"}
@@ -343,7 +303,7 @@ export default function LocalidadesPage() {
                 className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-1.5"
               >
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {editingId ? "Salvar Alterações" : "Cadastrar"}
+                Cadastrar
               </button>
             </div>
           </div>
