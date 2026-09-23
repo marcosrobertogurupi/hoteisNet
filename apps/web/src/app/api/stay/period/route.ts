@@ -5,7 +5,7 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
-import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { dateOnlyBrasilia, parseBrasiliaDateTime } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
 
 function nightsBetween(from: Date, to: Date): number {
@@ -45,7 +45,8 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const newExpectedCheckOut = new Date(expectedCheckOut);
+    // Sem fuso = horário de Brasília (lib/brasiliaDate.ts); ISO com fuso é usado como está.
+    const newExpectedCheckOut = parseBrasiliaDateTime(expectedCheckOut, "12:00");
     if (Number.isNaN(newExpectedCheckOut.getTime())) {
       return NextResponse.json({ success: false, error: "expectedCheckOut inválido." }, { status: 400 });
     }

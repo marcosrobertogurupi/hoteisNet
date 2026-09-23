@@ -34,6 +34,7 @@ import VisualizarReservaModal from "@/components/VisualizarReservaModal";
 import { generateReservaPdfBase64 } from "@/utils/pdfGenerator";
 import { isReservationExpired, getReservationExpirationDate, formatExpirationLimit } from "@/utils/reservationTolerance";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
+import { brDateKey } from "@/lib/brasiliaDate";
 
 export interface ReservationItem {
   id: string;
@@ -394,8 +395,8 @@ export default function ReservationGridMap({
 
   // Helper: Normalize API reservation row to ReservationItem format
   const normalizeApiReservation = useCallback((r: any): ReservationItem => {
-    const checkInDate = (r.checkInDate || r.check_in_date || "").split("T")[0];
-    const checkOutDate = (r.checkOutDate || r.check_out_date || "").split("T")[0];
+    const checkInDate = brDateKey(r.checkInDate || r.check_in_date);
+    const checkOutDate = brDateKey(r.checkOutDate || r.check_out_date);
     const mapEndDateRaw = (r.occupiedUntilDate || r.mapEndDate || "").split("T")[0];
 
     // Extract room number

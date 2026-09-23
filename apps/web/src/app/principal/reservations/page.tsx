@@ -11,6 +11,7 @@ import { isReservationExpired } from "@/utils/reservationTolerance";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
 import { usePolling } from "@/lib/usePolling";
+import { brDateKey } from "@/lib/brasiliaDate";
 
 export default function TenantReservationsPage() {
   const { defaultCheckInTime, reservationToleranceHours, theme } = useTheme();
@@ -138,7 +139,7 @@ export default function TenantReservationsPage() {
         // Ocultar reservas expiradas (no-show) por regra de tolerância do assinante
         if (
           isReservationExpired({
-            checkInDate: (r.checkInDate || r.check_in_date || "").split("T")[0],
+            checkInDate: brDateKey(r.checkInDate || r.check_in_date),
             checkInTime: r.checkInTime || null,
             defaultCheckInTime: defaultCheckInTime || "14:00",
             toleranceHours: reservationToleranceHours,

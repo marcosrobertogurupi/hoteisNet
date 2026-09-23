@@ -8,7 +8,7 @@ import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 import { processPaymentLine } from "@/lib/paymentProcessing";
 import { nextReservationNumber, findConflictingReservation } from "@/lib/reservationHelpers";
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
-import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { dateOnlyBrasilia, parseBrasiliaDateTime, brDateKey, brTimeHHMM } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
 import { resolveOperator } from "@/lib/operator";
 
@@ -23,19 +23,20 @@ function hhmmToMinutes(hhmm: string): number {
   return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
 }
 
-// Classifica a chegada a partir da string de check-in (wall-clock que o operador informou,
-// ex: "2026-08-28T09:56:00") — sem conversão de fuso, comparando data com "hoje em Brasília".
+// Classifica a chegada a partir do check-in informado pela tela (horário de parede, ex.:
+// "2026-08-28T09:56:00", ou um ISO com fuso) — data e hora lidas no relógio de Brasília.
 // Retorna "OVERNIGHT" (madrugada), "EARLY" (antes do horário padrão − tolerância) ou null.
 function classifyArrival(
   checkInIso: string,
   standardCheckInTime: string,
   toleranceMinutes: number
 ): "OVERNIGHT" | "EARLY" | null {
-  const [datePart, timePart] = String(checkInIso || "").split("T");
-  if (!datePart) return null;
-  const todayBr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const arrival = parseBrasiliaDateTime(checkInIso);
+  if (isNaN(arrival.getTime())) return null;
+  const datePart = brDateKey(arrival);
+  const todayBr = brDateKey(new Date());
   if (datePart !== todayBr) return null; // chegada não é de hoje — regra não se aplica
-  const arrivalMin = hhmmToMinutes((timePart || "00:00").slice(0, 5));
+  const arrivalMin = hhmmToMinutes(brTimeHHMM(arrival));
   if (arrivalMin < OVERNIGHT_CUTOFF_MINUTES) return "OVERNIGHT";
   const cutoff = hhmmToMinutes(standardCheckInTime) - (Number(toleranceMinutes) || 0);
   if (arrivalMin < cutoff) return "EARLY";
@@ -294,7 +295,7 @@ export async function POST(req: NextRequest) {
       const nightsPre = Math.max(
         1,
         Math.round(
-          (dateOnlyBrasilia(new Date(checkOutDate)).getTime() - dateOnlyBrasilia(new Date(checkInDate)).getTime()) / 86_400_000
+          (dateOnlyBrasilia(parseBrasiliaDateTime(checkOutDate)).getTime() - dateOnlyBrasilia(parseBrasiliaDateTime(checkInDate)).getTime()) / 86_400_000
         )
       );
       let earlyChargePre = 0;
@@ -349,8 +350,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const checkInAtReq = new Date(checkInDate);
-    const checkOutAtReq = new Date(checkOutDate);
+    // A tela manda o horário de parede (sem fuso) — interpretado como Brasília, nunca como o fuso
+    // do processo (UTC na Vercel), que gravava tudo 3h antes do real. Ver lib/brasiliaDate.ts.
+    const checkInAtReq = parseBrasiliaDateTime(checkInDate);
+    const checkOutAtReq = parseBrasiliaDateTime(checkOutDate);
     if (isNaN(checkInAtReq.getTime()) || isNaN(checkOutAtReq.getTime())) {
       return NextResponse.json({ success: false, error: "Datas de chegada/saída inválidas." }, { status: 400 });
     }
@@ -446,8 +449,8 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      const checkInAt = new Date(checkInDate);
-      const checkOutAt = new Date(checkOutDate);
+      const checkInAt = checkInAtReq;
+      const checkOutAt = checkOutAtReq;
 
       // ── Chegada de madrugada / antecipada ──────────────────────────────────────────────
       // Reclassifica a chegada NO SERVIDOR a partir do horário informado (o cliente nunca

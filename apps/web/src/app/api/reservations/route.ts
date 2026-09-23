@@ -18,6 +18,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { processReservationDeposit, reverseReservationDeposits } from "@/lib/paymentProcessing";
 import { jsonForTenant } from "@/lib/tenantResponse";
 import { resolveOperator } from "@/lib/operator";
+import { parseBrasiliaDateTime, brTimeHHMM } from "@/lib/brasiliaDate";
 import { checkDiscountAuthorization, reservationDiscountBase } from "@/lib/discountAuth";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
@@ -108,7 +109,15 @@ export async function POST(req: NextRequest) {
         error: "Campos obrigatórios faltando: Quarto, Hóspede, Chegada, Saída ou Tarifa.",
       });
     }
-    const periodError = reservationPeriodError(new Date(checkInDate), new Date(checkOutDate));
+    // Datas da tela: sem fuso = horário de Brasília (lib/brasiliaDate.ts). Só data (sem hora) usa os
+    // horários padrão de check-in/check-out do hotel.
+    const tenantTimes = await prisma.tenant.findUnique({
+      where: { id: session.tenantId },
+      select: { standardCheckInTime: true, standardCheckOutTime: true },
+    });
+    const checkInAtReq = parseBrasiliaDateTime(checkInDate, tenantTimes?.standardCheckInTime || "14:00");
+    const checkOutAtReq = parseBrasiliaDateTime(checkOutDate, tenantTimes?.standardCheckOutTime || "12:00");
+    const periodError = reservationPeriodError(checkInAtReq, checkOutAtReq);
     if (periodError) {
       return NextResponse.json({ success: false, error: periodError }, { status: 400 });
     }
@@ -128,7 +137,7 @@ export async function POST(req: NextRequest) {
     const discountAuth = await checkDiscountAuthorization(req, {
       tenantId: session.tenantId,
       discountAmount,
-      baseAmount: await reservationDiscountBase(session.tenantId, tariffId, dailyRate, checkInDate, checkOutDate),
+      baseAmount: await reservationDiscountBase(session.tenantId, tariffId, dailyRate, checkInAtReq, checkOutAtReq),
       adminEmail: body.adminEmail,
       adminPassword: body.adminPassword,
     });
@@ -138,8 +147,8 @@ export async function POST(req: NextRequest) {
 
     const result = await txWithRetry(async (tx) => {
       const realRoomId = await resolveRoomId(tx as any, String(roomId), session.tenantId!);
-      const checkIn = new Date(checkInDate);
-      const checkOut = new Date(checkOutDate);
+      const checkIn = checkInAtReq;
+      const checkOut = checkOutAtReq;
 
       // Trava a linha do quarto pelo resto da transação ANTES de checar conflito: sem isso, duas
       // criações concorrentes para o mesmo quarto/período leem "livre" ao mesmo tempo e ambas
@@ -368,8 +377,8 @@ export async function PATCH(req: NextRequest) {
           session.tenantId,
           atual.tariffId ?? undefined,
           dailyRate ?? atual.dailyRate,
-          (checkInDate ? new Date(checkInDate) : atual.checkInDate).toISOString(),
-          (checkOutDate ? new Date(checkOutDate) : atual.checkOutDate).toISOString()
+          checkInDate ? parseBrasiliaDateTime(checkInDate, brTimeHHMM(atual.checkInDate)) : atual.checkInDate,
+          checkOutDate ? parseBrasiliaDateTime(checkOutDate, brTimeHHMM(atual.checkOutDate)) : atual.checkOutDate
         ),
         adminEmail: body.adminEmail,
         adminPassword: body.adminPassword,
@@ -387,8 +396,15 @@ export async function PATCH(req: NextRequest) {
       }
 
       const realRoomId = roomId ? await resolveRoomId(tx as any, String(roomId), session.tenantId!) : undefined;
-      const effectiveCheckIn = checkInDate ? new Date(checkInDate) : existing.checkInDate;
-      const effectiveCheckOut = checkOutDate ? new Date(checkOutDate) : existing.checkOutDate;
+      // Sem fuso = horário de Brasília. Só a data (arrastar no Mapa de Reservas, tela de edição)
+      // preserva o horário que a reserva já tinha — antes virava meia-noite UTC (21h do dia
+      // anterior em Brasília), mudando o dia da reserva.
+      const effectiveCheckIn = checkInDate
+        ? parseBrasiliaDateTime(checkInDate, brTimeHHMM(existing.checkInDate))
+        : existing.checkInDate;
+      const effectiveCheckOut = checkOutDate
+        ? parseBrasiliaDateTime(checkOutDate, brTimeHHMM(existing.checkOutDate))
+        : existing.checkOutDate;
 
       if (checkInDate || checkOutDate) {
         const periodError = reservationPeriodError(effectiveCheckIn, effectiveCheckOut);
