@@ -8,6 +8,9 @@ import {
   findBlockingOpenStay,
   lockRoomsForReservation,
   nextReservationNumber,
+  reservationPeriodError,
+  reservationStatusTransitionError,
+  CREATABLE_RESERVATION_STATUSES,
 } from "@/lib/reservationHelpers";
 import { reservationsMapVersion, notModifiedResponse } from "@/lib/mapVersion";
 import { reservationsMapPayload } from "@/lib/mapQueries";
@@ -23,6 +26,9 @@ class ReservationConflictError extends Error {}
 
 // Reserva inexistente / de outro tenant — o catch mapeia para 404 (não 500).
 class ReservationNotFoundError extends Error {}
+
+// Dado inválido enviado pelo cliente (período, transição de status) — o catch mapeia para 400.
+class ReservationInputError extends Error {}
 
 // Reservation.tenantId é o tenant REAL do hotel (session.tenantId) desde 09/09/2026. Até então
 // toda reserva era gravada com o rótulo fixo "TNT-01" e o isolamento vinha só de
@@ -101,6 +107,18 @@ export async function POST(req: NextRequest) {
         success: false,
         error: "Campos obrigatórios faltando: Quarto, Hóspede, Chegada, Saída ou Tarifa.",
       });
+    }
+    const periodError = reservationPeriodError(new Date(checkInDate), new Date(checkOutDate));
+    if (periodError) {
+      return NextResponse.json({ success: false, error: periodError }, { status: 400 });
+    }
+    // Reserva nova só nasce PRE_RESERVATION ou CONFIRMED — os demais status vêm dos fluxos próprios.
+    const initialStatus = String(status || "CONFIRMED").toUpperCase();
+    if (!(CREATABLE_RESERVATION_STATUSES as string[]).includes(initialStatus)) {
+      return NextResponse.json(
+        { success: false, error: "Status inicial inválido para uma reserva (use pré-reserva ou confirmada)." },
+        { status: 400 }
+      );
     }
 
     // Desconto acima do limite do assinante exige autorização de administrador — revalidada aqui,
@@ -209,14 +227,11 @@ export async function POST(req: NextRequest) {
           roomCategory: roomCategory || null,
           roomFloor: roomFloor || null,
           reservationNumber,
-          status: status || "CONFIRMED",
+          status: initialStatus as any,
           preCheckinSent: false,
         },
       });
 
-      if (["CHECKED_IN", "CHECKEDIN", "OCCUPIED"].includes(String(status).toUpperCase())) {
-        await tx.room.update({ where: { id: realRoomId, tenantId: session.tenantId! }, data: { status: "OCCUPIED" } });
-      }
 
       if (validPayments.length > 0 && realCashRegisterId) {
         const room = await tx.room.findUnique({ where: { id: realRoomId }, select: { number: true } });
@@ -375,11 +390,34 @@ export async function PATCH(req: NextRequest) {
       const effectiveCheckIn = checkInDate ? new Date(checkInDate) : existing.checkInDate;
       const effectiveCheckOut = checkOutDate ? new Date(checkOutDate) : existing.checkOutDate;
 
+      if (checkInDate || checkOutDate) {
+        const periodError = reservationPeriodError(effectiveCheckIn, effectiveCheckOut);
+        if (periodError) throw new ReservationInputError(periodError);
+      }
+
+      // Status só muda por transições que não têm efeito colateral obrigatório (pré-reserva ↔
+      // confirmada, no-show e sua reativação). Check-in, check-out e cancelamento têm fluxo próprio
+      // — por aqui eles pulavam a hospedagem, o saldo e o estorno de sinal.
+      const statusChanges = !!status && String(status).toUpperCase() !== existing.status;
+      if (status) {
+        const transitionError = reservationStatusTransitionError(existing.status, String(status));
+        if (transitionError) throw new ReservationInputError(transitionError);
+      }
+      // Reativar um NO_SHOW volta a ocupar o quarto — precisa revalidar o período como uma reserva nova.
+      const reactivating = statusChanges && existing.status === "NO_SHOW";
+
+      // Hóspede já hospedado muda de quarto pela Transferência de Quarto (que move a hospedagem,
+      // o status dos dois quartos e o histórico) — mover só a reserva deixava a hospedagem num
+      // quarto e a reserva/ocupação desenhada em outro.
+      if (realRoomId !== undefined && realRoomId !== existing.roomId && existing.status === "CHECKED_IN") {
+        throw new ReservationInputError("Hóspede já hospedado: para trocar de quarto use a Transferência de Quarto no Mapa de Quartos.");
+      }
+
       // Bloqueia overbooking na edição/movimentação (inclui o drag-and-drop no Mapa de Reservas) —
       // mesmo padrão de findConflictingReservation usado em batch/route.ts e stay/period/route.ts.
       // Só precisa checar quando quarto e/ou datas realmente mudam; edições de outros campos
       // (nome, notas, etc.) não afetam ocupação e não precisam revalidar o período.
-      if (realRoomId !== undefined || checkInDate || checkOutDate) {
+      if (realRoomId !== undefined || checkInDate || checkOutDate || reactivating) {
         // Trava o(s) quarto(s) envolvidos (o atual e o de destino, se mudou) antes de revalidar o
         // período — impede que uma edição/movimentação concorrente para o mesmo quarto crie
         // sobreposição.
@@ -427,7 +465,7 @@ export async function PATCH(req: NextRequest) {
       if (discountAmount !== undefined) data.discountAmount = discountAmount;
       if (totalAmount !== undefined) data.totalAmount = totalAmount;
       if (notes !== undefined) data.notes = notes;
-      if (status) data.status = status;
+      if (status) data.status = String(status).toUpperCase();
 
       const updated = await tx.reservation.updateMany({
         where: { id, room: { tenantId: session.tenantId! } },
@@ -504,9 +542,6 @@ export async function PATCH(req: NextRequest) {
         await tx.reservation.update({ where: { id, room: { tenantId: session.tenantId! } }, data: { depositPaid: Number(agg._sum.amount || 0) } });
       }
 
-      if (status && realRoomId && ["CHECKED_IN", "CHECKEDIN", "OCCUPIED"].includes(String(status).toUpperCase())) {
-        await tx.room.update({ where: { id: realRoomId, tenantId: session.tenantId! }, data: { status: "OCCUPIED" } });
-      }
     });
 
     await logActivity({
@@ -542,7 +577,13 @@ export async function PATCH(req: NextRequest) {
   } catch (error: any) {
     console.error("[PATCH /api/reservations] Erro:", error);
     const status =
-      error instanceof ReservationConflictError ? 409 : error instanceof ReservationNotFoundError ? 404 : 500;
+      error instanceof ReservationConflictError
+        ? 409
+        : error instanceof ReservationNotFoundError
+          ? 404
+          : error instanceof ReservationInputError
+            ? 400
+            : 500;
     return NextResponse.json({ success: false, error: error.message }, { status });
   }
 }

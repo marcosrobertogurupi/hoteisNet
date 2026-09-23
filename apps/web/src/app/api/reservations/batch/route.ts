@@ -9,6 +9,8 @@ import {
   findBlockingOpenStay,
   lockRoomsForReservation,
   nextReservationNumber,
+  reservationPeriodError,
+  CREATABLE_RESERVATION_STATUSES,
 } from "@/lib/reservationHelpers";
 import { processReservationDeposit } from "@/lib/paymentProcessing";
 import { resolveOperator } from "@/lib/operator";
@@ -45,6 +47,19 @@ export async function POST(req: NextRequest) {
           success: false,
           error: `Reserva ${i + 1} (${r.guestName || "sem nome"}): campos obrigatórios faltando (Quarto, Hóspede, Chegada, Saída ou Tarifa).`,
         });
+      }
+      const periodError = reservationPeriodError(new Date(r.checkInDate), new Date(r.checkOutDate));
+      if (periodError) {
+        return NextResponse.json(
+          { success: false, error: `Reserva ${i + 1} (${r.guestName}): ${periodError}` },
+          { status: 400 }
+        );
+      }
+      if (r.status && !(CREATABLE_RESERVATION_STATUSES as string[]).includes(String(r.status).toUpperCase())) {
+        return NextResponse.json(
+          { success: false, error: `Reserva ${i + 1} (${r.guestName}): status inicial inválido (use pré-reserva ou confirmada).` },
+          { status: 400 }
+        );
       }
 
       // Mesma trava de desconto de /api/reservations: acima do limite do assinante exige
@@ -165,7 +180,7 @@ export async function POST(req: NextRequest) {
             roomCategory: r.roomCategory || null,
             roomFloor: r.roomFloor || null,
             reservationNumber,
-            status: r.status || "CONFIRMED",
+            status: (r.status ? String(r.status).toUpperCase() : "CONFIRMED") as any,
             preCheckinSent: false,
           },
         });

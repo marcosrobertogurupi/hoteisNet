@@ -53,6 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           adults: true,
           children: true,
           notifiedRoomId: true,
+          notifyExpiresAt: true,
           status: true,
           createdAt: true,
         },
@@ -71,7 +72,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // direto; caso contrário, se há entradas WAITING mais antigas para a mesma categoria/período,
       // a conversão só segue com o override explícito da recepção — e o "furo" fica registrado.
       let jumpedQueue = false;
-      if (entry.status !== "NOTIFIED") {
+      // Aviso com prazo vencido não dá mais prioridade (nem o soft hold do quarto): a entrada volta a
+      // respeitar a ordem da fila como qualquer outra.
+      const noticeStillValid =
+        entry.status === "NOTIFIED" && (!entry.notifyExpiresAt || entry.notifyExpiresAt.getTime() > Date.now());
+      if (!noticeStillValid) {
         const ahead = await countWaitlistAhead(tx, { ...entry, tenantId });
         if (ahead.count > 0) {
           if (!overrideQueue) {
@@ -104,7 +109,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // ou dois terminais) escolhem o mesmo quarto livre e criam duas reservas sobrepostas.
       await lockRoomsForReservation(tx, rooms.map((r) => r.id));
 
-      const ordered = entry.notifiedRoomId
+      const ordered = noticeStillValid && entry.notifiedRoomId
         ? [...rooms].sort((a, b) => (a.id === entry.notifiedRoomId ? -1 : b.id === entry.notifiedRoomId ? 1 : 0))
         : rooms;
 

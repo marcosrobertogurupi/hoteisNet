@@ -112,6 +112,13 @@ Terceira auditoria (213 rotas de API + worker), com foco reforçado nas funçõe
 * **Consulta de CPF na Hub (médio)** — o log de falha imprimia a URL com o token master da Hub; a cota mensal passou a ser reservada num `UPDATE` condicional antes da chamada (antes, consultas simultâneas furavam a cota) e o ciclo mensal é contado no mês de Brasília.
 * **Municípios (médio)** — cadastro global compartilhado por todos os assinantes: alteração e exclusão passaram a ser exclusivas da equipe da plataforma; o hotel ainda pode incluir um município que falte.
 
+**Fase 3 — Reservas, fila de espera e worker ✅**
+* **Reservas: período e status validados no servidor (médio)** — `POST`/`PATCH /api/reservations` e o lote aceitavam saída antes da chegada (a reserva não bloqueava o quarto nem era bloqueada) e qualquer status: por `PATCH` dava para marcar `CHECKED_IN` (quarto OCUPADO sem hospedagem) ou `CANCELLED` sem estornar o sinal. Agora reserva nova só nasce pré-reserva/confirmada, e a edição só permite pré-reserva ↔ confirmada, no-show e a reativação do no-show (com revalidação de conflito); check-in, check-out e cancelamento seguem pelos fluxos próprios. Hóspede já hospedado não muda de quarto pela reserva (usa a Transferência de Quarto). Helpers em `lib/reservationHelpers.ts` (`reservationPeriodError`, `reservationStatusTransitionError`).
+* **Prorrogação sem corrida de overbooking (médio)** — `PATCH /api/stay/period` passou a travar a linha do quarto antes de checar conflito, como as rotas de reserva.
+* **Fila de espera (médio)** — o worker encerra entradas cuja data de chegada já passou (`DATE_PASSED`) e avisos com prazo vencido (`EXPIRED_NO_ANSWER`); antes elas geravam avisos de "vaga" para períodos no passado e seguravam quarto indefinidamente. Na conversão e no soft hold, aviso vencido não fura mais a fila nem segura quarto.
+* **Virada de diária recuperável (alto)** — o job só rodava no minuto exato de `dailyRolloverTime`; um deploy/reinício naquele minuto deixava o dia sem diária em todos os quartos. Agora qualquer ciclo após o horário lança o que falta (inclusive dias perdidos, uma diária por dia), com a linha da hospedagem travada e revalidada (nunca lança em hospedagem recém-fechada).
+* **No-show (médio)** — só marca a reserva de ontem a partir das 06:00 (chegada de madrugada deixava de encontrar o quarto) e filtra por data no banco em vez de trazer todas as reservas de todos os hotéis a cada hora.
+
 ## 3. Especificação das Funcionalidades (Feature Specifications)
 
 ### 3.1. Mapa Visual de Quartos (Room Map) ✅
