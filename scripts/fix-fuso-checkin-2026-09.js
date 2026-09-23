@@ -17,6 +17,9 @@
 //   - reservations vinculada: checkInDate / checkOutDate, só se forem iguais aos da hospedagem
 //     (foram gravados pelo mesmo check-in)
 //
+// Seguro para rodar mais de uma vez: só pega check-ins anteriores ao deploy da correção e que ainda
+// estejam deslocados; as reservas à meia-noite UTC deixam de casar depois de corrigidas.
+//
 // Uso:  node --env-file=.env scripts/fix-fuso-checkin-2026-09.js            (prévia, só leitura)
 //       node --env-file=.env scripts/fix-fuso-checkin-2026-09.js --apply    (aplica, numa transação)
 
@@ -25,6 +28,10 @@ const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 const APPLY = process.argv.includes("--apply");
 const SHIFT_MS = 3 * 60 * 60 * 1000;
+// Momento em que a correção (PR #30, parseBrasiliaDateTime) entrou no ar em produção — deploy do
+// commit 68580e8 concluído na Vercel. Check-ins registrados a partir daqui já foram gravados no
+// horário certo e NUNCA podem ser deslocados.
+const FIX_LIVE_AT = new Date("2026-09-23T13:04:06Z");
 const br = (d) => (d ? new Date(d).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—");
 const plus = (d) => new Date(new Date(d).getTime() + SHIFT_MS);
 const same = (a, b) => a && b && new Date(a).getTime() === new Date(b).getTime();
@@ -40,6 +47,11 @@ async function main() {
       AND l."ipAddress" NOT IN ('::1', 'desconhecido')
       AND l."ipAddress" NOT LIKE '127.%'
       AND l."ipAddress" NOT LIKE '::ffff:127.%'
+      AND l."createdAt" < ${FIX_LIVE_AT}
+      -- Idempotência: só o que AINDA está deslocado (gravado ~3h antes do instante real do check-in;
+      -- 150–190 min cobre também o horário padrão das 14h digitado alguns minutos antes). Depois de
+      -- corrigido, a diferença cai para ~0 e o registro sai deste filtro — rodar de novo não desloca 2x.
+      AND extract(epoch from (l."createdAt" - s."checkInDate")) / 60 BETWEEN 150 AND 190
     ORDER BY s."checkInDate"`;
 
   const plan = [];
