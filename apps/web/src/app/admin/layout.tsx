@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, MessageSquare, Settings, ShieldCheck, UserCog, Users } from "lucide-react";
+import { Activity, Building2, Cpu, DollarSign, LifeBuoy, LogOut, MapPin, MessageSquare, Settings, ShieldCheck, UserCog, Users } from "lucide-react";
 
 interface MeUser {
   name: string;
@@ -108,6 +108,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 { href: "/admin/plans", label: "Catálogo de Planos", icon: DollarSign },
                 { href: "/admin/billing", label: "Financeiro", icon: DollarSign },
                 { href: "/admin/team", label: "Equipe & Integrações", icon: Users },
+                { href: "/admin/municipios", label: "Municípios (IBGE)", icon: MapPin },
               ].map((item) => {
                 const Icon = item.icon;
                 return (
