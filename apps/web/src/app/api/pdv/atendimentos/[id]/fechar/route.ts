@@ -156,6 +156,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (isHospede) {
         if (!fresh.stayCheckinId) throw new Error("Hospedagem não vinculada ao atendimento.");
         await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${fresh.stayCheckinId} FOR UPDATE`;
+        // Revalida DEPOIS do lock: se o hóspede já fez check-out, lançar aqui jogaria consumo numa
+        // conta encerrada, que nunca mais seria cobrada.
+        const stayState = await tx.stayCheckin.findFirst({
+          where: { id: fresh.stayCheckinId, tenantId: session.tenantId! },
+          select: { isClosed: true },
+        });
+        if (!stayState) throw new Error("Hospedagem vinculada ao atendimento não encontrada.");
+        if (stayState.isClosed) {
+          throw new Error(
+            "A hospedagem deste hóspede já foi encerrada (check-out feito). Feche a comanda como cliente avulso (pagamento no ato) ou reabra a hospedagem pela recepção."
+          );
+        }
 
         for (const it of itensAtivos) {
           await tx.stayConsumption.create({

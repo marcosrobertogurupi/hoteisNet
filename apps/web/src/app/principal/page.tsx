@@ -1930,7 +1930,11 @@ export default function TenantDashboardPage() {
             // marca o quarto OCCUPIED e sincroniza a Reservation de origem para CHECKED_IN —
             // tudo dentro da mesma transação de banco (ver POST /api/stay/checkin). Se qualquer
             // etapa falhar, nada é persistido, e a UI só reflete o estado depois de confirmado.
-            const targetResId = checkinData.reservationId || reservaParaCheckin?.id || todayReservationsByRoom[activeRoom.number]?.[0]?.id || null;
+            // Só a reserva escolhida explicitamente (fluxo "Efetuar check-in" da reserva). Check-in
+            // direto no quarto não "adota" mais a 1ª reserva do dia às cegas: quem decide é o
+            // servidor, e só se for do MESMO hóspede (CPF/nome) — senão um hóspede de balcão
+            // herdava a reserva (e o sinal pago) de outra pessoa.
+            const targetResId = checkinData.reservationId || reservaParaCheckin?.id || null;
 
             let checkinSaved = false;
             try {

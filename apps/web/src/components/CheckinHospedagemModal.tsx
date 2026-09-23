@@ -475,6 +475,7 @@ export default function CheckinHospedagemModal({
       setEarlyArrivalFixedFeeAuthorized(false);
       setEarlyArrivalCourtesyAuthorized(false);
       setEarlyArrivalAuthorizedBy(null);
+      setEarlyArrivalAuthCredentials(null);
       setAdminAuthPurpose(null);
       setFnrhReservationId(reservationData.id || null);
       setFnrhStatus(reservationData.fnrhCompleted ? "COMPLETED" : reservationData.precheckinSent ? "PENDING" : "NOT_SENT");
@@ -540,6 +541,7 @@ export default function CheckinHospedagemModal({
       setEarlyArrivalFixedFeeAuthorized(false);
       setEarlyArrivalCourtesyAuthorized(false);
       setEarlyArrivalAuthorizedBy(null);
+      setEarlyArrivalAuthCredentials(null);
       setAdminAuthPurpose(null);
       setFnrhReservationId(null);
       setFnrhStatus("NOT_SENT");
@@ -928,6 +930,9 @@ export default function CheckinHospedagemModal({
   const [earlyArrivalFixedFeeAuthorized, setEarlyArrivalFixedFeeAuthorized] = useState<boolean>(false);
   const [earlyArrivalCourtesyAuthorized, setEarlyArrivalCourtesyAuthorized] = useState<boolean>(false);
   const [earlyArrivalAuthorizedBy, setEarlyArrivalAuthorizedBy] = useState<string | null>(null);
+  // Credenciais do administrador que autorizou a cortesia / taxa reduzida de chegada antecipada —
+  // reenviadas no payload para o backend revalidar (verifyAdminStepUp); o nome sozinho não vale.
+  const [earlyArrivalAuthCredentials, setEarlyArrivalAuthCredentials] = useState<{ email: string; password: string } | null>(null);
   const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
   const [adminAuthPurpose, setAdminAuthPurpose] = useState<"COURTESY" | "LOW_FIXED_FEE" | "HIGH_DISCOUNT" | null>(null);
 
@@ -1583,6 +1588,8 @@ export default function CheckinHospedagemModal({
             choice: earlyArrivalChoice,
             fixedFeeAmount: earlyArrivalChoice === "FIXED_FEE" ? earlyArrivalFixedFeeValue : undefined,
             authorizedBy: earlyArrivalAuthorizedBy || undefined,
+            adminEmail: earlyArrivalAuthCredentials?.email,
+            adminPassword: earlyArrivalAuthCredentials?.password,
             label: earlyArrivalLabel,
           }
         : null,
@@ -3324,6 +3331,7 @@ export default function CheckinHospedagemModal({
           onAuthorized={(admin, credentials) => {
             if (adminAuthPurpose === "LOW_FIXED_FEE") {
               setEarlyArrivalAuthorizedBy(admin.name);
+              setEarlyArrivalAuthCredentials({ email: credentials.email, password: credentials.password });
               setEarlyArrivalFixedFeeAuthorized(true);
               toast.success(`Taxa reduzida autorizada por ${admin.name}.`);
             } else if (adminAuthPurpose === "HIGH_DISCOUNT") {
@@ -3334,6 +3342,7 @@ export default function CheckinHospedagemModal({
               toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
             } else {
               setEarlyArrivalAuthorizedBy(admin.name);
+              setEarlyArrivalAuthCredentials({ email: credentials.email, password: credentials.password });
               setEarlyArrivalCourtesyAuthorized(true);
               setEarlyArrivalChoice("COURTESY");
               toast.success(`Cortesia autorizada por ${admin.name}.`);

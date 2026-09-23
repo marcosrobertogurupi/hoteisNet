@@ -93,6 +93,18 @@ Uma segunda auditoria estática (202 rotas de API, 819 chamadas Prisma, 87 model
 * Confirmar no painel do Supabase que o bucket `fnrh-signatures` é **privado** (B5) — o código já grava caminhos não adivinháveis, mas a política do bucket é configuração de infraestrutura, não de código.
 * O segredo do webhook da uazapi ainda trafega por query string porque é assim que a instância está registrada; o servidor já aceita o cabeçalho `x-webhook-secret`, e a migração depende de confirmar suporte a cabeçalhos no webhook da uazapi.
 
+### 2.5. Auditoria de Segurança e Lógica de 22/09/2026 🟡 (correções em andamento)
+
+Terceira auditoria (213 rotas de API + worker), com foco reforçado nas funções vitais do hotel — **reserva, check-in/check-out e fila de espera**. Correções entregues na branch `fix/auditoria-seguranca-e-logica`, em fases:
+
+**Fase 1 — Check-in / check-out / consumo ✅**
+* **`reservationId` do check-in isolado por tenant (crítico)** — `POST /api/stay/checkin` usava o id de reserva do body sem conferir hotel nem status: um usuário de qualquer hotel sobrescrevia a reserva de outro (nome, CPF, datas, `CHECKED_IN`) e puxava para a própria hospedagem os sinais pagos nela; uma reserva cancelada (sinal já estornado) voltava a contar o sinal como pagamento. Agora a reserva precisa ser do tenant da sessão e estar em status que aceita check-in; o quarto da reserva passa a ser o quarto onde o hóspede entrou.
+* **Overbooking no check-in (alto)** — o check-in só verificava hospedagem aberta no quarto; agora também bloqueia sobreposição com reserva ativa de outro hóspede (`findConflictingReservation`, com a linha do quarto travada). Datas inválidas / saída antes da chegada são recusadas.
+* **Adoção da reserva do dia só para o mesmo hóspede (alto)** — o check-in direto no quarto adotava às cegas a 1ª reserva de hoje, e com ela o sinal pago por outra pessoa. A tela deixou de enviar essa reserva e o servidor só adota se CPF ou nome baterem.
+* **Cortesia / taxa reduzida de chegada antecipada com step-up real (alto)** — bastava um nome em `authorizedBy`; agora exige e-mail + senha de administrador verificados no servidor (`verifyAdminStepUp`), e o nome gravado é o do administrador autenticado.
+* **Limite de desconto no check-in (médio)** — a base do percentual usava o `totalAmount` do body, que podia ser inflado; passou a ser calculada no servidor (diárias do período + chegada antecipada).
+* **Lançamentos em hospedagem encerrada (alto)** — check-out bloqueado enquanto houver comanda de hóspede aberta no PDV; fechar/reabrir comanda de hóspede recusa hospedagem encerrada; `POST`/`DELETE /api/stay/consumo` revalidam hospedagem aberta após o lock. O `POST` de consumo também passou a validar `productId`/`posLocationId` contra o tenant (a baixa de estoque podia cair em PDV de outro hotel) e o `DELETE` recusa linhas vindas de comanda do PDV (estorno pela reabertura da comanda) e registra auditoria.
+
 ## 3. Especificação das Funcionalidades (Feature Specifications)
 
 ### 3.1. Mapa Visual de Quartos (Room Map) ✅

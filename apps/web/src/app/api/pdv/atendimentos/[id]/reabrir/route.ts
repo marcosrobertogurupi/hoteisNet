@@ -71,6 +71,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
       if (fresh.customerType === "HOSPEDE" && fresh.stayCheckinId) {
         await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${fresh.stayCheckinId} FOR UPDATE`;
+        // Hospedagem já encerrada: estornar o consumo dela alteraria uma conta fechada (o check-out
+        // já foi feito com esse valor). A reabertura da comanda fica bloqueada nesse caso.
+        const stayState = await tx.stayCheckin.findFirst({
+          where: { id: fresh.stayCheckinId, tenantId: session.tenantId! },
+          select: { isClosed: true },
+        });
+        if (stayState?.isClosed) {
+          throw new Error("A hospedagem vinculada a esta comanda já foi encerrada — a comanda não pode ser reaberta.");
+        }
         const lancados = await tx.stayConsumption.findMany({
           where: { comandaSessionId: id, stayCheckinId: fresh.stayCheckinId },
           select: { id: true, totalPrice: true },
