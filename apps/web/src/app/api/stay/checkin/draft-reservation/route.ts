@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { validateCPF, formatCPF } from "@/lib/documentValidation";
-import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { dateOnlyBrasilia, parseBrasiliaDateTime } from "@/lib/brasiliaDate";
 import { nextReservationNumber } from "@/lib/reservationHelpers";
 
 // Status de reserva que já representam uma hospedagem em curso ou encerrada — nunca reaproveitar
@@ -48,8 +48,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: `Quarto ${roomTarget} não encontrado.` }, { status: 404 });
     }
 
-    const checkInAt = checkInDate ? new Date(checkInDate) : new Date();
-    const checkOutAt = checkOutDate ? new Date(checkOutDate) : new Date(checkInAt.getTime() + 24 * 60 * 60 * 1000);
+    // Horário de parede da tela = Brasília (ver parseBrasiliaDateTime em lib/brasiliaDate.ts).
+    const checkInAt = checkInDate ? parseBrasiliaDateTime(checkInDate) : new Date();
+    const checkOutAt = checkOutDate ? parseBrasiliaDateTime(checkOutDate) : new Date(checkInAt.getTime() + 24 * 60 * 60 * 1000);
 
     const todayStart = dateOnlyBrasilia(new Date());
     const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);

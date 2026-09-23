@@ -14,6 +14,7 @@ import {
 } from "@/lib/reservationHelpers";
 import { processReservationDeposit } from "@/lib/paymentProcessing";
 import { resolveOperator } from "@/lib/operator";
+import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
 import { checkDiscountAuthorization, reservationDiscountBase } from "@/lib/discountAuth";
 
 // POST /api/reservations/batch — cria várias reservas de uma só vez, dentro de uma única
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
           error: `Reserva ${i + 1} (${r.guestName || "sem nome"}): campos obrigatórios faltando (Quarto, Hóspede, Chegada, Saída ou Tarifa).`,
         });
       }
-      const periodError = reservationPeriodError(new Date(r.checkInDate), new Date(r.checkOutDate));
+      const periodError = reservationPeriodError(parseBrasiliaDateTime(r.checkInDate, "14:00"), parseBrasiliaDateTime(r.checkOutDate, "12:00"));
       if (periodError) {
         return NextResponse.json(
           { success: false, error: `Reserva ${i + 1} (${r.guestName}): ${periodError}` },
@@ -125,8 +126,9 @@ export async function POST(req: NextRequest) {
       for (let idx = 0; idx < reservations.length; idx++) {
         const r = reservations[idx];
         const realRoomId = resolvedRoomIds[idx];
-        const checkInDate = new Date(r.checkInDate);
-        const checkOutDate = new Date(r.checkOutDate);
+        // Sem fuso = horário de Brasília (lib/brasiliaDate.ts).
+        const checkInDate = parseBrasiliaDateTime(r.checkInDate, "14:00");
+        const checkOutDate = parseBrasiliaDateTime(r.checkOutDate, "12:00");
 
         const conflict = await findConflictingReservation(tx as any, realRoomId, checkInDate, checkOutDate);
         if (conflict) {

@@ -18,6 +18,7 @@ import {
 import CustomDatePicker from "@/components/CustomDatePicker";
 import { useToast } from "@/context/ToastContext";
 import { useTheme } from "@/context/ThemeContext";
+import { brDateKey } from "@/lib/brasiliaDate";
 
 export interface TariffOption {
   id: string;
@@ -359,8 +360,8 @@ export default function AlterarPeriodoModal({
 
     for (const res of allReservations) {
       if (res.roomNumber === currentRoomNo && res.id !== stayData.idHospedagem) {
-        const startStr = (res.checkInDate || "").split("T")[0];
-        const endStr = (res.checkOutDate || "").split("T")[0];
+        const startStr = brDateKey(res.checkInDate);
+        const endStr = brDateKey(res.checkOutDate);
         if (startStr && endStr) {
           const start = new Date(startStr + "T00:00:00");
           const end = new Date(endStr + "T00:00:00");

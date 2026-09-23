@@ -12,6 +12,7 @@ import { sendUazapiImage } from "@/lib/uazapi";
 import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
 import { reverseReservationDeposits } from "@/lib/paymentProcessing";
+import { brDateKey } from "@/lib/brasiliaDate";
 
 function startOfToday(): Date {
   const now = new Date();
@@ -241,8 +242,8 @@ async function findReservationsByPhone(tenantId: string, phone: string) {
       status: r.status,
       quarto: r.room.number,
       categoria: r.room.category.name,
-      checkIn: r.checkInDate.toISOString().slice(0, 10),
-      checkOut: r.checkOutDate.toISOString().slice(0, 10),
+      checkIn: brDateKey(r.checkInDate),
+      checkOut: brDateKey(r.checkOutDate),
       valorTotal: Number(r.totalAmount),
     }));
 }

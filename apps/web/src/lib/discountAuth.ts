@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
 
 // Desconto acima do limite do assinante (Tenant.maxDiscountPercent, definido em Configurações)
 // exige autorização de administrador. A checagem precisa ser AUTORITATIVA no servidor: a tela
@@ -28,7 +29,7 @@ export async function reservationDiscountBase(
 ): Promise<number> {
   const nights = Math.max(
     1,
-    Math.round((new Date(checkOutDate).getTime() - new Date(checkInDate).getTime()) / 86_400_000)
+    Math.round((parseBrasiliaDateTime(checkOutDate).getTime() - parseBrasiliaDateTime(checkInDate).getTime()) / 86_400_000)
   );
   let unitPrice = Number(dailyRate) || 0;
   if (tariffId) {

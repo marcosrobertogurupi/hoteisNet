@@ -873,8 +873,9 @@ export default function LancarReservaModal({
           guestName: guestName.toUpperCase(),
           guestCpf: docType === "CPF" ? docNumber : null,
           guestPhone: guestPhone || null,
-          checkInDate: dtChegadaLocal.split("T")[0],
-          checkOutDate: dtSaidaLocal.split("T")[0],
+          // Data E hora (instante real, como no POST) — só a data virava meia-noite UTC no servidor.
+          checkInDate: new Date(dtChegadaLocal).toISOString(),
+          checkOutDate: new Date(dtSaidaLocal).toISOString(),
           dailyRate: selectedTariff.price,
           depositPaid: totalAdiantamento,
           totalAmount: totalLiquido,

@@ -60,6 +60,7 @@ import HistoricoLimpezaModal from "@/components/HistoricoLimpezaModal";
 import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/SelecaoReservaQuartoModal";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { usePolling } from "@/lib/usePolling";
+import { brDateKey } from "@/lib/brasiliaDate";
 
 // Converte "DD/MM/YYYY HH:MM:SS" (formato usado pelo modal de check-in) para ISO "YYYY-MM-DDTHH:MM:SS",
 // formato exigido pela coluna timestamp do Postgres na API /api/reservations.
@@ -358,7 +359,7 @@ export default function TenantDashboardPage() {
           const dbExpectedCheckOutDate =
             dbStatus === "VACANT_CLEAN" || !activeStay?.expectedCheckOut
               ? null
-              : String(activeStay.expectedCheckOut).split("T")[0];
+              : brDateKey(activeStay.expectedCheckOut);
 
           if (existing) {
             // Manter a mesma referência de objeto se nada mudou para garantir ZERO piscamento na UI
@@ -595,8 +596,8 @@ export default function TenantDashboardPage() {
                     id: r.id,
                     guestName: r.guestName || "Hóspede",
                     roomNumber: activeRoom.number,
-                    checkInDate: (r.checkInDate || "").split("T")[0],
-                    checkOutDate: (r.checkOutDate || "").split("T")[0],
+                    checkInDate: brDateKey(r.checkInDate),
+                    checkOutDate: brDateKey(r.checkOutDate),
                   }));
                 setActiveRoomReservations(roomReservas);
               }
@@ -666,12 +667,12 @@ export default function TenantDashboardPage() {
             guestName: (r.guestName || "HÓSPEDE").toUpperCase(),
             cpf: r.guestCpf || r.cpf || "",
             phone: r.guestPhone || r.phone || "",
-            checkInDate: `${formatDdMmYyyy((r.checkInDate || "").split("T")[0])} ${r.checkInTime || "14:00"}`,
-            checkOutDate: `${formatDdMmYyyy((r.checkOutDate || "").split("T")[0])} ${r.checkOutTime || "12:00"}`,
+            checkInDate: `${formatDdMmYyyy(brDateKey(r.checkInDate))} ${r.checkInTime || "14:00"}`,
+            checkOutDate: `${formatDdMmYyyy(brDateKey(r.checkOutDate))} ${r.checkOutTime || "12:00"}`,
             checkInTime: r.checkInTime || "14:00",
             checkOutTime: r.checkOutTime || "12:00",
-            checkOutDateRaw: (r.checkOutDate || "").split("T")[0],
-            checkInDateRaw: (r.checkInDate || "").split("T")[0],
+            checkOutDateRaw: brDateKey(r.checkOutDate),
+            checkInDateRaw: brDateKey(r.checkInDate),
             status: r.status || "CONFIRMADA",
             totalAmount: parseFloat(r.totalAmount || 0),
             depositPaid: parseFloat(r.depositPaid || 0),
@@ -2493,7 +2494,7 @@ export default function TenantDashboardPage() {
                     ? {
                         ...r,
                         dates: `Check-out: ${new Date(data.expectedCheckOut).toLocaleDateString("pt-BR")}`,
-                        expectedCheckOutDate: String(data.expectedCheckOut).split("T")[0],
+                        expectedCheckOutDate: brDateKey(data.expectedCheckOut),
                         ratePerNight: updatedData.ratePerNight,
                       }
                     : r

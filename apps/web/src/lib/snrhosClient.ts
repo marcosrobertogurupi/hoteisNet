@@ -4,6 +4,7 @@
 // dos endpoints/payload segue o manual à risca, mas qualquer chamada real deve ser validada
 // assim que houver acesso a um usuário/chave de homologação.
 import { prisma } from "@/lib/prisma";
+import { brDateKey } from "@/lib/brasiliaDate";
 
 const PRODUCAO_BASE_URL = "https://fnrh.turismo.serpro.gov.br/FNRH_API/rest/v2";
 const HOMOLOGACAO_BASE_URL = "https://hom-lowcode.serpro.gov.br/FNRH_API/rest/v2";
@@ -159,8 +160,8 @@ export async function buildHospedagemRegistrarPayload(input: RegistrarHospedagem
     reserva: {
       numero_reserva: input.reservationNumber,
       numero_reserva_ota: "",
-      data_entrada: input.checkInDate.toISOString().slice(0, 10),
-      data_saida: input.checkOutDate.toISOString().slice(0, 10),
+      data_entrada: brDateKey(input.checkInDate),
+      data_saida: brDateKey(input.checkOutDate),
       quantidade_hospede_adulto: input.adults || 1,
       quantidade_hospede_menor: input.children || 0,
       origem_reserva_id: "MEIOHOSPEDAGEM",
