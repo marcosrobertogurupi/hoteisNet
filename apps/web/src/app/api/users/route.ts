@@ -2,25 +2,24 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { validatePasswordStrength } from "@/lib/passwordPolicy";
-import { getSessionUser, requireAdmin, hashPassword, getClientIp, getTerminalName } from "@/lib/auth";
+import { getSessionUser, requireAdmin, hashPassword, getClientIp, getTerminalName, isPlatformRole } from "@/lib/auth";
 
-// GET /api/users — lista usuários (SUPER_ADMIN vê todos os hotéis; TENANT_ADMIN só o seu)
+// GET /api/users — lista os usuários do hotel da sessão (só admin). Contas da plataforma não entram
+// no app do hotel (ver isTenantSession em lib/sessionToken.ts) — a equipe da plataforma gerencia
+// usuários de assinantes pelo painel /admin (api/admin/tenants/[id]/users), com 2FA.
 export async function GET(req: NextRequest) {
   const session = await getSessionUser(req);
   const adminError = requireAdmin(session);
   if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
-  const isSuperAdmin = session!.role === "SUPER_ADMIN";
-  // Usuário sem tenant é da equipe da plataforma e opera pelo painel /admin — nunca deve listar
-  // usuários por aqui. Até 09/09/2026 o filtro incluía também o tenant de demonstração, então todo
-  // administrador de todo hotel enxergava nome, e-mail, telefone e papel dos usuários dele
-  // (CLAUDE.md, Segurança §2).
-  if (!isSuperAdmin && !session!.tenantId) {
+  // Até 09/09/2026 o filtro incluía também o tenant de demonstração, então todo administrador de
+  // todo hotel enxergava nome, e-mail, telefone e papel dos usuários dele (CLAUDE.md, Segurança §2).
+  if (!session!.tenantId) {
     return NextResponse.json({ success: false, error: "Sessão sem hotel associado." }, { status: 403 });
   }
 
   const users = await prisma.user.findMany({
-    where: isSuperAdmin ? {} : { tenantId: session!.tenantId! },
+    where: { tenantId: session!.tenantId! },
     orderBy: { createdAt: "asc" },
     select: {
       id: true, name: true, email: true, role: true, phone: true, active: true, createdAt: true, updatedAt: true,
@@ -40,7 +39,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, email, password, role, phone, tenantId: requestedTenantId } = body;
+    const { name, email, password, role, phone } = body;
 
     if (!name || !email || !password) {
       return NextResponse.json({ success: false, error: "Nome, e-mail e senha são obrigatórios." }, { status: 400 });
@@ -50,10 +49,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: senhaFraca }, { status: 400 });
     }
 
-    const isSuperAdmin = session!.role === "SUPER_ADMIN";
-    const validRoles = ["SUPER_ADMIN", "TENANT_ADMIN", "RECEPCIONIST", "GOVERNESS", "FINANCIAL"];
-    // TENANT_ADMIN não pode criar um SUPER_ADMIN (elevação de privilégio).
-    const assignableRoles = isSuperAdmin ? validRoles : validRoles.filter((r) => r !== "SUPER_ADMIN");
+    // Só papéis de HOTEL: o app do hotel nunca cria conta da plataforma (SUPER_ADMIN e afins são
+    // criados pelo painel /admin) — seria elevação de privilégio.
+    const assignableRoles = ["TENANT_ADMIN", "RECEPCIONIST", "GOVERNESS", "FINANCIAL"];
     const finalRole = assignableRoles.includes(role) ? role : "RECEPCIONIST";
 
     const existing = await prisma.user.findUnique({ where: { email: String(email).toLowerCase().trim() } });
@@ -61,23 +59,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Já existe um usuário com esse e-mail." }, { status: 409 });
     }
 
-    // Só SUPER_ADMIN pode escolher o hotel de destino; TENANT_ADMIN sempre cria no próprio tenant.
-    if (!isSuperAdmin && !session!.tenantId) {
+    // O usuário nasce SEMPRE no hotel da sessão — nunca num tenantId vindo do body (CLAUDE.md, §2).
+    if (!session!.tenantId) {
       return NextResponse.json({ success: false, error: "Sessão sem hotel associado." }, { status: 403 });
     }
-    let tenantId = session!.tenantId!;
-    if (isSuperAdmin && requestedTenantId) {
-      const targetTenant = await prisma.tenant.findUnique({ where: { id: requestedTenantId }, select: { id: true } });
-      if (!targetTenant) {
-        return NextResponse.json({ success: false, error: "Hotel de destino inválido." }, { status: 400 });
-      }
-      tenantId = targetTenant.id;
-    }
-    // SUPER_ADMIN sem hotel próprio precisa dizer em qual hotel o usuário será criado — antes o
-    // destino caía silenciosamente no tenant de demonstração.
-    if (!tenantId) {
-      return NextResponse.json({ success: false, error: "Informe o hotel de destino do usuário." }, { status: 400 });
-    }
+    const tenantId = session!.tenantId;
 
     const passwordHash = await hashPassword(password);
 
@@ -126,26 +112,26 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: "ID do usuário é obrigatório." }, { status: 400 });
     }
 
-    const isSuperAdmin = session!.role === "SUPER_ADMIN";
     const target = await prisma.user.findUnique({ where: { id }, select: { id: true, tenantId: true, role: true } });
     if (!target) {
       return NextResponse.json({ success: false, error: "Usuário não encontrado." }, { status: 404 });
     }
-    // TENANT_ADMIN só pode alterar usuários do próprio hotel.
-    if (!isSuperAdmin && (!session!.tenantId || target.tenantId !== session!.tenantId)) {
+    // Administrador do hotel só altera usuários do próprio hotel.
+    if (!session!.tenantId || target.tenantId !== session!.tenantId) {
       return NextResponse.json({ success: false, error: "Você não tem permissão para alterar esse usuário." }, { status: 403 });
     }
     if (id === session!.userId && active === false) {
       return NextResponse.json({ success: false, error: "Você não pode desativar a própria conta." }, { status: 400 });
     }
 
-    const validRoles = ["SUPER_ADMIN", "TENANT_ADMIN", "RECEPCIONIST", "GOVERNESS", "FINANCIAL"];
+    // Só papéis de hotel — o app do hotel nunca atribui papel da plataforma.
+    const validRoles = ["TENANT_ADMIN", "RECEPCIONIST", "GOVERNESS", "FINANCIAL"];
     const data: Record<string, unknown> = {};
     if (name !== undefined) data.name = String(name).trim();
     if (phone !== undefined) data.phone = phone ? String(phone).trim() : null;
     if (role !== undefined) {
-      // TENANT_ADMIN não pode promover ninguém a SUPER_ADMIN nem alterar o papel de um SUPER_ADMIN.
-      if (!isSuperAdmin && (role === "SUPER_ADMIN" || target.role === "SUPER_ADMIN")) {
+      // Ninguém é promovido a papel da plataforma por aqui, nem tem o papel de plataforma alterado.
+      if (!validRoles.includes(role) || isPlatformRole(target.role)) {
         return NextResponse.json({ success: false, error: "Você não tem permissão para atribuir esse papel." }, { status: 403 });
       }
       if (validRoles.includes(role)) data.role = role;
@@ -169,7 +155,7 @@ export async function PATCH(req: NextRequest) {
     // assim um refactor futuro que mexa na checagem não deixa a escrita desprotegida
     // (CLAUDE.md, Segurança §3).
     const changed = await prisma.user.updateMany({
-      where: isSuperAdmin ? { id } : { id, tenantId: session!.tenantId! },
+      where: { id, tenantId: session!.tenantId! },
       data,
     });
     if (changed.count === 0) {
@@ -180,9 +166,7 @@ export async function PATCH(req: NextRequest) {
       select: { id: true, name: true, email: true, role: true, active: true, tenantId: true, tenant: { select: { id: true, name: true } } },
     });
 
-    // AuditLog.tenantId tem FK para Tenant, então a trilha fica no hotel do usuário alterado
-    // quando quem alterou é da equipe da plataforma (sessão sem tenant próprio).
-    const auditTenantId = session!.tenantId || updated.tenantId;
+    const auditTenantId = session!.tenantId;
     if (auditTenantId) {
       await logActivity({
         tenantId: auditTenantId,

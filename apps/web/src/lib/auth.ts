@@ -6,6 +6,7 @@ import {
   isAdminRole,
   isPlatformRole,
   isPlatformEditRole,
+  isTenantSession,
   verifySessionToken,
   type SessionPayload,
 } from "@/lib/sessionToken";
@@ -24,6 +25,7 @@ export {
   isAdminRole,
   isPlatformRole,
   isPlatformEditRole,
+  isTenantSession,
   createSessionToken,
   verifySessionToken,
   getClientIp,
@@ -83,12 +85,18 @@ export async function getSessionUser(req: NextRequest): Promise<SessionPayload |
   if (!token) return null;
   const payload = await verifySessionToken(token);
   if (!payload) return null;
+  // App do hotel só aceita sessão de hotel (ver isTenantSession): conta da plataforma atua pelo
+  // painel /admin e pela personificação, nunca com a própria conta por aqui.
+  if (!isTenantSession(payload)) return null;
 
   const user = await prisma.user.findUnique({
     where: { id: payload.userId },
-    select: { active: true, tokenVersion: true, tenant: { select: { status: true } } },
+    select: { active: true, tokenVersion: true, role: true, tenantId: true, tenant: { select: { status: true } } },
   });
   if (!user || !user.active || user.tokenVersion !== payload.tokenVersion) return null;
+  // Revalida no banco (o papel/hotel do token pode estar desatualizado): conta que hoje é da
+  // plataforma ou está sem hotel não opera o app do hotel.
+  if (!isTenantSession(user)) return null;
 
   // Assinante bloqueado (inadimplência >30d ou cancelado) não opera o sistema. Usuários da
   // plataforma têm tenantId nulo (user.tenant === null) e não são afetados. OVERDUE ainda opera.

@@ -11,6 +11,7 @@ import {
   SESSION_COOKIE_MAX_AGE,
   TERMINAL_COOKIE,
   getClientIp,
+  isTenantSession,
 } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -62,6 +63,22 @@ export async function POST(req: NextRequest) {
       await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
     }
 
+    // Conta da equipe da plataforma (sem hotel ou com papel de plataforma) não entra no app do
+    // hotel: o acesso dela é o painel /admin, com verificação em duas etapas, e para operar um hotel
+    // usa "Entrar como assinante" (personificação auditada). Antes, uma conta SUPER_ADMIN entrava por
+    // aqui sem 2FA e, via /api/users, gerenciava usuários de todos os hotéis. A checagem vem DEPOIS
+    // da senha: quem não sabe a senha continua recebendo só "e-mail ou senha inválidos".
+    if (!isTenantSession(user)) {
+      console.warn(`[POST /api/auth/login] conta da plataforma tentou entrar no app do hotel: ${user.email}`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Esta conta é da equipe da plataforma. Acesse pelo painel /admin e use \"Entrar como assinante\" para operar um hotel.",
+        },
+        { status: 403 }
+      );
+    }
+
     const token = await createSessionToken({
       userId: user.id,
       tenantId: user.tenantId,
@@ -97,7 +114,7 @@ export async function POST(req: NextRequest) {
     });
 
     await logActivity({
-      tenantId: user.tenantId || "tenant-hoteisnet-demo",
+      tenantId: user.tenantId!,
       userId: user.id,
       userName: user.name,
       action: "LOGIN",
