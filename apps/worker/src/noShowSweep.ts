@@ -24,8 +24,18 @@ function dateKey(date: Date): string {
  * (findConflictingReservation / busyRoomIdsForPeriod filtram NO_SHOW), liberando-o para walk-in
  * e para a fila de espera (o worker da fila reavalia no próximo tick).
  */
+// Chegada de madrugada (antes das 06:00 do dia seguinte) é um cenário que o check-in trata
+// explicitamente ("noite anterior"). Marcar no-show logo depois da meia-noite liberava o quarto de
+// quem ainda estava a caminho — a reserva de ontem só vira no-show a partir das 06:00 de hoje.
+// Mesmo corte de OVERNIGHT_CUTOFF_MINUTES em apps/web/src/app/api/stay/checkin/route.ts.
+const OVERNIGHT_CUTOFF_HHMM = "06:00";
+
 export async function runNoShowSweep(): Promise<void> {
-  const todayKey = dateKey(new Date());
+  const now = new Date();
+  const nowHHMM = new Intl.DateTimeFormat("en-GB", { timeZone: TENANT_TIMEZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(now);
+  // Antes do corte da madrugada, "hoje" para efeito de no-show ainda é ontem.
+  const todayKey = nowHHMM < OVERNIGHT_CUTOFF_HHMM ? dateKey(new Date(now.getTime() - 24 * 60 * 60 * 1000)) : dateKey(now);
+  const todayStartBr = new Date(`${todayKey}T00:00:00-03:00`);
 
   // Traz as candidatas (reserva ativa aguardando chegada, sem hospedagem vinculada) e filtra o
   // "dia já passou" em JS com o fuso de Brasília — evita depender do fuso do processo numa query.
@@ -33,6 +43,9 @@ export async function runNoShowSweep(): Promise<void> {
     where: {
       status: { in: ["PRE_RESERVATION", "CONFIRMED"] },
       stayCheckin: { is: null },
+      // Filtro de data já no banco: antes vinham TODAS as reservas futuras de todos os hotéis a
+      // cada hora só para descartar quase todas em JS (egress — CLAUDE.md, ⚡ Performance §5).
+      checkInDate: { lt: todayStartBr },
     },
     select: { id: true, checkInDate: true, reservationNumber: true, guestName: true, roomId: true, room: { select: { tenantId: true, number: true } } },
   });

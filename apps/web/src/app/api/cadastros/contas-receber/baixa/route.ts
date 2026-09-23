@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser } from "@/lib/auth";
+import { resolveOperator } from "@/lib/operator";
 
 // POST /api/cadastros/contas-receber/baixa — registra a baixa (quitação, total ou parcial) de um
 // título de contas a receber. Suporta juros/desconto, como a aba "Baixa" do Win_ContasReceber
@@ -14,7 +15,10 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { accountsReceivableId, amount, interest, discount, paymentMethodDescription, operatorId, operatorName } = body;
+    const { accountsReceivableId, amount, interest, discount, paymentMethodDescription } = body;
+    // Operador = usuário autenticado, nunca o operatorId/operatorName do body (ver lib/operator.ts) —
+    // antes qualquer terminal gravava a baixa em nome de outro operador.
+    const { operatorId, operatorName } = resolveOperator(session);
 
     if (!accountsReceivableId) {
       return NextResponse.json({ success: false, error: "Título de contas a receber é obrigatório." }, { status: 400 });
@@ -25,6 +29,9 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await txWithRetry(async (tx) => {
+      // Trava a linha do título: duas baixas simultâneas liam o mesmo saldo devedor e as duas
+      // passavam na checagem abaixo, quitando mais do que o valor do título.
+      await tx.$queryRaw`SELECT id FROM accounts_receivable WHERE id = ${accountsReceivableId} AND "tenantId" = ${session.tenantId!} FOR UPDATE`;
       const receivable = await tx.accountsReceivable.findFirst({ where: { id: accountsReceivableId, tenantId: session.tenantId! } });
       if (!receivable) throw new Error("Título de contas a receber não encontrado.");
       if (receivable.isPaid) throw new Error("Este título já está totalmente quitado.");

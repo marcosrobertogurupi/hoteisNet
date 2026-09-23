@@ -108,7 +108,51 @@ export async function runWaitlistAgent(): Promise<void> {
   }
 }
 
+// Encerra entradas que não podem mais virar reserva, ANTES de procurar vagas:
+//  • data de chegada já passou (em Brasília) — para um período no passado o quarto sempre "aparece"
+//    livre, então o agente avisava a recepção (sino + WhatsApp) de uma "vaga" inútil, e entradas
+//    NOTIFIED antigas seguravam o soft hold de um quarto indefinidamente;
+//  • aviso com prazo (notifyExpiresAt, modo automático) vencido sem resposta — senão a entrada
+//    continuava NOTIFIED, furando a fila na conversão e segurando o quarto.
+// Determinístico, sem LLM.
+async function closeStaleWaitlistEntries(): Promise<void> {
+  const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+  const todayStartBr = new Date(`${todayKey}T00:00:00-03:00`);
+  const now = new Date();
+
+  const [datePassed, offerExpired] = await Promise.all([
+    prisma.waitlistEntry.findMany({
+      where: { status: { in: ["WAITING", "NOTIFIED"] }, checkInDate: { lt: todayStartBr } },
+      select: { id: true },
+    }),
+    prisma.waitlistEntry.findMany({
+      where: { status: "NOTIFIED", notifyExpiresAt: { not: null, lt: now }, checkInDate: { gte: todayStartBr } },
+      select: { id: true },
+    }),
+  ]);
+
+  const close = async (entries: { id: string }[], closedReason: string) => {
+    if (entries.length === 0) return;
+    const ids = entries.map((e) => e.id);
+    // Filtro de status repetido na escrita: uma conversão concorrente (recepção) vence.
+    await prisma.waitlistEntry.updateMany({
+      where: { id: { in: ids }, status: { in: ["WAITING", "NOTIFIED"] } },
+      data: { status: "EXPIRED", closedReason, notifiedRoomId: null, notifyExpiresAt: null },
+    });
+    await prisma.humanEscalation.updateMany({
+      where: { entityType: "WAITLIST_MATCH", entityId: { in: ids }, resolved: false },
+      data: { resolved: true, resolvedAt: new Date() },
+    });
+    console.log(`[waitlist-agent] ${entries.length} entrada(s) encerrada(s) — ${closedReason}`);
+  };
+
+  await close(datePassed, "DATE_PASSED");
+  await close(offerExpired, "EXPIRED_NO_ANSWER");
+}
+
 async function runWaitlistAgentInner(): Promise<void> {
+  await closeStaleWaitlistEntries();
+
   // Tenants com fila ativa (WAITING ou NOTIFIED).
   const active = await prisma.waitlistEntry.groupBy({
     by: ["tenantId"],

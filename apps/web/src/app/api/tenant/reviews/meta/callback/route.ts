@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { encryptSecret } from "@/lib/secretBox";
+import { verifyOAuthState } from "@/lib/oauthState";
 
 // GET /api/tenant/reviews/meta/callback — o Facebook redireciona o navegador do admin para cá após
 // o consentimento OAuth. Rota pública (ver PUBLIC_API_PREFIXES em middleware.ts) — nunca confia em
 // sessão nem em tenantId vindo de outro lugar que não seja o `state` que a própria plataforma gerou
 // em .../meta/connect (a mesma regra de "tenantId nunca vem do cliente" do CLAUDE.md vale aqui: o
-// `state` é opaco para o navegador do usuário, só o servidor sabe decodificá-lo).
+// `state` é assinado com HMAC e expira — ver lib/oauthState.ts —, então só o servidor consegue
+// emitir um válido).
 //
 // Uma única conexão OAuth cobre Facebook E Instagram: a Graph API não tem um jeito de pedir só um
 // dos dois — a página do Facebook conectada é quem "tem" (ou não) uma conta Instagram Business
@@ -29,14 +31,13 @@ export async function GET(req: NextRequest) {
     return redirectTo("erro", "conexao_recusada");
   }
 
-  let tenantId: string;
-  try {
-    const decoded = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
-    tenantId = decoded.tenantId;
-    if (!tenantId) throw new Error("state sem tenantId");
-  } catch {
+  // Só aceita `state` assinado por este servidor e dentro da validade (lib/oauthState.ts) — um
+  // `state` montado à mão com o tenantId de outro hotel é recusado.
+  const verified = verifyOAuthState(state);
+  if (!verified) {
     return redirectTo("erro", "state_invalido");
   }
+  const tenantId = verified.tenantId;
 
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/prisma";
+import type { SaaSInvoiceStatus } from "@prisma/client";
 import { mapAsaasStatus } from "@/lib/asaas";
 import { extendAccessForPaidSubscription } from "@/lib/saasBilling";
 import { logPlatformAction } from "@/lib/platformAudit";
@@ -81,41 +82,64 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sec
     const paidAt = paid ? (p.paymentDate ? new Date(p.paymentDate) : new Date()) : null;
     const dueDate = p.dueDate ? new Date(p.dueDate) : new Date();
 
-    // Idempotência: só estende o acesso quando a fatura ESTÁ ENTRANDO num estado pago agora —
-    // uma reentrega do mesmo evento (mesmo asaasPaymentId já pago) não estende de novo.
-    const existing = await prisma.saaSInvoice.findUnique({
-      where: { asaasPaymentId: p.id },
-      select: { status: true },
-    });
-    const alreadyPaid = existing?.status === "CONFIRMED" || existing?.status === "RECEIVED";
-    const shouldExtendAccess = paid && !alreadyPaid;
+    // Idempotência ATÔMICA: o acesso só é estendido pela entrega que efetivamente fez a fatura
+    // TRANSICIONAR para um estado pago. Antes era "lê o status, depois grava": duas entregas
+    // simultâneas do mesmo pagamento (o Asaas reentrega e manda CONFIRMED/RECEIVED em sequência)
+    // liam "ainda não pago" ao mesmo tempo e estendiam o acesso duas vezes.
+    const PAID: SaaSInvoiceStatus[] = ["CONFIRMED", "RECEIVED"];
+    const mirror = {
+      status,
+      paidAt,
+      dueDate,
+      billingType: p.billingType || undefined,
+      invoiceUrl: p.invoiceUrl || undefined,
+      bankSlipUrl: p.bankSlipUrl || undefined,
+    };
+    let shouldExtendAccess = false;
 
-    // --- Espelha a fatura (upsert por asaasPaymentId) ---
-    await prisma.saaSInvoice.upsert({
-      where: { asaasPaymentId: p.id },
-      create: {
-        tenantId: sub.tenantId,
-        subscriptionId: sub.id,
-        asaasPaymentId: p.id,
-        cycle: sub.cycle,
-        amount: Number(p.value) || 0,
-        billingType: p.billingType || null,
-        status,
-        dueDate,
-        paidAt,
-        invoiceUrl: p.invoiceUrl || null,
-        bankSlipUrl: p.bankSlipUrl || null,
-        description: `Evento ${event}`,
-      },
-      update: {
-        status,
-        paidAt,
-        dueDate,
-        billingType: p.billingType || undefined,
-        invoiceUrl: p.invoiceUrl || undefined,
-        bankSlipUrl: p.bankSlipUrl || undefined,
-      },
-    });
+    // --- Espelha a fatura (por asaasPaymentId) ---
+    const existing = await prisma.saaSInvoice.findUnique({ where: { asaasPaymentId: p.id }, select: { id: true } });
+    if (!existing) {
+      try {
+        await prisma.saaSInvoice.create({
+          data: {
+            tenantId: sub.tenantId,
+            subscriptionId: sub.id,
+            asaasPaymentId: p.id,
+            cycle: sub.cycle,
+            amount: Number(p.value) || 0,
+            billingType: p.billingType || null,
+            status,
+            dueDate,
+            paidAt,
+            invoiceUrl: p.invoiceUrl || null,
+            bankSlipUrl: p.bankSlipUrl || null,
+            description: `Evento ${event}`,
+          },
+        });
+        shouldExtendAccess = paid; // quem criou já pago é o dono da transição
+      } catch (e: any) {
+        if (e?.code !== "P2002") throw e;
+        // Outra entrega criou a fatura no mesmo instante — segue pelo caminho de atualização abaixo.
+      }
+    }
+    if (existing || !shouldExtendAccess) {
+      if (paid) {
+        // Só a entrega que tira a fatura de um estado NÃO pago "ganha" a transição (count === 1).
+        const transition = await prisma.saaSInvoice.updateMany({
+          where: { asaasPaymentId: p.id, status: { notIn: PAID } },
+          data: mirror,
+        });
+        if (transition.count === 1) shouldExtendAccess = true;
+        else await prisma.saaSInvoice.updateMany({ where: { asaasPaymentId: p.id }, data: { billingType: mirror.billingType, invoiceUrl: mirror.invoiceUrl, bankSlipUrl: mirror.bankSlipUrl } });
+      } else if (status === "PENDING" || status === "OVERDUE") {
+        // Evento "mais fraco" chegando fora de ordem (ex.: reentrega de PAYMENT_OVERDUE depois do
+        // RECEIVED) nunca rebaixa uma fatura que já está paga.
+        await prisma.saaSInvoice.updateMany({ where: { asaasPaymentId: p.id, status: { notIn: PAID } }, data: mirror });
+      } else {
+        await prisma.saaSInvoice.updateMany({ where: { asaasPaymentId: p.id }, data: mirror });
+      }
+    }
 
     // --- Efeito no acesso do assinante ---
     if (shouldExtendAccess) {
@@ -131,9 +155,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sec
         details: { event, value: p.value, billingType: p.billingType },
       });
     } else if (status === "OVERDUE") {
-      await prisma.tenant.update({ where: { id: sub.tenantId }, data: { status: "OVERDUE" } });
+      // Só REBAIXA quem está operando (TRIAL/ACTIVE → OVERDUE). Um assinante já SUSPENDED/CANCELLED
+      // nunca pode "subir" para OVERDUE — OVERDUE ainda opera o sistema, e a régua de cobrança
+      // (worker saasDunning) não o suspenderia de novo porque o dunningStage já está SUSPENDED_30.
+      await prisma.tenant.updateMany({
+        where: { id: sub.tenantId, status: { in: ["TRIAL", "ACTIVE"] } },
+        data: { status: "OVERDUE" },
+      });
     } else if (status === "CHARGEBACK" || status === "REFUNDED") {
-      await prisma.tenant.update({ where: { id: sub.tenantId }, data: { status: "OVERDUE" } });
+      await prisma.tenant.updateMany({
+        where: { id: sub.tenantId, status: { in: ["TRIAL", "ACTIVE"] } },
+        data: { status: "OVERDUE" },
+      });
       await logPlatformAction({
         req,
         session: { userId: "asaas-webhook", name: "Asaas (webhook)", role: "SYSTEM" },

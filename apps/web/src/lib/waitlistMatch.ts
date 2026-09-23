@@ -186,6 +186,8 @@ export async function roomIdsHeldByOtherWaitlist(
       status: "NOTIFIED",
       notifiedRoomId: { in: params.roomIds },
       id: params.excludeWaitlistId ? { not: params.excludeWaitlistId } : undefined,
+      // Aviso com prazo vencido não segura mais o quarto (o worker encerra essas entradas).
+      OR: [{ notifyExpiresAt: null }, { notifyExpiresAt: { gt: new Date() } }],
       checkInDate: { lt: checkOut },
       checkOutDate: { gt: checkIn },
     },

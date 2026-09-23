@@ -93,6 +93,44 @@ Uma segunda auditoria estática (202 rotas de API, 819 chamadas Prisma, 87 model
 * Confirmar no painel do Supabase que o bucket `fnrh-signatures` é **privado** (B5) — o código já grava caminhos não adivinháveis, mas a política do bucket é configuração de infraestrutura, não de código.
 * O segredo do webhook da uazapi ainda trafega por query string porque é assim que a instância está registrada; o servidor já aceita o cabeçalho `x-webhook-secret`, e a migração depende de confirmar suporte a cabeçalhos no webhook da uazapi.
 
+### 2.5. Auditoria de Segurança e Lógica de 22/09/2026 🟡 (correções em andamento)
+
+Terceira auditoria (213 rotas de API + worker), com foco reforçado nas funções vitais do hotel — **reserva, check-in/check-out e fila de espera**. Correções entregues na branch `fix/auditoria-seguranca-e-logica`, em fases:
+
+**Fase 1 — Check-in / check-out / consumo ✅**
+* **`reservationId` do check-in isolado por tenant (crítico)** — `POST /api/stay/checkin` usava o id de reserva do body sem conferir hotel nem status: um usuário de qualquer hotel sobrescrevia a reserva de outro (nome, CPF, datas, `CHECKED_IN`) e puxava para a própria hospedagem os sinais pagos nela; uma reserva cancelada (sinal já estornado) voltava a contar o sinal como pagamento. Agora a reserva precisa ser do tenant da sessão e estar em status que aceita check-in; o quarto da reserva passa a ser o quarto onde o hóspede entrou.
+* **Overbooking no check-in (alto)** — o check-in só verificava hospedagem aberta no quarto; agora também bloqueia sobreposição com reserva ativa de outro hóspede (`findConflictingReservation`, com a linha do quarto travada). Datas inválidas / saída antes da chegada são recusadas.
+* **Adoção da reserva do dia só para o mesmo hóspede (alto)** — o check-in direto no quarto adotava às cegas a 1ª reserva de hoje, e com ela o sinal pago por outra pessoa. A tela deixou de enviar essa reserva e o servidor só adota se CPF ou nome baterem.
+* **Cortesia / taxa reduzida de chegada antecipada com step-up real (alto)** — bastava um nome em `authorizedBy`; agora exige e-mail + senha de administrador verificados no servidor (`verifyAdminStepUp`), e o nome gravado é o do administrador autenticado.
+* **Limite de desconto no check-in (médio)** — a base do percentual usava o `totalAmount` do body, que podia ser inflado; passou a ser calculada no servidor (diárias do período + chegada antecipada).
+* **Lançamentos em hospedagem encerrada (alto)** — check-out bloqueado enquanto houver comanda de hóspede aberta no PDV; fechar/reabrir comanda de hóspede recusa hospedagem encerrada; `POST`/`DELETE /api/stay/consumo` revalidam hospedagem aberta após o lock. O `POST` de consumo também passou a validar `productId`/`posLocationId` contra o tenant (a baixa de estoque podia cair em PDV de outro hotel) e o `DELETE` recusa linhas vindas de comanda do PDV (estorno pela reabertura da comanda) e registra auditoria.
+
+**Fase 2 — Segurança crítica ✅**
+* **OAuth da Meta com `state` assinado (crítico)** — o `state` que leva o tenantId até o callback público `/api/tenant/reviews/meta/callback` era JSON em base64 puro: qualquer pessoa montava `{"tenantId":"<outro hotel>"}` e sobrescrevia os conectores de Facebook/Instagram de outro assinante. Agora é assinado com HMAC e expira em 15 min (`lib/oauthState.ts`).
+* **Link público de pré-check-in (alto)** — um link já concluído não expira e o `GET` continuava devolvendo CPF, RG, endereço e nascimento para sempre; agora, com a FNRH já preenchida, só devolve o aviso "já preenchido". No `POST`, o CPF digitado que pertence a outro hóspede já cadastrado (não o da reserva) só preenche campos vazios — o link não reescreve mais o cadastro de terceiros. A busca do hóspede passou a considerar o CPF formatado e só dígitos (`cpfMatchVariants`), evitando cadastros duplicados.
+* **Webhook do Asaas (alto)** — eventos `OVERDUE`/`CHARGEBACK`/`REFUNDED` rebaixavam para `OVERDUE` um assinante já `SUSPENDED`/`CANCELLED`, devolvendo o acesso (e a régua não suspendia de novo). Agora só rebaixam `TRIAL`/`ACTIVE`. A extensão de acesso por pagamento passou a ser idempotente de forma atômica (só a entrega que faz a fatura transicionar para pago estende), e eventos fora de ordem não rebaixam fatura já paga.
+* **Consulta de CPF na Hub (médio)** — o log de falha imprimia a URL com o token master da Hub; a cota mensal passou a ser reservada num `UPDATE` condicional antes da chamada (antes, consultas simultâneas furavam a cota) e o ciclo mensal é contado no mês de Brasília.
+* **Municípios (médio)** — cadastro global compartilhado por todos os assinantes: alteração e exclusão passaram a ser exclusivas da equipe da plataforma; o hotel ainda pode incluir um município que falte.
+
+**Fase 3 — Reservas, fila de espera e worker ✅**
+* **Reservas: período e status validados no servidor (médio)** — `POST`/`PATCH /api/reservations` e o lote aceitavam saída antes da chegada (a reserva não bloqueava o quarto nem era bloqueada) e qualquer status: por `PATCH` dava para marcar `CHECKED_IN` (quarto OCUPADO sem hospedagem) ou `CANCELLED` sem estornar o sinal. Agora reserva nova só nasce pré-reserva/confirmada, e a edição só permite pré-reserva ↔ confirmada, no-show e a reativação do no-show (com revalidação de conflito); check-in, check-out e cancelamento seguem pelos fluxos próprios. Hóspede já hospedado não muda de quarto pela reserva (usa a Transferência de Quarto). Helpers em `lib/reservationHelpers.ts` (`reservationPeriodError`, `reservationStatusTransitionError`).
+* **Prorrogação sem corrida de overbooking (médio)** — `PATCH /api/stay/period` passou a travar a linha do quarto antes de checar conflito, como as rotas de reserva.
+* **Fila de espera (médio)** — o worker encerra entradas cuja data de chegada já passou (`DATE_PASSED`) e avisos com prazo vencido (`EXPIRED_NO_ANSWER`); antes elas geravam avisos de "vaga" para períodos no passado e seguravam quarto indefinidamente. Na conversão e no soft hold, aviso vencido não fura mais a fila nem segura quarto.
+* **Virada de diária recuperável (alto)** — o job só rodava no minuto exato de `dailyRolloverTime`; um deploy/reinício naquele minuto deixava o dia sem diária em todos os quartos. Agora qualquer ciclo após o horário lança o que falta (inclusive dias perdidos, uma diária por dia), com a linha da hospedagem travada e revalidada (nunca lança em hospedagem recém-fechada).
+* **No-show (médio)** — só marca a reserva de ontem a partir das 06:00 (chegada de madrugada deixava de encontrar o quarto) e filtra por data no banco em vez de trazer todas as reservas de todos os hotéis a cada hora.
+
+**Fase 4 — Integridade financeira ✅**
+* **Baixa de Contas a Pagar/Receber (médio)** — o operador vinha do body (`operatorId`/`operatorName`), permitindo registrar a baixa em nome de outro; agora é sempre o usuário da sessão (`resolveOperator`). A linha do título é travada na transação, evitando que duas baixas simultâneas quitem além do saldo.
+* **Forma de pagamento não cadastrada (médio)** — `processPaymentLine` aceitava qualquer texto e o lançamento somava no caixa físico como forma "normal"; agora exige a forma cadastrada no hotel (mesma regra do sinal de reserva).
+* **Fechamento de caixa (médio)** — passou a ser uma transação com a linha do caixa travada (um segundo fechamento concorrente não refaz o saldo) e a auditoria registra o valor contado pelo operador e a diferença (sobra/falta), que antes se perdiam no fechamento cego.
+
+**Pendências desta auditoria (decisão do negócio ou mudança maior):**
+* Contas da plataforma (`tenantId` nulo, ex.: `SUPER_ADMIN`) ainda entram pelo login do assinante sem o 2FA exigido no painel `/admin` e, por `/api/users`, gerenciam usuários de todos os hotéis. Bloquear esse login é a correção, mas depende de a equipe usar a personificação do painel no lugar do login direto.
+* Horário das datas de check-in/check-out: a tela envia data/hora sem fuso e o servidor (UTC na Vercel) interpreta como UTC — a confirmar no banco se os horários gravados estão 3h deslocados antes de corrigir (a correção muda a exibição de dados já gravados).
+* `caixa/remover-pagamento` ainda apaga o lançamento fisicamente (inclusive de caixa já fechado), em vez de estorno marcado e visível.
+* Exclusão de consumo do quarto continua liberada para usuário padrão (a tela oferece a exclusão a qualquer operador) — avaliar se deve exigir administrador.
+* Trocar a tarifa por uma mais barata na alteração de período não passa pelo limite de desconto (a base é a própria tarifa nova).
+
 ## 3. Especificação das Funcionalidades (Feature Specifications)
 
 ### 3.1. Mapa Visual de Quartos (Room Map) ✅

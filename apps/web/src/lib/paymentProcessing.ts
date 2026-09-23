@@ -49,7 +49,16 @@ export async function processPaymentLine(
     where: { tenantId, description: { equals: paymentMethodDescription, mode: "insensitive" } },
   });
 
-  if (pm?.transferDebit) {
+  // Forma de pagamento precisa existir no cadastro do hotel — mesma regra de
+  // processReservationDeposit. Antes, um texto qualquer (forma inexistente ou digitada errada)
+  // caía no caminho "normal" e SOMAVA no caixa físico como se fosse dinheiro, sem respeitar as
+  // flags (Soma Caixa, Parcelamento, Debitar Saldo) do cadastro.
+  if (!pm) {
+    throw new Error(
+      `A forma de pagamento "${paymentMethodDescription}" não está cadastrada (Central de Cadastros → Formas de Pagamento).`
+    );
+  }
+  if (pm.transferDebit) {
     throw new Error(
       `A forma de pagamento "${paymentMethodDescription}" deve ser usada pela função de Transferência de Débito entre Quartos, não por um lançamento de pagamento normal.`
     );

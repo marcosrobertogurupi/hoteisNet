@@ -192,3 +192,42 @@ export async function findConflictingReservation(
     },
   });
 }
+
+// Período de reserva válido: as duas datas precisam ser datas reais e a saída estritamente depois
+// da chegada. Sem isto, uma reserva com datas invertidas era gravada e nunca "batia" com nenhuma
+// outra na checagem de sobreposição (checkIn < outro.checkOut && checkOut > outro.checkIn) — não
+// bloqueava o quarto e não era bloqueada por nada. Devolve a mensagem de erro, ou null se válido.
+export function reservationPeriodError(checkIn: Date, checkOut: Date): string | null {
+  if (!(checkIn instanceof Date) || isNaN(checkIn.getTime()) || !(checkOut instanceof Date) || isNaN(checkOut.getTime())) {
+    return "Datas de chegada/saída inválidas.";
+  }
+  if (checkOut.getTime() <= checkIn.getTime()) {
+    return "A data de saída precisa ser posterior à data de chegada.";
+  }
+  return null;
+}
+
+// Status com que uma reserva pode NASCER pelas rotas de reserva. CHECKED_IN / CHECKED_OUT /
+// CANCELLED / NO_SHOW só existem como resultado dos fluxos próprios (check-in, check-out,
+// cancelamento, rotina de no-show) — criar uma reserva já "CHECKED_IN" marcava o quarto como
+// OCUPADO sem existir hospedagem.
+export const CREATABLE_RESERVATION_STATUSES: ReservationStatus[] = ["PRE_RESERVATION", "CONFIRMED"];
+
+// Transições de status permitidas numa EDIÇÃO de reserva (PATCH). As demais passam pelos fluxos
+// que têm efeitos colaterais obrigatórios: check-in (hospedagem, sinais), check-out (saldo,
+// quarto), cancelamento (estorno de sinal) — por PATCH esses efeitos eram simplesmente pulados.
+const ALLOWED_STATUS_TRANSITIONS: Partial<Record<ReservationStatus, ReservationStatus[]>> = {
+  PRE_RESERVATION: ["CONFIRMED", "NO_SHOW"],
+  CONFIRMED: ["PRE_RESERVATION", "NO_SHOW"],
+  NO_SHOW: ["CONFIRMED", "PRE_RESERVATION"],
+};
+
+export function reservationStatusTransitionError(from: ReservationStatus, to: string): string | null {
+  const target = String(to || "").toUpperCase() as ReservationStatus;
+  if (target === from) return null;
+  if (ALLOWED_STATUS_TRANSITIONS[from]?.includes(target)) return null;
+  if (target === "CHECKED_IN") return "Para hospedar o hóspede, use o check-in da reserva.";
+  if (target === "CHECKED_OUT") return "O encerramento da reserva acontece pelo check-out da hospedagem.";
+  if (target === "CANCELLED") return "Para cancelar a reserva, use a opção de cancelamento (ela estorna o sinal).";
+  return `Não é possível mudar a reserva de ${from} para ${target}.`;
+}

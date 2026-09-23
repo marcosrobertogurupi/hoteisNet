@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
+import { logActivity } from "@/lib/audit";
 import { resolveOperator } from "@/lib/operator";
 
 function mapConsumption(c: {
@@ -149,6 +150,28 @@ export async function POST(req: NextRequest) {
       // consumo novo entre a leitura do saldo e o fechamento do checkout em outro terminal.
       await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${stayCheckinId!} FOR UPDATE`;
 
+      // Revalida DEPOIS do lock: a hospedagem pode ter sido encerrada entre a checagem inicial e
+      // agora (ou o stayCheckinId do body já era de uma hospedagem fechada) — consumo lançado numa
+      // conta encerrada nunca seria cobrado.
+      const stayOpen = await tx.stayCheckin.findFirst({
+        where: { id: stayCheckinId!, tenantId: session.tenantId! },
+        select: { isClosed: true },
+      });
+      if (!stayOpen || stayOpen.isClosed) {
+        throw new Error("Esta hospedagem já foi encerrada — não é possível lançar consumo nela.");
+      }
+
+      // productId / posLocationId vêm do cliente: precisam ser do mesmo hotel (CLAUDE.md,
+      // Segurança §4) — senão a baixa de estoque cairia no PDV/produto de outro assinante.
+      if (productId) {
+        const ownedProduct = await tx.product.findFirst({ where: { id: productId, tenantId: session.tenantId! }, select: { id: true } });
+        if (!ownedProduct) throw new Error("Produto não encontrado.");
+      }
+      if (posLocationId) {
+        const ownedPos = await tx.pOSLocation.findFirst({ where: { id: posLocationId, tenantId: session.tenantId! }, select: { id: true } });
+        if (!ownedPos) throw new Error("PDV não encontrado.");
+      }
+
       // Baixa o estoque do PDV escolhido, quando o item lançado está vinculado a um produto cadastrado.
       if (productId && posLocationId) {
         const stayForTenant = await tx.stayCheckin.findUnique({
@@ -237,6 +260,24 @@ export async function DELETE(req: NextRequest) {
         throw new Error("Lançamento de consumo não encontrado.");
       }
 
+      // Mesmo lock do check-out / lançamento de consumo, e revalidação depois dele: excluir
+      // consumo de uma hospedagem já encerrada alteraria uma conta fechada (o check-out já foi
+      // feito com esse total) — o valor simplesmente sumiria da cobrança.
+      await tx.$queryRaw`SELECT id FROM stay_checkins WHERE id = ${consumption.stayCheckinId} FOR UPDATE`;
+      const stayState = await tx.stayCheckin.findFirst({
+        where: { id: consumption.stayCheckinId, tenantId: session.tenantId! },
+        select: { isClosed: true },
+      });
+      if (!stayState || stayState.isClosed) {
+        throw new Error("Esta hospedagem já foi encerrada — o consumo não pode mais ser excluído.");
+      }
+      // Linhas lançadas pelo fechamento de uma comanda do PDV (itens, desconto e pagamento recebido)
+      // formam um conjunto que só fecha a conta junto: apagar uma delas isoladamente desbalanceia a
+      // comanda. O estorno desse consumo é pela reabertura da comanda no PDV.
+      if (consumption.comandaSessionId) {
+        throw new Error("Este consumo veio de uma comanda do PDV — para estorná-lo, reabra a comanda no PDV.");
+      }
+
       if (consumption.productId && consumption.posLocationId) {
         // upsert (não update): a baixa original também faz upsert, então o registro de estoque pode
         // não existir ainda se, por algum motivo, tiver sido removido — não pode bloquear o estorno.
@@ -256,7 +297,19 @@ export async function DELETE(req: NextRequest) {
         data: { totalConsumption: { decrement: consumption.totalPrice } },
       });
 
-      return { updatedStay };
+      return { updatedStay, consumption };
+    });
+
+    await logActivity({
+      tenantId: session.tenantId,
+      userId: session.userId,
+      userName: session.name,
+      action: "STAY_CONSUMPTION_DELETE",
+      description: `${session.name} excluiu o consumo "${result.consumption.productName}" (R$ ${Number(result.consumption.totalPrice).toFixed(2)}) da hospedagem.`,
+      entityType: "STAY_CHECKIN",
+      entityId: result.consumption.stayCheckinId,
+      terminal: getTerminalName(req),
+      ipAddress: getClientIp(req),
     });
 
     return NextResponse.json({

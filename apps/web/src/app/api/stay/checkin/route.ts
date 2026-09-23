@@ -6,7 +6,7 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { sendUazapiText } from "@/lib/uazapi";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
 import { processPaymentLine } from "@/lib/paymentProcessing";
-import { nextReservationNumber } from "@/lib/reservationHelpers";
+import { nextReservationNumber, findConflictingReservation } from "@/lib/reservationHelpers";
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
@@ -303,7 +303,10 @@ export async function POST(req: NextRequest) {
       else if (eaChoicePre === "HALF_NIGHT") earlyChargePre = dailyRateNumPre / 2;
       else if (eaChoicePre === "FIXED_FEE") earlyChargePre = Number(earlyArrival?.fixedFeeAmount) || 0;
 
-      const subtotalPre = Math.max(Number(totalAmount || dailyRateNumPre || 0), nightsPre * dailyRateNumPre + earlyChargePre);
+      // Base = diárias do período + chegada antecipada, calculadas no servidor. Nunca o totalAmount
+      // do body: inflá-lo fazia qualquer desconto "caber" no limite sem autorização (o desconto
+      // gravado na hospedagem é abatido das diárias reais no check-out).
+      const subtotalPre = nightsPre * dailyRateNumPre + earlyChargePre;
       const discountPercent = subtotalPre > 0 ? (discountValue / subtotalPre) * 100 : 100;
 
       const tenantForDiscount = await prisma.tenant.findUnique({
@@ -321,6 +324,41 @@ export async function POST(req: NextRequest) {
           );
         }
       }
+    }
+
+    // Cortesia de chegada antecipada / taxa fixa abaixo da meia diária = isenção ou desconto
+    // informal — exige autorização de administrador VERIFICADA AQUI (e-mail + senha reenviados
+    // pela tela), nunca só um nome digitado em `authorizedBy`, que qualquer operador preencheria.
+    // O nome gravado na descrição passa a ser o do administrador autenticado pelo servidor.
+    let earlyArrivalAdminName: string | null = null;
+    {
+      const eaChoiceReq: string | null = earlyArrival?.choice || null;
+      const feeReq = Number(earlyArrival?.fixedFeeAmount);
+      const needsEarlyAuth =
+        eaChoiceReq === "COURTESY" ||
+        (eaChoiceReq === "FIXED_FEE" && Number.isFinite(feeReq) && feeReq < (Number(dailyRate) || 0) / 2);
+      if (needsEarlyAuth) {
+        const auth = await verifyAdminStepUp(req, earlyArrival?.adminEmail, earlyArrival?.adminPassword, session.tenantId);
+        if (!auth.ok) {
+          return NextResponse.json(
+            { success: false, error: auth.error, precisaAutorizacao: true },
+            { status: auth.status }
+          );
+        }
+        earlyArrivalAdminName = auth.admin.name;
+      }
+    }
+
+    const checkInAtReq = new Date(checkInDate);
+    const checkOutAtReq = new Date(checkOutDate);
+    if (isNaN(checkInAtReq.getTime()) || isNaN(checkOutAtReq.getTime())) {
+      return NextResponse.json({ success: false, error: "Datas de chegada/saída inválidas." }, { status: 400 });
+    }
+    if (checkOutAtReq.getTime() <= checkInAtReq.getTime()) {
+      return NextResponse.json(
+        { success: false, error: "A previsão de saída precisa ser posterior à chegada." },
+        { status: 400 }
+      );
     }
 
     const result = await txWithRetry(async (tx) => {
@@ -422,10 +460,9 @@ export async function POST(req: NextRequest) {
         tenantSettings?.earlyCheckinToleranceMinutes ?? 60
       );
       const eaChoice: string | null = earlyArrival?.choice || null;
-      const eaAuthorizedBy: string | null =
-        typeof earlyArrival?.authorizedBy === "string" && earlyArrival.authorizedBy.trim()
-          ? earlyArrival.authorizedBy.trim()
-          : null;
+      // Só o administrador autenticado no servidor (verifyAdminStepUp acima) conta como
+      // autorização — o `authorizedBy` do body é ignorado.
+      const eaAuthorizedBy: string | null = earlyArrivalAdminName;
 
       if (serverArrivalKind && !eaChoice) {
         throw new Error(
@@ -484,23 +521,63 @@ export async function POST(req: NextRequest) {
       // Resolve a Reservation de origem ANTES de criar a StayCheckin, para já gravar o vínculo
       // real (reservationId) entre as duas — é essa FK que garante que o Mapa Operacional e a
       // Grid de Reservas nunca mais se percam um do outro por uma heurística de roomId.
-      let targetReservationId: string | null = reservationId || null;
+      let targetReservationId: string | null = null;
 
-      if (!targetReservationId) {
+      if (reservationId) {
+        // Reserva escolhida explicitamente na tela. O id vem do cliente, então é revalidado AQUI
+        // (CLAUDE.md, Segurança §4): precisa ser do hotel da sessão e estar num status que ainda
+        // aceita check-in. Sem isto, um id de reserva de OUTRO hotel era sobrescrito (nome, CPF,
+        // datas, CHECKED_IN) e os sinais pagos nela eram puxados para esta hospedagem; e uma
+        // reserva CANCELADA (sinal já estornado) voltava a contar o sinal como pagamento.
+        const chosen = await tx.reservation.findFirst({
+          where: {
+            id: String(reservationId),
+            room: { tenantId: session.tenantId! },
+            status: { notIn: RESERVATION_STATUSES_NOT_MATCHABLE as any },
+          },
+          select: { id: true },
+        });
+        if (!chosen) {
+          throw new Error("Reserva não encontrada ou não está mais disponível para check-in (cancelada, já hospedada ou encerrada).");
+        }
+        targetReservationId = chosen.id;
+      } else {
         // Check-in avulso (sem reserva selecionada explicitamente): só pode "adotar" uma reserva
-        // já existente no quarto se ela for de HOJE — nunca uma reserva futura de outro hóspede,
-        // que seria destruída/sobrescrita pelos dados deste check-in avulso.
+        // já existente no quarto se ela for de HOJE — nunca uma reserva futura de outro hóspede —
+        // E se for do MESMO hóspede (CPF ou nome). Sem a checagem de identidade, um hóspede de
+        // balcão colocado num quarto reservado para hoje herdava a reserva de outra pessoa, e com
+        // ela o sinal que essa pessoa pagou.
         const todayStart = dateOnlyBrasilia(new Date());
         const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
-        const match = await tx.reservation.findFirst({
+        const candidates = await tx.reservation.findMany({
           where: {
             roomId: room.id,
             status: { notIn: RESERVATION_STATUSES_NOT_MATCHABLE as any },
             checkInDate: { gte: todayStart, lt: todayEnd },
           },
           orderBy: { checkInDate: "asc" },
+          select: { id: true, guestName: true, guestCpf: true },
+        });
+        const normName = (s: string | null | undefined) =>
+          String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+        const match = candidates.find((c) => {
+          const resCpf = String(c.guestCpf || "").replace(/\D/g, "");
+          if (cpf && resCpf.length === 11) return resCpf === cpfDigits;
+          return normName(c.guestName) !== "" && normName(c.guestName) === normName(guestName);
         });
         targetReservationId = match?.id || null;
+      }
+
+      // Overbooking: a hospedagem nova não pode se sobrepor a reserva ativa de OUTRO hóspede no
+      // mesmo quarto (a própria reserva de origem é excluída). A linha do quarto já está travada
+      // (FOR UPDATE acima), então a checagem é atômica com a criação de reservas concorrentes.
+      const conflict = await findConflictingReservation(tx, room.id, checkInAt, checkOutAt, targetReservationId || undefined);
+      if (conflict) {
+        throw new Error(
+          `O Quarto ${room.number} tem a reserva ${conflict.reservationNumber || ""} de ${conflict.guestName} ` +
+            `a partir de ${conflict.checkInDate.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })} que se sobrepõe a esta hospedagem. ` +
+            `Ajuste a previsão de saída ou use outro quarto.`
+        );
       }
 
       // FNRH obrigatória (Tenant.fnrhMandatoryBeforeCheckin, ver Configurações): valida aqui —
@@ -518,10 +595,14 @@ export async function POST(req: NextRequest) {
       }
 
       if (targetReservationId) {
+        // Filtro de tenant repetido na própria escrita (CLAUDE.md, Segurança §3). O quarto da
+        // reserva passa a ser o quarto onde o hóspede de fato entrou — senão a reserva ficaria
+        // "presa" ao quarto original, bloqueando-o no mapa com uma hospedagem que está em outro.
         await tx.reservation.update({
-          where: { id: targetReservationId },
+          where: { id: targetReservationId, room: { tenantId: session.tenantId! } },
           data: {
             status: "CHECKED_IN",
+            roomId: room.id,
             guestName: String(guestName).toUpperCase(),
             guestCpf: cpf || undefined,
             guestPhone: phone || undefined,
@@ -873,6 +954,21 @@ export async function PATCH(req: NextRequest) {
       }
       if (stayBeforeClose.isClosed) {
         throw new Error("Esta hospedagem já foi encerrada anteriormente.");
+      }
+
+      // Comanda de hóspede ainda aberta no PDV (restaurante/bar) vai lançar consumo NESTA
+      // hospedagem quando for fechada — se o check-out passar antes, esse consumo nunca seria
+      // cobrado. Obriga a fechar/transferir as comandas antes de encerrar a conta do quarto.
+      const openComandas = await tx.comandaSession.findMany({
+        where: { stayCheckinId, tenantId: session.tenantId!, status: "ABERTA" },
+        select: { comanda: { select: { number: true } } },
+      });
+      if (openComandas.length > 0) {
+        throw new Error(
+          `Check-out não permitido: o hóspede tem comanda(s) aberta(s) no PDV (${openComandas
+            .map((c) => c.comanda.number)
+            .join(", ")}). Feche as comandas antes de encerrar a hospedagem.`
+        );
       }
 
       // Quarto abastecido: se o recurso está ligado e a categoria do quarto tem kit de frigobar,

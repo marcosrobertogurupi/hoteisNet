@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
-import { findConflictingReservation } from "@/lib/reservationHelpers";
+import { findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
@@ -119,6 +119,10 @@ export async function PATCH(req: NextRequest) {
       if (newExpectedCheckOut <= stay.checkInDate) {
         throw new Error("A previsão de saída não pode ser anterior ou igual à data de chegada.");
       }
+
+      // Mesma trava por quarto usada na criação/edição de reservas: sem ela, uma prorrogação e uma
+      // reserva nova para o mesmo quarto, simultâneas, liam "sem conflito" e as duas gravavam.
+      await lockRoomsForReservation(tx, [stay.roomId]);
 
       const conflict = await findConflictingReservation(
         tx,
