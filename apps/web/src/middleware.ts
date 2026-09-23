@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 // Importa do núcleo leve (só `jose`, sem bcrypt/Prisma) — o middleware roda no Edge Runtime,
 // que tem limite de 1 MB de bundle. Ver comentário em lib/sessionToken.ts.
-import { verifySessionToken, isAdminRole, SESSION_COOKIE } from "@/lib/sessionToken";
+import { verifySessionToken, isAdminRole, isTenantSession, SESSION_COOKIE } from "@/lib/sessionToken";
 import { verifyPlatformSessionToken, PLATFORM_SESSION_COOKIE } from "@/lib/platformAuth";
 import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib/housekeeperAuth";
 import { verifyStockCountSessionToken, STOCK_COUNT_SESSION_COOKIE } from "@/lib/stockCountAuth";
@@ -93,7 +93,8 @@ export async function middleware(req: NextRequest) {
 
     const sessionToken = req.cookies.get(SESSION_COOKIE)?.value;
     const session = sessionToken ? await verifySessionToken(sessionToken) : null;
-    if (session) return NextResponse.next();
+    // Só sessão de HOTEL passa (ver isTenantSession) — conta da plataforma usa o painel /admin.
+    if (session && isTenantSession(session)) return NextResponse.next();
 
     if (pathname.startsWith(HOUSEKEEPER_API_PREFIX)) {
       const housekeeperToken = req.cookies.get(HOUSEKEEPER_SESSION_COOKIE)?.value;
@@ -127,7 +128,8 @@ export async function middleware(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await verifySessionToken(token) : null;
 
-  if (!session) {
+  // Sessão sem hotel ou de conta da plataforma (emitida antes do bloqueio) não abre o app do hotel.
+  if (!session || !isTenantSession(session)) {
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);

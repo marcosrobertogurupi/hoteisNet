@@ -66,6 +66,16 @@ export function isPlatformEditRole(role: string | null | undefined): boolean {
   return !!role && PLATFORM_EDIT_ROLES.includes(role);
 }
 
+// Sessão válida para o APP DO HOTEL (/principal e /api/** do assinante): precisa ter um hotel
+// (tenantId) e NÃO pode ser de conta da equipe da plataforma. Conta da plataforma entra só pelo
+// painel /admin (login com 2FA) e atua num hotel pela personificação ("Entrar como assinante"),
+// que emite uma sessão em nome do administrador DAQUELE hotel — nunca da própria conta.
+// Antes, uma conta SUPER_ADMIN entrava direto pelo login do hotel, sem 2FA, e por /api/users
+// listava e alterava usuários de todos os hotéis.
+export function isTenantSession(session: { tenantId?: string | null; role?: string | null } | null | undefined): boolean {
+  return !!session?.tenantId && !isPlatformRole(session.role);
+}
+
 export function getClientIp(req: NextRequest): string {
   const forwarded = req.headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0].trim();
