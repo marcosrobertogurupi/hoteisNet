@@ -25,16 +25,26 @@ export function stayOccupiedUntil(stay: {
 
 // Ids de quartos (dentre os informados) que a manutenção tira de venda para um período que começa em
 // `checkIn`: quarto em MAINTENANCE fica indisponível para chegadas até o fim do dia de hoje em
-// Brasília. Espelha maintenanceBlockedRoomIds de apps/web/src/lib/reservationHelpers.ts — mudou a
-// régua lá, muda aqui também.
+// Brasília ou até a previsão de liberação da OS aberta, o que for maior. Espelha
+// maintenanceBlockedRoomIds de apps/web/src/lib/reservationHelpers.ts — mudou a régua lá, muda aqui.
 export async function maintenanceBlockedRoomIds(
   db: Pick<PrismaClient, "room">,
   roomIds: string[],
   checkIn: Date
 ): Promise<Set<string>> {
-  if (roomIds.length === 0 || checkIn >= endOfDayBrasilia(new Date())) return new Set();
+  if (roomIds.length === 0) return new Set();
   const rooms = await db.room.findMany({
-    where: { id: { in: roomIds }, status: "MAINTENANCE" },
+    where: {
+      id: { in: roomIds },
+      status: "MAINTENANCE",
+      ...(checkIn >= endOfDayBrasilia(new Date())
+        ? {
+            maintenanceTickets: {
+              some: { stage: { in: ["OPEN", "EVALUATING", "WAITING"] }, expectedReleaseAt: { gt: checkIn } },
+            },
+          }
+        : {}),
+    },
     select: { id: true },
   });
   return new Set(rooms.map((r) => r.id));

@@ -273,6 +273,11 @@ model Tenant {
   waitlistEntries            WaitlistEntry[]
   reviewChannelConnectors    ReviewChannelConnector[]
   reviews                    Review[]
+  maintenanceProblemTypes    MaintenanceProblemType[]
+  maintenanceWaitReasons     MaintenanceWaitReason[]
+  maintenanceTickets         MaintenanceTicket[]
+  maintenanceTicketEvents    MaintenanceTicketEvent[]
+  maintenanceTicketPhotos    MaintenanceTicketPhoto[]
 
   @@map("tenants")
 }
@@ -1000,6 +1005,7 @@ model Room {
   checkins          StayCheckin[]
   housekeepingTasks HousekeepingTask[]
   minibarChecks     RoomMinibarCheck[]
+  maintenanceTickets MaintenanceTicket[]
 
   @@map("rooms")
 }
@@ -1081,6 +1087,142 @@ model HousekeepingSetting {
   tenant         Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("housekeeping_settings")
+}
+
+// ── Manutenção de quartos ────────────────────────────────────────────────────────────────────
+// Funcionalidade nova (o WinDev só tinha a situação "M" + Ap_Motivo). Cada problema vira uma OS
+// (MaintenanceTicket) que percorre o funil Entrada → Avaliando → Aguardando → Resolvido; só o
+// colaborador de manutenção atribuído avança as etapas (app /manutencao), a recepção abre a OS e
+// o admin pode reatribuir/cancelar. Regras em apps/web/src/lib/maintenance.ts.
+
+// Tipo de problema (Elétrica, Hidráulica, Ar-condicionado…) — lista cadastrada por hotel, nunca
+// texto livre, para o relatório de tempo inativo agrupar certo.
+model MaintenanceProblemType {
+  id        String              @id @default(uuid())
+  tenantId  String
+  name      String
+  active    Boolean             @default(true)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tickets   MaintenanceTicket[]
+
+  @@unique([tenantId, name])
+  @@map("maintenance_problem_types")
+}
+
+// Motivo da etapa "Aguardando" (peça, profissional externo, aprovação de orçamento…) — lista
+// cadastrada por hotel.
+model MaintenanceWaitReason {
+  id        String                   @id @default(uuid())
+  tenantId  String
+  name      String
+  active    Boolean                  @default(true)
+  createdAt DateTime                 @default(now())
+  updatedAt DateTime                 @updatedAt
+  tenant    Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tickets   MaintenanceTicket[]
+  events    MaintenanceTicketEvent[]
+
+  @@unique([tenantId, name])
+  @@map("maintenance_wait_reasons")
+}
+
+// Ordem de serviço de manutenção de um quarto. Enquanto está numa etapa aberta (OPEN/EVALUATING/
+// WAITING) o quarto fica em MAINTENANCE e só sai dela pela resolução (vai para VACANT_DIRTY e entra
+// na fila da governança) ou pelo cancelamento do admin (volta para previousRoomStatus). No máximo
+// uma OS aberta por quarto — garantido na abertura pela troca condicional da situação do quarto.
+model MaintenanceTicket {
+  id                 String                  @id @default(uuid())
+  tenantId           String
+  // Nº da OS, sequencial por hotel (ver nextMaintenanceTicketNumber em lib/maintenance.ts).
+  number             Int
+  roomId             String
+  problemTypeId      String
+  description        String
+  stage              MaintenanceStage        @default(OPEN)
+  assignedEmployeeId String
+  // Preenchido só na etapa WAITING.
+  waitReasonId       String?
+  // Previsão de liberação do quarto: enquanto a OS está aberta, o quarto fica fora da
+  // disponibilidade para chegadas até esta data (ver maintenanceBlockedRoomIds).
+  expectedReleaseAt  DateTime?
+  // Situação do quarto antes de entrar em manutenção — para onde ele volta se a OS for cancelada.
+  previousRoomStatus RoomStatus
+  // Entrada em manutenção (início do tempo inativo).
+  openedAt           DateTime                @default(now())
+  openedByUserId     String?
+  openedByName       String
+  // Retorno do quarto (fim do tempo inativo) + o que foi feito (obrigatório para resolver).
+  resolvedAt         DateTime?
+  resolutionNotes    String?
+  downtimeMinutes    Int?
+  cancelledAt        DateTime?
+  cancelledByUserId  String?
+  cancelledByName    String?
+  cancelReason       String?
+  // Aviso de WhatsApp ao colaborador, enviado pelo worker (Agente Operacional).
+  notifyStatus       MaintenanceNotifyStatus @default(PENDING)
+  notifyAttempts     Int                     @default(0)
+  notifiedAt         DateTime?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  room               Room                    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  problemType        MaintenanceProblemType  @relation(fields: [problemTypeId], references: [id], onDelete: NoAction)
+  assignedEmployee   Employee                @relation(fields: [assignedEmployeeId], references: [id], onDelete: NoAction)
+  waitReason         MaintenanceWaitReason?  @relation(fields: [waitReasonId], references: [id], onDelete: NoAction)
+  events             MaintenanceTicketEvent[]
+  photos             MaintenanceTicketPhoto[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, stage])
+  @@index([roomId, stage])
+  @@index([assignedEmployeeId, stage])
+  @@map("maintenance_tickets")
+}
+
+// Linha do tempo da OS: cada abertura, mudança de etapa, reatribuição e cancelamento, com quem fez
+// (id + nome) e quando. É daqui que sai o tempo gasto em cada etapa (ex.: "aguardando peça").
+model MaintenanceTicketEvent {
+  id           String                 @id @default(uuid())
+  tenantId     String
+  ticketId     String
+  type         MaintenanceEventType
+  fromStage    MaintenanceStage?
+  toStage      MaintenanceStage?
+  waitReasonId String?
+  note         String?
+  actorType    MaintenanceActorType
+  actorId      String?
+  actorName    String
+  createdAt    DateTime               @default(now())
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket       MaintenanceTicket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  waitReason   MaintenanceWaitReason? @relation(fields: [waitReasonId], references: [id], onDelete: NoAction)
+
+  @@index([ticketId, createdAt])
+  @@map("maintenance_ticket_events")
+}
+
+// Foto do problema tirada pelo colaborador. A imagem fica no Supabase Storage (bucket privado
+// `maintenance-photos`, mesmo esquema das fotos dos quartos) — aqui só o caminho do arquivo, nunca
+// a imagem em si, para não inchar o banco.
+model MaintenanceTicketPhoto {
+  id          String               @id @default(uuid())
+  tenantId    String
+  ticketId    String
+  storagePath String
+  stage       MaintenanceStage
+  actorType   MaintenanceActorType
+  actorId     String?
+  actorName   String
+  createdAt   DateTime             @default(now())
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket      MaintenanceTicket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@map("maintenance_ticket_photos")
 }
 
 // Histórico de taxa de ocupação do hotel, gravado a cada hora (ver apps/worker/src/occupancySnapshot.ts),
@@ -2272,10 +2414,14 @@ model Employee {
   passwordHash        String?
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
+  // Colaborador que atende manutenção de quartos: pode receber OS (MaintenanceTicket), é avisado
+  // por WhatsApp no `phone` e, com senha definida, entra no app /manutencao.
+  maintenanceTech     Boolean   @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stockCounts StockCount[]
+  maintenanceTickets MaintenanceTicket[]
 
   @@map("employees")
 }
@@ -2835,6 +2981,37 @@ enum RoomStatus {
   VACANT_DIRTY
   OCCUPIED
   MAINTENANCE
+}
+
+// Funil da OS de manutenção: 1 Entrada → 2 Avaliando → 3 Aguardando → 4 Resolvido (+ Cancelada).
+enum MaintenanceStage {
+  OPEN
+  EVALUATING
+  WAITING
+  RESOLVED
+  CANCELLED
+}
+
+enum MaintenanceNotifyStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum MaintenanceEventType {
+  OPENED
+  STAGE_CHANGED
+  REASSIGNED
+  FORECAST_CHANGED
+  CANCELLED
+}
+
+// Quem fez a ação na OS: USER = usuário do painel (recepção/admin), EMPLOYEE = colaborador de
+// manutenção pelo app, SYSTEM = automação.
+enum MaintenanceActorType {
+  USER
+  EMPLOYEE
+  SYSTEM
 }
 
 enum RoomCategoryKind {

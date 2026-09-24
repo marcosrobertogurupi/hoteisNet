@@ -12,6 +12,18 @@ function isValidWebhookSecret(received: string | null, expected: string | null):
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
 }
+
+// O telefone é de alguém da equipe do hotel (colaborador ativo ou governanta ativa)? Compara por
+// interseção de variantes (com/sem o 9º dígito), igual ao casamento com o hóspede.
+async function isStaffPhone(tenantId: string, chatVariants: string[]): Promise<boolean> {
+  if (chatVariants.length === 0) return false;
+  const [employees, housekeepers] = await Promise.all([
+    prisma.employee.findMany({ where: { tenantId, active: true, phone: { not: null } }, select: { phone: true } }),
+    prisma.housekeeper.findMany({ where: { tenantId, active: true }, select: { whatsapp: true } }),
+  ]);
+  const staffPhones = [...employees.map((e) => e.phone || ""), ...housekeepers.map((h) => h.whatsapp)];
+  return staffPhones.some((p) => brazilPhoneVariants(p.replace(/\D/g, "")).some((v) => chatVariants.includes(v)));
+}
 import { sendUazapiText, downloadUazapiMedia, fetchAsBase64 } from "@/lib/uazapi";
 import { buildGuestSupportAgent } from "@/lib/aiAgent/agent";
 import { prepareConversationContext } from "@/lib/aiAgent/conversationMemory";
@@ -343,6 +355,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ ten
         read: false,
       },
     });
+
+    // Mensagem de alguém da equipe (colaborador — ex.: o técnico de manutenção avisado de uma OS —
+    // ou governanta) que não está hospedado: fica registrada, mas não aciona o agente de
+    // atendimento, que responderia ao funcionário como se fosse um hóspede.
+    if (!stayId && (await isStaffPhone(tenantId, chatVariants))) {
+      return NextResponse.json({ success: true, ignored: "staff" });
+    }
 
     await runGuestSupportAgent(tenantId, phone);
 

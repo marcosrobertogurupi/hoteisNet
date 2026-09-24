@@ -389,7 +389,13 @@ export async function POST(req: NextRequest) {
       // Trava a linha do quarto pelo resto da transação: impede que dois check-ins quase
       // simultâneos no mesmo quarto leiam "sem hospedagem aberta" ao mesmo tempo e ambos
       // avancem — o segundo espera aqui até o primeiro terminar (commit ou rollback).
-      await tx.$queryRaw`SELECT id FROM rooms WHERE id = ${room.id} FOR UPDATE`;
+      const [lockedRoom] = await tx.$queryRaw<{ status: string }[]>`SELECT status::text AS status FROM rooms WHERE id = ${room.id} FOR UPDATE`;
+
+      // Quarto em manutenção não recebe hóspede (WinDev: "Quarto em manutenção. Não é possivel
+      // efetuar hospedagem nele"). Lido depois da trava, então vale mesmo com uma OS aberta agora.
+      if (lockedRoom?.status === "MAINTENANCE") {
+        throw new Error(`O Quarto ${room.number} está em manutenção e não pode receber hospedagem. Escolha outro quarto.`);
+      }
 
       const openStay = await tx.stayCheckin.findFirst({ where: { roomId: room.id, isClosed: false } });
       if (openStay) {

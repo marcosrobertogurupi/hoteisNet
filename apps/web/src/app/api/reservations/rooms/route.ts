@@ -5,6 +5,7 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 import { normalizeRoomPhotos, removeRoomPhotoObjects, RoomPhotoError } from "@/lib/roomPhotoStorage";
 import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
+import { OPEN_MAINTENANCE_STAGES } from "@/lib/maintenance";
 
 // Reexecuta uma operação do Prisma uma vez em caso de falha de conexão com o banco
 // (ex.: reconexão "fria" do pool do Supabase após período ocioso), evitando expor
@@ -298,6 +299,35 @@ export async function PATCH(req: NextRequest) {
       data.categoryId = await resolveCategoryId(session.tenantId, categoria);
     }
 
+    // Quarto com OS de manutenção aberta só sai de MAINTENANCE pela própria OS — resolução pelo
+    // colaborador (app /manutencao) ou cancelamento pelo admin —, nunca pela troca genérica de
+    // situação (Mapa de Quartos / cadastro de apartamentos). Checado antes das fotos para não
+    // subir arquivo que seria descartado; a escrita abaixo repete a condição (atômica).
+    const leavingMaintenanceGuard = mappedStatus && mappedStatus !== "MAINTENANCE";
+    if (leavingMaintenanceGuard) {
+      const openTicket = await withDbRetry(() =>
+        prisma.maintenanceTicket.findFirst({
+          where: {
+            tenantId: session.tenantId!,
+            stage: { in: OPEN_MAINTENANCE_STAGES },
+            room: { tenantId: session.tenantId!, OR: [{ number: target }, { id: target }] },
+          },
+          select: { number: true, assignedEmployee: { select: { name: true } } },
+        })
+      );
+      if (openTicket) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              `O quarto ${target} está com a OS de manutenção nº ${openTicket.number} aberta (${openTicket.assignedEmployee.name}). ` +
+              `Ele só é liberado quando o colaborador resolver a OS, ou se um administrador cancelá-la.`,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     // Fotos: data URIs novas sobem para o Storage, URLs já existentes do próprio hotel são mantidas
     // (Room.photos guarda só URLs). As fotos que saíram da lista viram órfãs e são apagadas do
     // Storage depois que a gravação no banco der certo.
@@ -349,6 +379,9 @@ export async function PATCH(req: NextRequest) {
               { id: target },
             ],
             tenantId: session.tenantId!,
+            ...(leavingMaintenanceGuard
+              ? { maintenanceTickets: { none: { stage: { in: OPEN_MAINTENANCE_STAGES } } } }
+              : {}),
           },
           data,
         })

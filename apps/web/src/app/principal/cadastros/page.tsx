@@ -28,7 +28,8 @@ import {
   Layers,
   Tags as TagsIcon,
   Receipt as ReceivableIcon,
-  Wallet
+  Wallet,
+  Wrench
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
@@ -178,6 +179,16 @@ export default function CadastrosHubPage() {
           count: "Quartos / Limpeza",
           badge: "Dados Sincronizados",
           color: isDark ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : "bg-rose-50 text-rose-600 border-rose-200",
+        },
+        {
+          id: "manutencao",
+          title: "Listas da Manutenção",
+          description: "Tipos de problema e motivos de espera usados nas ordens de serviço de manutenção dos quartos",
+          icon: Wrench,
+          href: "/principal/cadastros/manutencao",
+          count: "Pré-cadastro",
+          badge: "Por Assinante",
+          color: isDark ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-amber-50 text-amber-600 border-amber-200",
         },
       ],
     },

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { UserCheck, Plus, Edit3, Trash2, ArrowLeft, X, Check, ScanBarcode } from "lucide-react";
+import { UserCheck, Plus, Edit3, Trash2, ArrowLeft, X, Check, ScanBarcode, Wrench } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useConfirm } from "@/context/ConfirmContext";
 import { useToast } from "@/context/ToastContext";
@@ -17,6 +17,7 @@ interface Colaborador {
   phone: string | null;
   email: string | null;
   active: boolean;
+  maintenanceTech: boolean;
   temSenha: boolean;
 }
 
@@ -28,6 +29,7 @@ const EMPTY_FORM = {
   telefone: "",
   email: "",
   status: "ATIVO" as "ATIVO" | "INATIVO",
+  manutencao: false,
   senha: "",
   removerSenha: false,
   temSenha: false,
@@ -75,6 +77,7 @@ export default function ColaboradoresPage() {
       telefone: col.phone || "",
       email: col.email || "",
       status: col.active ? "ATIVO" : "INATIVO",
+      manutencao: col.maintenanceTech,
       senha: "",
       removerSenha: false,
       temSenha: col.temSenha,
@@ -185,7 +188,14 @@ export default function ColaboradoresPage() {
                       <span className={`font-bold text-sm block ${ui.strong}`}>{col.name}</span>
                       <span className="font-mono text-[10px] text-purple-600 dark:text-purple-400">CPF: {col.cpf || "-"}</span>
                     </td>
-                    <td className={`px-5 py-4 font-medium ${isDark ? "text-slate-200" : "text-slate-700"}`}>{col.role || "-"}</td>
+                    <td className={`px-5 py-4 font-medium ${isDark ? "text-slate-200" : "text-slate-700"}`}>
+                      <div>{col.role || "-"}</div>
+                      {col.maintenanceTech && (
+                        <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                          <Wrench className="w-2.5 h-2.5" /> manutenção
+                        </span>
+                      )}
+                    </td>
                     <td className={`px-5 py-4 font-mono ${ui.muted}`}>
                       <div>{col.phone || "-"}</div>
                       <div className={`text-[10px] ${ui.empty}`}>{col.email || "-"}</div>
@@ -294,6 +304,30 @@ export default function ColaboradoresPage() {
                   <option value="INATIVO">INATIVO</option>
                 </select>
               </div>
+
+              {/* Colaborador de manutenção de quartos — recebe as OS e é avisado pelo WhatsApp */}
+              <label
+                className={`flex items-start gap-3 rounded-xl border p-4 cursor-pointer ${
+                  isDark ? "border-slate-800 bg-slate-950/40" : "border-slate-200 bg-slate-50"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={form.manutencao}
+                  onChange={(e) => setForm({ ...form, manutencao: e.target.checked })}
+                />
+                <span className="space-y-1">
+                  <span className={`flex items-center gap-2 text-xs font-bold ${ui.strong}`}>
+                    <Wrench className={`w-4 h-4 ${isDark ? "text-amber-400" : "text-amber-600"}`} />
+                    Atende manutenção de quartos
+                  </span>
+                  <span className={`block text-[11px] ${ui.muted}`}>
+                    Pode receber ordens de serviço de manutenção. O aviso de cada OS chega pelo WhatsApp no{" "}
+                    <strong>telefone</strong> acima, que passa a ser obrigatório.
+                  </span>
+                </span>
+              </label>
 
               {/* Acesso ao app mobile de contagem de estoque — login por telefone + senha */}
               <div
