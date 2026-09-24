@@ -33,12 +33,32 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Modelo e esforço escolhidos no WhatsApp (CONFIRMAR <MODELO> <ESFORÇO>) chegam como linhas
+      # "claude-modelo:"/"claude-esforco:" na issue; num comentário "@claude" de acompanhamento, o
+      # comentário tem prioridade e a issue vale como padrão. Só valores da lista passam adiante.
+      - name: Configuração da tarefa (modelo e esforço)
+        id: cfg
+        env:
+          TEXTO_COMENTARIO: ${{ github.event.comment.body }}
+          TEXTO_ISSUE: ${{ github.event.issue.body }}
+        run: |
+          TEXTO=$(printf '%s\n%s' "$TEXTO_COMENTARIO" "$TEXTO_ISSUE" | tr -d '\r')
+          MODELO=$(printf '%s\n' "$TEXTO" | grep -o -E '^claude-modelo: *[a-z]+' | head -1 | sed -E 's/.*: *//' || true)
+          ESFORCO=$(printf '%s\n' "$TEXTO" | grep -o -E '^claude-esforco: *[a-z]+' | head -1 | sed -E 's/.*: *//' || true)
+          case "$MODELO" in opus|sonnet|haiku|fable) ;; *) MODELO=sonnet ;; esac
+          case "$ESFORCO" in low|medium|high|xhigh|max) ;; *) ESFORCO=medium ;; esac
+          echo "Modelo: $MODELO | Esforço: $ESFORCO"
+          echo "model=$MODELO" >> "$GITHUB_OUTPUT"
+          echo "effort=$ESFORCO" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
+            --model ${{ steps.cfg.outputs.model }}
+            --effort ${{ steps.cfg.outputs.effort }}
             --max-turns 80
             --append-system-prompt "Responda sempre em português. Siga à risca o CLAUDE.md do repositório (regras de segurança multi-tenant e de performance/egress). Trabalhe só na branch criada para esta tarefa: nunca faça push, merge ou rebase na master. Se o pedido for ambíguo ou arriscado (schema, dinheiro, check-in/check-out, reservas), explique as dúvidas no comentário em vez de adivinhar. Termine com um resumo curto e em linguagem simples do que mudou e de como testar."
 
@@ -54,20 +74,37 @@ jobs:
           CONCLUSION: ${{ steps.claude.outputs.conclusion || job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          ESFORCO: ${{ steps.cfg.outputs.effort }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
+          # Versão exata do modelo que rodou (o alias "sonnet"/"opus" resolve para a mais nova).
+          MODELO_USADO=""
+          if [ -f "$EXEC_FILE" ]; then
+            MODELO_USADO=$(jq -r '[.[] | select(.type == "system" and .subtype == "init")][0].model // ""' "$EXEC_FILE" 2>/dev/null || true)
+          fi
+          echo "Modelo usado: $MODELO_USADO | Esforço: $ESFORCO"
           # A action esconde a saída do Claude por segurança; em caso de falha, extrai só o motivo
           # (ex: limite de uso, token inválido) do resultado final para o log e para o WhatsApp.
           ERRO=""
-          EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
           if [ "$CONCLUSION" != "success" ] && [ -f "$EXEC_FILE" ]; then
             ERRO=$(jq -r '[.[] | select(.type == "result")] | last | "\(.api_error_status // "")|\(.result // "")"' "$EXEC_FILE" 2>/dev/null | tr '\n' ' ' | head -c 300 || true)
             echo "Motivo da falha: $ERRO"
           fi
-          if [ -z "$NOTIFY_URL" ] || [ -z "$NOTIFY_SECRET" ]; then echo "Aviso do assistente não configurado"; exit 0; fi
+          # O nome da branch existe mesmo quando o Claude só respondeu sem alterar nada; o link de
+          # revisão só vai quando ela tem commits de verdade à frente da master.
+          COMMITS=0
           COMPARE_URL=""
-          if [ -n "$BRANCH" ]; then COMPARE_URL="$REPO_URL/compare/master...$BRANCH?expand=1"; fi
+          if [ -n "$BRANCH" ]; then
+            COMMITS=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$BRANCH" --jq '.ahead_by' 2>/dev/null || echo 0)
+            case "$COMMITS" in ''|*[!0-9]*) COMMITS=0 ;; esac
+            if [ "$COMMITS" -gt 0 ]; then COMPARE_URL="$REPO_URL/compare/master...$BRANCH?expand=1"; fi
+          fi
+          echo "Commits na branch: $COMMITS"
+          if [ -z "$NOTIFY_URL" ] || [ -z "$NOTIFY_SECRET" ]; then echo "Aviso do assistente não configurado"; exit 0; fi
           jq -n \
             --arg issue_number "$ISSUE_NUMBER" --arg issue_url "$ISSUE_URL" --arg issue_title "$ISSUE_TITLE" \
             --arg branch "$BRANCH" --arg conclusion "$CONCLUSION" --arg run_url "$RUN_URL" --arg compare_url "$COMPARE_URL" --arg erro "$ERRO" \
-            '{issue_number: ($issue_number|tonumber), issue_url: $issue_url, issue_title: $issue_title, branch: $branch, conclusion: $conclusion, run_url: $run_url, compare_url: $compare_url, erro: $erro}' \
+            --arg modelo_usado "$MODELO_USADO" --arg esforco "$ESFORCO" --arg commits "$COMMITS" \
+            '{issue_number: ($issue_number|tonumber), issue_url: $issue_url, issue_title: $issue_title, branch: $branch, conclusion: $conclusion, run_url: $run_url, compare_url: $compare_url, erro: $erro, modelo_usado: $modelo_usado, esforco: $esforco, commits: ($commits|tonumber)}' \
           | curl -sS --max-time 20 -X POST "$NOTIFY_URL" -H "Content-Type: application/json" -H "x-webhook-secret: $NOTIFY_SECRET" --data-binary @- || true
