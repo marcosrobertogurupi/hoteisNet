@@ -19,6 +19,9 @@ const PUBLIC_API_PREFIXES = [
   // Só devolve o build id da versão publicada e se ela é obrigatória — nenhum dado de tenant.
   // Consumida por abas ainda logadas e pela tela de login (aviso de versão desatualizada).
   "/api/version",
+  // Saúde da plataforma para o assistente pessoal do dono — autenticada por segredo próprio
+  // (PLATFORM_HEALTH_TOKEN, Bearer, timing-safe) na própria rota. Só agregados, sem dado de hóspede.
+  "/api/platform-health",
   "/api/housekeeping/login",
   "/api/housekeeping/logout",
   "/api/stock-count/login",

@@ -32,7 +32,7 @@ const adminError = requireAdmin(session);
 if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 ```
 
-As únicas rotas legitimamente sem sessão são: `/api/auth/login`, `/api/housekeeping/login`, `/api/uazapi/webhook/[tenantId]` (autenticada por segredo de webhook, não por sessão — ver regra 5), `/api/public/pre-checkin/[token]` (autenticada pelo token da URL, nunca por tenantId/reservationId do cliente) e `/api/version` (só devolve o build id da versão publicada e se ela é obrigatória — nenhum dado de tenant; consumida por abas ainda logadas e pela tela de login para avisar de versão desatualizada).
+As únicas rotas legitimamente sem sessão são: `/api/auth/login`, `/api/housekeeping/login`, `/api/uazapi/webhook/[tenantId]` (autenticada por segredo de webhook, não por sessão — ver regra 5), `/api/public/pre-checkin/[token]` (autenticada pelo token da URL, nunca por tenantId/reservationId do cliente), `/api/version` (só devolve o build id da versão publicada e se ela é obrigatória — nenhum dado de tenant; consumida por abas ainda logadas e pela tela de login para avisar de versão desatualizada) e `/api/platform-health` (autenticada por segredo próprio `PLATFORM_HEALTH_TOKEN` via Bearer timing-safe; só agregados de saúde da plataforma, sem dado de hóspede — consumida pelo assistente pessoal do dono).
 
 ### 2. `tenantId` NUNCA vem do cliente — sempre de `session.tenantId`
 
