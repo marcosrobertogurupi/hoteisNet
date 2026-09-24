@@ -201,7 +201,7 @@ export default function ColaboradoresPage() {
                       <div className={`text-[10px] ${ui.empty}`}>{col.email || "-"}</div>
                       {col.temSenha && (
                         <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/15 text-purple-600 dark:text-purple-400">
-                          <ScanBarcode className="w-2.5 h-2.5" /> app de contagem
+                          <ScanBarcode className="w-2.5 h-2.5" /> acesso aos apps
                         </span>
                       )}
                     </td>
@@ -324,7 +324,7 @@ export default function ColaboradoresPage() {
                   </span>
                   <span className={`block text-[11px] ${ui.muted}`}>
                     Pode receber ordens de serviço de manutenção. O aviso de cada OS chega pelo WhatsApp no{" "}
-                    <strong>telefone</strong> acima, que passa a ser obrigatório.
+                    <strong>telefone</strong> acima, que passa a ser obrigatório. Com o telefone e a senha (abaixo) ele entra no app de manutenção (<strong>/manutencao</strong>) para dar andamento às OS.
                   </span>
                 </span>
               </label>
@@ -337,7 +337,7 @@ export default function ColaboradoresPage() {
               >
                 <div className="flex items-center gap-2">
                   <ScanBarcode className={`w-4 h-4 ${isDark ? "text-purple-400" : "text-purple-600"}`} />
-                  <span className={`text-xs font-bold ${ui.strong}`}>Acesso ao app de contagem de estoque</span>
+                  <span className={`text-xs font-bold ${ui.strong}`}>Acesso aos apps (contagem de estoque e manutenção)</span>
                 </div>
                 <p className={`text-[11px] ${ui.muted}`}>
                   O colaborador entra no app pelo <strong>telefone</strong> acima e pela senha definida aqui. Deixe a
@@ -363,7 +363,7 @@ export default function ColaboradoresPage() {
                       checked={form.removerSenha}
                       onChange={(e) => setForm({ ...form, removerSenha: e.target.checked, senha: "" })}
                     />
-                    Remover o acesso deste colaborador ao app de contagem
+                    Remover o acesso deste colaborador aos apps
                   </label>
                 )}
               </div>

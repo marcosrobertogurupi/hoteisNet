@@ -51,6 +51,7 @@ interface TicketDetail {
   employeeName: string;
   waitReason: string | null;
   events: TicketEvent[];
+  photos: { id: string; url: string | null; createdAt: string; actorName: string }[];
 }
 
 export interface OsManutencaoModalProps {
@@ -313,6 +314,27 @@ export default function OsManutencaoModal({ isOpen, onClose, ticketId, onChanged
                     <RefreshCw className="w-3.5 h-3.5" /> Reenviar aviso
                   </button>
                 )}
+              </div>
+            )}
+
+            {/* Fotos do problema (tiradas pelo colaborador no app) */}
+            {ticket.photos.length > 0 && (
+              <div className={card}>
+                <span className={`block text-[10px] font-semibold uppercase ${muted}`}>Fotos ({ticket.photos.length})</span>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {ticket.photos.map((p) =>
+                    p.url ? (
+                      <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" title={`${p.actorName} — ${formatMaintenanceDateTime(p.createdAt, true)}`}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={p.url} alt="Foto do problema" className="w-full aspect-square object-cover rounded-lg border border-slate-400/30" />
+                      </a>
+                    ) : (
+                      <div key={p.id} className={`w-full aspect-square rounded-lg border flex items-center justify-center text-[10px] ${muted}`}>
+                        indisponível
+                      </div>
+                    ),
+                  )}
+                </div>
               </div>
             )}
 

@@ -21,6 +21,9 @@ const EMPLOYEE_SELECT = {
   updatedAt: true,
 } as const;
 
+const MSG_MANUTENCAO_SEM_SENHA =
+  "Defina uma senha para o colaborador de manutenção — é com o telefone e essa senha que ele entra no app de manutenção.";
+
 const MSG_MANUTENCAO_SEM_TELEFONE =
   "Informe o WhatsApp do colaborador de manutenção — é por ele que chega o aviso das ordens de serviço.";
 
@@ -86,6 +89,9 @@ export async function POST(req: NextRequest) {
         { success: false, error: "Informe o telefone do colaborador para dar acesso ao app de contagem." },
         { status: 400 }
       );
+    }
+    if (manutencao === true && !senhaTrim) {
+      return NextResponse.json({ success: false, error: MSG_MANUTENCAO_SEM_SENHA }, { status: 400 });
     }
 
     const employee = await prisma.employee.create({
@@ -182,6 +188,19 @@ export async function PUT(req: NextRequest) {
       data.passwordHash = await hashPassword(senhaTrim);
       data.failedLoginAttempts = 0;
       data.lockedUntil = null;
+    }
+
+    // Colaborador de manutenção precisa de senha: é com ela que ele entra no app /manutencao para
+    // dar andamento às OS. Vale a senha nova ou a que já existe (sem remover).
+    if (manutencao === true) {
+      const current = await prisma.employee.findFirst({
+        where: { id: String(id), tenantId: session!.tenantId! },
+        select: { passwordHash: true },
+      });
+      const willHavePassword = removerSenha === true ? false : !!data.passwordHash || !!current?.passwordHash;
+      if (!willHavePassword) {
+        return NextResponse.json({ success: false, error: MSG_MANUTENCAO_SEM_SENHA }, { status: 400 });
+      }
     }
 
     const updated = await prisma.employee.updateMany({

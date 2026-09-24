@@ -304,6 +304,197 @@ export async function cancelMaintenanceTicket(params: {
   });
 }
 
+// Etapas para onde o colaborador pode levar a OS a partir de cada etapa. Entrada só vai para
+// Avaliando; de Avaliando o problema é resolvido ou fica aguardando; de Aguardando dá para trocar o
+// motivo (peça chegou, agora falta o profissional), voltar ao serviço ou resolver.
+const ALLOWED_TRANSITIONS: Record<MaintenanceStage, MaintenanceStage[]> = {
+  OPEN: ["EVALUATING"],
+  EVALUATING: ["WAITING", "RESOLVED"],
+  WAITING: ["WAITING", "EVALUATING", "RESOLVED"],
+  RESOLVED: [],
+  CANCELLED: [],
+};
+
+export function allowedNextStages(stage: MaintenanceStage): MaintenanceStage[] {
+  return ALLOWED_TRANSITIONS[stage] ?? [];
+}
+
+const MIN_RESOLUTION_NOTES = 10;
+
+// O colaborador avança a OS pelo app. Só o colaborador ATRIBUÍDO consegue: o assignedEmployeeId e a
+// etapa atual estão na condição da própria escrita (se a OS foi reatribuída ou mudou de etapa no
+// meio do caminho, nada é gravado). Regras:
+//  - WAITING exige motivo (lista cadastrada) e previsão de liberação futura — é a previsão que
+//    tira o quarto da disponibilidade até a data (maintenanceBlockedRoomIds).
+//  - RESOLVED exige o texto do que foi feito; grava data/hora de retorno e o tempo inativo, e o
+//    quarto vai para VACANT_DIRTY (entra na fila da governança).
+export async function advanceMaintenanceTicket(params: {
+  tenantId: string;
+  ticketId: string;
+  employeeId: string;
+  employeeName: string;
+  toStage: MaintenanceStage;
+  waitReasonId?: string | null;
+  expectedReleaseAt?: Date | null;
+  note?: string | null;
+  resolutionNotes?: string | null;
+}) {
+  const note = params.note?.trim() ? params.note.trim().slice(0, 500) : null;
+
+  return prisma.$transaction(async (tx) => {
+    const ticket = await tx.maintenanceTicket.findFirst({
+      where: { id: params.ticketId, tenantId: params.tenantId, assignedEmployeeId: params.employeeId },
+      select: {
+        id: true,
+        number: true,
+        stage: true,
+        roomId: true,
+        openedAt: true,
+        expectedReleaseAt: true,
+        room: { select: { number: true } },
+      },
+    });
+    if (!ticket) throw new MaintenanceError("OS não encontrada entre as suas.", 404);
+    if (!allowedNextStages(ticket.stage).includes(params.toStage)) {
+      throw new MaintenanceError(
+        `A OS nº ${ticket.number} está em "${MAINTENANCE_STAGE_LABEL[ticket.stage]}" e não pode ir para "${MAINTENANCE_STAGE_LABEL[params.toStage]}".`,
+        409,
+      );
+    }
+
+    const now = new Date();
+    const data: Prisma.MaintenanceTicketUpdateManyMutationInput & { waitReasonId?: string | null } = {
+      stage: params.toStage,
+    };
+    let waitReasonId: string | null = null;
+    let eventNote = note;
+
+    if (params.toStage === "WAITING") {
+      if (!params.waitReasonId) throw new MaintenanceError("Escolha o motivo da espera.");
+      const reason = await tx.maintenanceWaitReason.findFirst({
+        where: { id: params.waitReasonId, tenantId: params.tenantId, active: true },
+        select: { id: true },
+      });
+      if (!reason) throw new MaintenanceError("Motivo de espera não encontrado.", 404);
+      if (!params.expectedReleaseAt || isNaN(params.expectedReleaseAt.getTime())) {
+        throw new MaintenanceError("Informe a previsão de liberação do quarto.");
+      }
+      if (params.expectedReleaseAt.getTime() <= now.getTime()) {
+        throw new MaintenanceError("A previsão de liberação precisa ser uma data futura.");
+      }
+      waitReasonId = reason.id;
+      data.waitReasonId = reason.id;
+      data.expectedReleaseAt = params.expectedReleaseAt;
+    } else {
+      data.waitReasonId = null;
+    }
+
+    if (params.toStage === "RESOLVED") {
+      const resolution = params.resolutionNotes?.trim() || "";
+      if (resolution.length < MIN_RESOLUTION_NOTES) {
+        throw new MaintenanceError("Explique o que foi feito no quarto (pelo menos algumas palavras).");
+      }
+      data.resolvedAt = now;
+      data.resolutionNotes = resolution.slice(0, 2000);
+      data.downtimeMinutes = Math.max(0, Math.round((now.getTime() - ticket.openedAt.getTime()) / 60000));
+      eventNote = resolution.slice(0, 2000);
+    }
+
+    // Condição completa na escrita: mesma OS, mesmo hotel, mesmo colaborador, mesma etapa lida acima.
+    const updated = await tx.maintenanceTicket.updateMany({
+      where: { id: ticket.id, tenantId: params.tenantId, assignedEmployeeId: params.employeeId, stage: ticket.stage },
+      data,
+    });
+    if (updated.count === 0) throw new MaintenanceError("A OS acabou de mudar. Atualize a tela e tente de novo.", 409);
+
+    await tx.maintenanceTicketEvent.create({
+      data: {
+        tenantId: params.tenantId,
+        ticketId: ticket.id,
+        type: "STAGE_CHANGED",
+        fromStage: ticket.stage,
+        toStage: params.toStage,
+        waitReasonId,
+        note:
+          params.toStage === "WAITING" && params.expectedReleaseAt
+            ? [
+                `Previsão de liberação: ${params.expectedReleaseAt.toLocaleString("pt-BR", {
+                  timeZone: "America/Sao_Paulo",
+                  day: "2-digit",
+                  month: "2-digit",
+                  year: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}`,
+                eventNote,
+              ]
+                .filter(Boolean)
+                .join("\n")
+            : eventNote,
+        actorType: "EMPLOYEE",
+        actorId: params.employeeId,
+        actorName: params.employeeName,
+      },
+    });
+
+    if (params.toStage === "RESOLVED") {
+      // Retorno do quarto: vai para limpeza (a manutenção deixa sujeira) e entra na fila da
+      // governança. Condição de situação na própria escrita.
+      await tx.room.updateMany({
+        where: { id: ticket.roomId, tenantId: params.tenantId, status: "MAINTENANCE" },
+        data: { status: "VACANT_DIRTY", notes: `Pendente limpeza após manutenção (OS nº ${ticket.number})` },
+      });
+      await syncHousekeepingTasksWithRoomStatus(tx, {
+        tenantId: params.tenantId,
+        roomId: ticket.roomId,
+        newStatus: "VACANT_DIRTY",
+        interruptedNote: ARRUMACAO_INTERRUPTED_NOTE.STATUS_CHANGE,
+      });
+    }
+
+    return { number: ticket.number, roomNumber: ticket.room.number, stage: params.toStage };
+  });
+}
+
+// Registra uma foto já enviada ao Storage na OS. Só o colaborador atribuído, só com a OS aberta e
+// até o limite por OS. Devolve false se não pôde gravar (o chamador apaga o arquivo órfão).
+export async function addMaintenancePhoto(params: {
+  tenantId: string;
+  ticketId: string;
+  employeeId: string;
+  employeeName: string;
+  storagePath: string;
+  maxPhotos: number;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const ticket = await tx.maintenanceTicket.findFirst({
+      where: {
+        id: params.ticketId,
+        tenantId: params.tenantId,
+        assignedEmployeeId: params.employeeId,
+        stage: { in: OPEN_MAINTENANCE_STAGES },
+      },
+      select: { id: true, stage: true, _count: { select: { photos: true } } },
+    });
+    if (!ticket) throw new MaintenanceError("Só dá para fotografar uma OS aberta que está com você.", 404);
+    if (ticket._count.photos >= params.maxPhotos) {
+      throw new MaintenanceError(`Limite de ${params.maxPhotos} fotos por OS atingido.`, 409);
+    }
+    return tx.maintenanceTicketPhoto.create({
+      data: {
+        tenantId: params.tenantId,
+        ticketId: ticket.id,
+        storagePath: params.storagePath,
+        stage: ticket.stage,
+        actorType: "EMPLOYEE",
+        actorId: params.employeeId,
+        actorName: params.employeeName,
+      },
+      select: { id: true },
+    });
+  });
+}
+
 // Máximo de tentativas automáticas de envio do aviso por WhatsApp (worker). Esgotadas, o aviso
 // fica FAILED e a recepção vê o alerta no card do quarto — reenviar é manual, nunca um retry sem teto.
 export const MAX_MAINTENANCE_NOTIFY_ATTEMPTS = 3;

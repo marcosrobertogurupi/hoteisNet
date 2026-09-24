@@ -5,6 +5,7 @@ import { verifySessionToken, isAdminRole, isTenantSession, SESSION_COOKIE } from
 import { verifyPlatformSessionToken, PLATFORM_SESSION_COOKIE } from "@/lib/platformAuth";
 import { verifyHousekeeperSessionToken, HOUSEKEEPER_SESSION_COOKIE } from "@/lib/housekeeperAuth";
 import { verifyStockCountSessionToken, STOCK_COUNT_SESSION_COOKIE } from "@/lib/stockCountAuth";
+import { verifyMaintenanceSessionToken, MAINTENANCE_SESSION_COOKIE } from "@/lib/maintenanceAuth";
 
 // Prefixos de rota liberados só para admin (Configurações, Usuários, Módulo Fiscal).
 const ADMIN_ONLY_PREFIXES = ["/principal/settings", "/principal/cadastros/usuarios", "/principal/fiscal"];
@@ -26,6 +27,8 @@ const PUBLIC_API_PREFIXES = [
   "/api/housekeeping/logout",
   "/api/stock-count/login",
   "/api/stock-count/logout",
+  "/api/manutencao-app/login",
+  "/api/manutencao-app/logout",
   "/api/uazapi/webhook/",
   // Webhook de pagamento do Asaas — autenticado por segredo próprio (ASAAS_WEBHOOK_SECRET),
   // comparado timing-safe na própria rota (CLAUDE.md §5), não por sessão.
@@ -48,6 +51,11 @@ const HOUSEKEEPER_API_PREFIX = "/api/housekeeping/";
 // Rotas do app mobile de contagem de estoque — cookie de sessão próprio (Employee com login por
 // telefone + senha), separado do login administrativo — ver lib/stockCountAuth.ts.
 const STOCK_COUNT_API_PREFIX = "/api/stock-count/";
+
+// Rotas do app mobile de manutenção — cookie de sessão próprio (Employee marcado como manutenção,
+// login por telefone + senha) — ver lib/maintenanceAuth.ts. Não confundir com /api/manutencao/,
+// que é a API da recepção (sessão administrativa).
+const MAINTENANCE_APP_API_PREFIX = "/api/manutencao-app/";
 
 // Rotas que recebem POST de FORA do navegador (webhooks de provedor externo e o agente fiscal do
 // caixa) e por isso não podem passar pela checagem de Origin abaixo. Todas são autenticadas por
@@ -109,6 +117,12 @@ export async function middleware(req: NextRequest) {
       const stockCountToken = req.cookies.get(STOCK_COUNT_SESSION_COOKIE)?.value;
       const stockCountSession = stockCountToken ? await verifyStockCountSessionToken(stockCountToken) : null;
       if (stockCountSession) return NextResponse.next();
+    }
+
+    if (pathname.startsWith(MAINTENANCE_APP_API_PREFIX)) {
+      const maintenanceToken = req.cookies.get(MAINTENANCE_SESSION_COOKIE)?.value;
+      const maintenanceSession = maintenanceToken ? await verifyMaintenanceSessionToken(maintenanceToken) : null;
+      if (maintenanceSession) return NextResponse.next();
     }
 
     return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
