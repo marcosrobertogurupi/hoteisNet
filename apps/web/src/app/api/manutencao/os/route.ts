@@ -30,6 +30,7 @@ const MAX_LIST = 300;
 // GET /api/manutencao/os — OS do hotel.
 //   ?situacao=abertas (padrão) → só as abertas (Entrada/Avaliando/Aguardando)
 //   ?situacao=todas&de=AAAA-MM-DD&ate=AAAA-MM-DD → todas abertas no período (padrão: últimos 30 dias)
+//   ?situacao=resolvidas&dias=N → resolvidas nos últimos N dias (pela data de retorno do quarto)
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
@@ -38,10 +39,19 @@ export async function GET(req: NextRequest) {
     }
 
     const sp = req.nextUrl.searchParams;
-    const situacao = sp.get("situacao") === "todas" ? "todas" : "abertas";
+    const situacaoParam = sp.get("situacao");
+    const situacao = situacaoParam === "todas" || situacaoParam === "resolvidas" ? situacaoParam : "abertas";
 
     let where: Prisma.MaintenanceTicketWhereInput = { tenantId: session.tenantId, stage: { in: OPEN_MAINTENANCE_STAGES } };
-    if (situacao === "todas") {
+    if (situacao === "resolvidas") {
+      // Coluna "Resolvidas" do funil: pela data de RETORNO do quarto (padrão: últimos 7 dias).
+      const dias = Math.min(90, Math.max(1, Number(sp.get("dias")) || 7));
+      where = {
+        tenantId: session.tenantId,
+        stage: "RESOLVED",
+        resolvedAt: { gte: new Date(Date.now() - dias * 24 * 60 * 60 * 1000) },
+      };
+    } else if (situacao === "todas") {
       const ate = sp.get("ate") ? parseBrasiliaDateTime(sp.get("ate"), "23:59") : new Date();
       const de = sp.get("de")
         ? parseBrasiliaDateTime(sp.get("de"), "00:00")

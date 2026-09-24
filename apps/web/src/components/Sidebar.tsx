@@ -28,6 +28,7 @@ import {
   ClipboardCheck,
   Star,
   type LucideIcon,
+  Wrench,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useSession } from "@/context/SessionContext";
@@ -114,6 +115,7 @@ export default function Sidebar() {
       title: "Tarefas administrativas",
       items: [
         { href: "/principal/governance", label: "Governança", icon: BedDouble },
+        { href: "/principal/manutencao", label: "Manutenção de Quartos", icon: Wrench, iconColor: c("text-rose-600", "text-[#F43F5E]") },
         { href: "/principal/pdv", label: "PDV Vendas", icon: UtensilsCrossed, iconColor: c("text-orange-600", "text-[#FB923C]") },
         { href: "/principal/stock", label: "Controle de Estoque", icon: Package },
         { href: "/principal/stock/contagens", label: "Conferência de Contagem de Estoque", icon: ClipboardCheck, iconColor: c("text-emerald-600", "text-[#10B981]") },
