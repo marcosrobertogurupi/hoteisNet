@@ -22,4 +22,8 @@ export interface ReviewConnectorResult {
   // implementado, erro reportado pelo serviço de scraping) — reviewsSync.ts trata isso como falha
   // do ciclo (mesmo efeito de uma exceção lançada), mas sem exigir try/catch em cada conector.
   errorMessage?: string;
+  // A Apify recusou a chamada porque a conta da plataforma estourou a cota mensal (ver
+  // apifyErrors.ts) — reviewsSync.ts pausa todas as coletas via Apify em vez de contar como erro
+  // deste conector.
+  apifyQuotaExceeded?: boolean;
 }

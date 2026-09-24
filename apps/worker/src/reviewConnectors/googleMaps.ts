@@ -9,6 +9,7 @@
 // APIFY_TOKEN precisa ser configurado (Railway) para este conector funcionar; sem ele, retorna erro
 // tratado (não lança exceção) para reviewsSync.ts registrar no conector como qualquer outra falha.
 import type { NormalizedReviewInput, ReviewConnectorResult } from "./types";
+import { apifyHttpErrorResult } from "./apifyErrors";
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN || "";
 const ACTOR_ID = "compass~google-maps-reviews-scraper";
@@ -78,12 +79,7 @@ export async function fetchGoogleMapsReviews(params: {
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    return {
-      reviewsFetched: 0,
-      reviews: [],
-      errorMessage: `Apify respondeu ${response.status}: ${text.slice(0, 300)}`,
-    };
+    return apifyHttpErrorResult(response.status, await response.text().catch(() => ""));
   }
 
   let items: ApifyGoogleMapsReviewItem[];
