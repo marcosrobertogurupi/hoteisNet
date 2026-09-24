@@ -110,9 +110,31 @@ export async function findBlockingOpenStay(
   return stays.find((s) => stayOccupiedUntil(s) > checkInDate) ?? null;
 }
 
-// Conjunto de ids de quartos (dentre os informados) ocupados no período — reserva ativa/futura
-// (PRE_RESERVATION/CONFIRMED/CHECKED_IN) que se sobrepõe, ou hospedagem em aberto cuja ocupação
-// efetiva (stayOccupiedUntil, cobre overstay) alcança o período. Mesma régua do Mapa de Reservas.
+// Ids de quartos (dentre os informados) que a manutenção tira de venda para um período que começa
+// em `checkIn`. Regra: quarto em MAINTENANCE fica indisponível para chegadas até o fim do dia de hoje
+// em Brasília — sem previsão de liberação, não dá para prometer o quarto nem para hoje; chegadas de
+// amanhã em diante continuam possíveis. Quando a OS de manutenção ganhar previsão de liberação, a
+// régua passa a ser "até a data prevista" — ajustar SÓ aqui, que é a fonte única usada pelo agente de
+// IA e pela fila de espera (o worker tem a cópia em apps/worker/src/stayOccupancy.ts).
+export async function maintenanceBlockedRoomIds(
+  tx: PrismaClientOrTx,
+  roomIds: string[],
+  checkIn: Date
+): Promise<Set<string>> {
+  if (roomIds.length === 0) return new Set();
+  const endOfTodayBrasilia = new Date(dateOnlyBrasilia(new Date()).getTime() + 24 * 60 * 60 * 1000);
+  if (checkIn >= endOfTodayBrasilia) return new Set();
+  const rooms = await tx.room.findMany({
+    where: { id: { in: roomIds }, status: "MAINTENANCE" },
+    select: { id: true },
+  });
+  return new Set(rooms.map((r) => r.id));
+}
+
+// Conjunto de ids de quartos (dentre os informados) indisponíveis no período — reserva ativa/futura
+// (PRE_RESERVATION/CONFIRMED/CHECKED_IN) que se sobrepõe, hospedagem em aberto cuja ocupação
+// efetiva (stayOccupiedUntil, cobre overstay) alcança o período, ou quarto em manutenção
+// (maintenanceBlockedRoomIds). Mesma régua do Mapa de Reservas.
 // Extraído de apps/web/src/lib/aiAgent/tools.ts (busyRoomIdsForPeriod) para ser reaproveitado pelo
 // match da fila de espera (lib/waitlistMatch.ts) sem duplicar a lógica.
 export async function busyRoomIdsForPeriod(
@@ -122,7 +144,7 @@ export async function busyRoomIdsForPeriod(
   checkOut: Date
 ): Promise<Set<string>> {
   if (roomIds.length === 0) return new Set();
-  const [overlappingReservations, openStays] = await Promise.all([
+  const [overlappingReservations, openStays, inMaintenance] = await Promise.all([
     tx.reservation.findMany({
       where: {
         roomId: { in: roomIds },
@@ -138,9 +160,10 @@ export async function busyRoomIdsForPeriod(
       where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut } },
       select: { roomId: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
     }),
+    maintenanceBlockedRoomIds(tx, roomIds, checkIn),
   ]);
   const busyByStay = openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId);
-  return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...busyByStay]);
+  return new Set<string>([...overlappingReservations.map((r) => r.roomId), ...busyByStay, ...inMaintenance]);
 }
 
 // Serializa por quarto toda operação que cria/move uma reserva ou abre uma hospedagem: trava as

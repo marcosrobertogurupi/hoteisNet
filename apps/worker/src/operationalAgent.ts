@@ -8,7 +8,7 @@ import {
   AI_MODEL_FALLBACK,
   type GeminiUsageMetadata,
 } from "./aiUsage";
-import { stayOccupiedUntil } from "./stayOccupancy";
+import { stayOccupiedUntil, maintenanceBlockedRoomIds } from "./stayOccupancy";
 
 const prisma = new PrismaClient();
 
@@ -157,9 +157,9 @@ function brDayLabel(d: Date): string {
   return d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit" });
 }
 
-// Ids de quartos (dentre os passados) ocupados no período — reserva ativa/futura que se sobrepõe
-// ou hospedagem em aberto cuja ocupação EFETIVA (stayOccupiedUntil, cobre overstay) alcança o
-// período. Mesma lógica de busyRoomIdsForPeriod em apps/web/src/lib/aiAgent/tools.ts (o worker é
+// Ids de quartos (dentre os passados) ocupados no período — reserva ativa/futura que se sobrepõe,
+// hospedagem em aberto cuja ocupação EFETIVA (stayOccupiedUntil, cobre overstay) alcança o
+// período, ou quarto em manutenção (maintenanceBlockedRoomIds). Mesma lógica de busyRoomIdsForPeriod em apps/web/src/lib/aiAgent/tools.ts (o worker é
 // um processo separado e não importa apps/web, daí a cópia local em ./stayOccupancy).
 //
 // NUNCA filtrar hospedagens abertas por `expectedCheckOut: { gt: checkIn }` cru: um hóspede em
@@ -168,7 +168,7 @@ function brDayLabel(d: Date): string {
 // quartos que na verdade ainda estavam ocupados.
 async function busyRoomIds(roomIds: string[], checkIn: Date, checkOut: Date): Promise<Set<string>> {
   if (roomIds.length === 0) return new Set();
-  const [reservations, openStays] = await Promise.all([
+  const [reservations, openStays, inMaintenance] = await Promise.all([
     prisma.reservation.findMany({
       where: {
         roomId: { in: roomIds },
@@ -182,9 +182,10 @@ async function busyRoomIds(roomIds: string[], checkIn: Date, checkOut: Date): Pr
       where: { roomId: { in: roomIds }, isClosed: false, checkInDate: { lt: checkOut } },
       select: { roomId: true, checkInDate: true, expectedCheckOut: true, dailiesCount: true },
     }),
+    maintenanceBlockedRoomIds(prisma, roomIds, checkIn),
   ]);
   const busyByStay = openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId);
-  return new Set<string>([...reservations.map((r) => r.roomId), ...busyByStay]);
+  return new Set<string>([...reservations.map((r) => r.roomId), ...busyByStay, ...inMaintenance]);
 }
 
 async function detectOccupiedRoomsWithIncomingReservation(tenantId: string): Promise<DetectedIssue[]> {

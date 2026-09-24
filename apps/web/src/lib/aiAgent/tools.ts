@@ -7,7 +7,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { brazilPhoneVariants } from "@/lib/uazapiInstance";
 import { consultCpfHub } from "@/lib/hubCpfLookup";
-import { findConflictingReservation, findBlockingOpenStay, busyRoomIdsForPeriod, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, busyRoomIdsForPeriod, maintenanceBlockedRoomIds, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
 import { sendUazapiImage } from "@/lib/uazapi";
 import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
@@ -494,8 +494,13 @@ async function createReservationForAgent(
       rooms = matching;
     }
 
+    // Quarto em manutenção não é reservado para chegada de hoje (mesma régua da disponibilidade
+    // mostrada ao hóspede — ver maintenanceBlockedRoomIds em lib/reservationHelpers.ts).
+    const inMaintenance = await maintenanceBlockedRoomIds(tx, rooms.map((r) => r.id), checkInAt);
+
     let freeRoom: (typeof rooms)[number] | null = null;
     for (const room of rooms) {
+      if (inMaintenance.has(room.id)) continue;
       const [conflict, openStay] = await Promise.all([
         findConflictingReservation(tx, room.id, checkInAt, checkOutAt),
         // Hospedagem em aberto (inclui overstay) — findBlockingOpenStay usa a ocupação efetiva, não
