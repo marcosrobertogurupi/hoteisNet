@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireTenantAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 import { logActivity } from "@/lib/audit";
-import { MaintenanceError, cancelMaintenanceTicket, reassignMaintenanceTicket } from "@/lib/maintenance";
+import {
+  MaintenanceError,
+  cancelMaintenanceTicket,
+  reassignMaintenanceTicket,
+  resendMaintenanceNotice,
+} from "@/lib/maintenance";
 
 // GET /api/manutencao/os/[id] — OS completa com a linha do tempo (tela "Ver OS").
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -96,21 +101,42 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
 }
 
-// PATCH /api/manutencao/os/[id] — ações do admin numa OS aberta:
-//   { acao: "reatribuir", employeeId }  → passa a OS para outro colaborador (novo aviso por WhatsApp)
-//   { acao: "cancelar", motivo }        → OS aberta por engano; o quarto volta à situação anterior
+// PATCH /api/manutencao/os/[id] — ações da recepção/admin numa OS aberta:
+//   { acao: "reenviar-aviso" }          → qualquer usuário: tenta de novo o WhatsApp que falhou
+//   { acao: "reatribuir", employeeId }  → admin: passa a OS para outro colaborador (novo aviso)
+//   { acao: "cancelar", motivo }        → admin: OS aberta por engano; o quarto volta à situação anterior
 // Avançar etapa NÃO passa por aqui: é exclusivo do colaborador atribuído, pelo app /manutencao.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getSessionUser(req);
-    const adminError = requireTenantAdmin(session);
-    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
-    const tenantId = session!.tenantId!;
+    if (!session?.tenantId) {
+      return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
+    }
+    const tenantId = session.tenantId;
     const { id } = await params;
-    const actor = { userId: session!.userId, name: session!.name };
+    const actor = { userId: session.userId, name: session.name };
 
     const body = await req.json().catch(() => ({}));
     const acao = body?.acao;
+
+    if (acao === "reenviar-aviso") {
+      await resendMaintenanceNotice({ tenantId, ticketId: id });
+      await logActivity({
+        tenantId,
+        userId: actor.userId,
+        userName: actor.name,
+        action: "MAINTENANCE_NOTICE_RESEND",
+        description: `${actor.name} pediu o reenvio do aviso de WhatsApp de uma OS de manutenção.`,
+        entityType: "MAINTENANCE_TICKET",
+        entityId: id,
+        terminal: getTerminalName(req),
+        ipAddress: getClientIp(req),
+      });
+      return NextResponse.json({ success: true });
+    }
+
+    const adminError = requireTenantAdmin(session);
+    if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     if (acao === "reatribuir") {
       if (!body.employeeId) {

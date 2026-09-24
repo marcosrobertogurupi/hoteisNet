@@ -101,6 +101,9 @@ function computeRoomsStatusMapVersion(tenantId: string): Promise<string> {
     // Ver nota em computeReservationsMapVersion: reservas são isoladas por room.tenantId, não por
     // reservations.tenantId (rótulo legado fixo). JOIN em "rooms" é obrigatório.
     { label: "resv", sql: `SELECT 'resv' AS lbl, COUNT(*)::int AS c, GREATEST(COALESCE(MAX(r."updatedAt"), 'epoch'), COALESCE(MAX(r."createdAt"), 'epoch')) AS ts FROM "reservations" r JOIN "rooms" rm ON r."roomId" = rm.id WHERE rm."tenantId" = $1` },
+    // OS de manutenção: o card do quarto mostra etapa, colaborador e situação do aviso — mudar
+    // qualquer um deles precisa mudar o carimbo.
+    { label: "mt", sql: `SELECT 'mt' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "maintenance_tickets" WHERE "tenantId" = $1` },
   ]);
 }
 

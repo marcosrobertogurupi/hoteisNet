@@ -63,6 +63,8 @@ export interface RoomDefinition {
   category: string;
   ratePerNight: number;
   isMaintenance?: boolean;
+  // Previsão de liberação da OS de manutenção aberta (ISO) — até ela o quarto não recebe chegadas.
+  maintenanceForecast?: string | null;
 }
 
 const DEFAULT_ROOMS: RoomDefinition[] = [
@@ -347,21 +349,23 @@ export default function ReservationGridMap({
         const roomNum = String(r.number);
         const existing = prevMap.get(roomNum);
         const isMaint = r.status === "MAINTENANCE";
+        const maintForecast: string | null = isMaint ? r.maintenance?.expectedReleaseAt ?? null : null;
         const catName = r.category || r.room_categories?.name || "Standard";
         const rate = r.ratePerNight || 180;
 
         if (existing) {
           if (
             existing.isMaintenance === isMaint &&
+            (existing.maintenanceForecast ?? null) === maintForecast &&
             existing.category === catName &&
             existing.ratePerNight === rate
           ) {
             return existing;
           }
-          return { ...existing, category: catName, ratePerNight: rate, isMaintenance: isMaint };
+          return { ...existing, category: catName, ratePerNight: rate, isMaintenance: isMaint, maintenanceForecast: maintForecast };
         }
 
-        return { id: r.id, number: roomNum, category: catName, ratePerNight: rate, isMaintenance: isMaint };
+        return { id: r.id, number: roomNum, category: catName, ratePerNight: rate, isMaintenance: isMaint, maintenanceForecast: maintForecast };
       });
       return updatedList;
     });
@@ -839,6 +843,22 @@ export default function ReservationGridMap({
     return `${yy}-${mm}-${dd}`;
   };
 
+  // Manutenção: o quarto não recebe CHEGADA até o fim de hoje ou até a previsão de liberação da OS,
+  // o que for maior — mesma régua do servidor (maintenanceBlockedRoomIds em lib/reservationHelpers.ts,
+  // que é a trava de verdade). Devolve a mensagem de bloqueio, ou null se a chegada é possível.
+  const maintenanceArrivalBlock = (roomDef: RoomDefinition | undefined, arrivalMs: number): string | null => {
+    if (!roomDef?.isMaintenance) return null;
+    const endOfToday = new Date(`${addOneDayStr(todayStr)}T00:00:00`).getTime();
+    const forecastMs = roomDef.maintenanceForecast ? new Date(roomDef.maintenanceForecast).getTime() : 0;
+    if (arrivalMs >= Math.max(endOfToday, forecastMs)) return null;
+    if (forecastMs > endOfToday) {
+      const d = new Date(forecastMs);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `⚠️ O Quarto ${roomDef.number} está em MANUTENÇÃO, com liberação prevista para ${pad(d.getDate())}/${pad(d.getMonth() + 1)} às ${pad(d.getHours())}:${pad(d.getMinutes())}. Não aceita chegadas antes disso.`;
+    }
+    return `⚠️ O Quarto ${roomDef.number} está em MANUTENÇÃO e não aceita chegadas hoje.`;
+  };
+
   // RIGID CONFLICT CONTROL: Check timestamp overlap
   const checkReservationConflict = (
     targetRoomId: string,
@@ -864,8 +884,9 @@ export default function ReservationGridMap({
 
     // 1. Check Maintenance
     const roomDef = rooms.find(r => r.id === targetRoomId || r.number === targetRoomId);
-    if (roomDef?.isMaintenance) {
-      return { hasConflict: true, reason: `O Quarto ${targetRoomId} está em MANUTENÇÃO/BLOQUEADO e não aceita reservas.` };
+    const maintenanceBlock = maintenanceArrivalBlock(roomDef, newStart);
+    if (maintenanceBlock) {
+      return { hasConflict: true, reason: maintenanceBlock };
     }
 
     // 2. Check Overlap against existing reservations
@@ -934,8 +955,9 @@ export default function ReservationGridMap({
     }
 
     const roomDef = rooms.find(r => r.id === roomId || r.number === roomId);
-    if (roomDef?.isMaintenance) {
-      toast.error(`⚠️ O Quarto ${roomId} está em MANUTENÇÃO e não aceita reservas.`);
+    const maintenanceBlock = maintenanceArrivalBlock(roomDef, new Date(`${dateStr}T${defaultCheckInTime || "14:00"}:00`).getTime());
+    if (maintenanceBlock) {
+      toast.error(maintenanceBlock);
       return;
     }
 
@@ -1013,8 +1035,9 @@ export default function ReservationGridMap({
     }
 
     const roomDef = rooms.find(r => r.id === roomId || r.number === roomId);
-    if (roomDef?.isMaintenance) {
-      toast.error(`⚠️ O Quarto ${roomId} está em MANUTENÇÃO e não aceita reservas.`);
+    const maintenanceBlock = maintenanceArrivalBlock(roomDef, new Date(`${dateStr}T${defaultCheckInTime || "14:00"}:00`).getTime());
+    if (maintenanceBlock) {
+      toast.error(maintenanceBlock);
       return;
     }
 
@@ -1704,8 +1727,14 @@ export default function ReservationGridMap({
                     {room.category.split(" ")[0]}
                   </span>
                   {room.isMaintenance && (
-                    <span className="mt-0.5 px-1 py-0.5 rounded text-[8px] bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold">
+                    <span
+                      className="mt-0.5 px-1 py-0.5 rounded text-[8px] bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold"
+                      title={room.maintenanceForecast ? "Liberação prevista da OS de manutenção" : "Sem previsão: não aceita chegadas hoje"}
+                    >
                       Manutenção
+                      {room.maintenanceForecast
+                        ? ` até ${new Date(room.maintenanceForecast).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`
+                        : ""}
                     </span>
                   )}
                   {housekeepingByRoomId[room.id] && (

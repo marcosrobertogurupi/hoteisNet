@@ -221,12 +221,30 @@ export async function roomsStatusPayload(tenantId: string) {
           _count: { select: { whatsappMessages: { where: { direction: "IN", read: false } } } },
         },
       },
+      // OS de manutenção aberta (no máximo uma por quarto) — só os quartos em manutenção trazem
+      // alguma coisa aqui, e só o que o card desenha.
+      maintenanceTickets: {
+        where: { stage: { in: ["OPEN", "EVALUATING", "WAITING"] } },
+        take: 1,
+        select: {
+          id: true,
+          number: true,
+          stage: true,
+          openedAt: true,
+          expectedReleaseAt: true,
+          notifyStatus: true,
+          problemType: { select: { name: true } },
+          assignedEmployee: { select: { name: true } },
+          waitReason: { select: { name: true } },
+        },
+      },
     },
     orderBy: { number: "asc" },
   });
 
   const formatted = rooms.map((r) => {
     const activeStay = r.checkins[0];
+    const ticket = r.maintenanceTickets[0];
     return {
       id: r.id,
       number: r.number,
@@ -242,6 +260,19 @@ export async function roomsStatusPayload(tenantId: string) {
             expectedCheckOut: activeStay.expectedCheckOut,
             totalConsumption: Number(activeStay.totalConsumption),
             unreadWhatsappCount: activeStay._count?.whatsappMessages ?? 0,
+          }
+        : null,
+      maintenance: ticket
+        ? {
+            ticketId: ticket.id,
+            number: ticket.number,
+            stage: ticket.stage,
+            openedAt: ticket.openedAt,
+            expectedReleaseAt: ticket.expectedReleaseAt,
+            notifyStatus: ticket.notifyStatus,
+            problemType: ticket.problemType.name,
+            employeeName: ticket.assignedEmployee.name,
+            waitReason: ticket.waitReason?.name ?? null,
           }
         : null,
     };
