@@ -13,8 +13,12 @@ import { APIFY_ACCOUNT_BLOCKED_ERROR_TYPE } from "./reviewConnectors/apifyErrors
 // Estado guardado na trilha PlatformAuditLog (sem tabela nova): cada (re)pausa grava um
 // APIFY_QUOTA_PAUSED com a data de retomada em details.pausedUntil; a primeira coleta via Apify que
 // funcionar depois disso grava APIFY_QUOTA_RESUMED e encerra o "episódio". O WhatsApp para
-// PLATFORM_ALERT_PHONE sai UMA vez, na abertura do episódio — as re-pausas dos retestes seguintes são
-// silenciosas (mesmo padrão de dedup via PlatformAuditLog de saasMonitor.ts).
+// PLATFORM_ALERT_PHONE é entregue UMA vez por episódio (mesmo padrão de dedup via PlatformAuditLog de
+// saasMonitor.ts), mas só conta como entregue quando sai de fato (details.alertDelivered): se não saiu
+// (PLATFORM_ALERT_PHONE ausente, uazapi fora do ar), tenta de novo no próximo reteste — nunca a cada
+// ciclo. Lição real do primeiro episódio em produção (24/09/2026): o aviso foi marcado como enviado com
+// PLATFORM_ALERT_PHONE ainda não configurado no Railway, e configurar a variável depois não o faria
+// sair nunca mais.
 
 const PAUSED_ACTION = "APIFY_QUOTA_PAUSED";
 const RESUMED_ACTION = "APIFY_QUOTA_RESUMED";
@@ -42,6 +46,8 @@ export const APIFY_PAUSED_CONNECTOR_MESSAGE =
 export interface ApifyQuotaGate {
   pausedUntil: Date | null;
   episodeOpen: boolean;
+  // O WhatsApp deste episódio já foi entregue de fato à plataforma.
+  alertDelivered: boolean;
 }
 
 export function isApifyPaused(gate: ApifyQuotaGate, now: Date = new Date()): boolean {
@@ -74,12 +80,16 @@ export async function loadApifyQuotaGate(prisma: PrismaClient): Promise<ApifyQuo
 
   const staleCutoff = new Date(Date.now() - EPISODE_STALE_HOURS * HOUR_MS);
   if (!lastPause || lastPause.createdAt < staleCutoff || (lastResume && lastResume.createdAt > lastPause.createdAt)) {
-    return { pausedUntil: null, episodeOpen: false };
+    return { pausedUntil: null, episodeOpen: false, alertDelivered: false };
   }
 
-  const raw = (lastPause.details as { pausedUntil?: unknown } | null)?.pausedUntil;
-  const pausedUntil = typeof raw === "string" ? new Date(raw) : null;
-  return { pausedUntil: pausedUntil && !isNaN(pausedUntil.getTime()) ? pausedUntil : null, episodeOpen: true };
+  const details = lastPause.details as { pausedUntil?: unknown; alertDelivered?: unknown } | null;
+  const pausedUntil = typeof details?.pausedUntil === "string" ? new Date(details.pausedUntil) : null;
+  return {
+    pausedUntil: pausedUntil && !isNaN(pausedUntil.getTime()) ? pausedUntil : null,
+    episodeOpen: true,
+    alertDelivered: details?.alertDelivered === true,
+  };
 }
 
 interface ApifyMonthlyUsage {
@@ -140,9 +150,22 @@ export async function pauseApifyForQuota(
     usage?.cycleEndAt && usage.cycleEndAt > now && usage.cycleEndAt < recheckAt ? usage.cycleEndAt : recheckAt;
   gate.pausedUntil = pausedUntil;
   const apifyMessage = extractApifyMessage(trigger.errorMessage);
+  const shouldAlert = !gate.alertDelivered;
 
+  // Nasce com o estado de entrega herdado do episódio; só vira true depois que o WhatsApp sai de
+  // fato (update logo abaixo) — é esse campo que o próximo ciclo lê para decidir se ainda deve avisar.
+  const details = {
+    pausedUntil: pausedUntil.toISOString(),
+    cycleEndAt: usage?.cycleEndAt?.toISOString() ?? null,
+    usageUsd: usage?.usageUsd ?? null,
+    maxUsageUsd: usage?.maxUsageUsd ?? null,
+    apifyMessage,
+    triggeredBy: { tenantId: trigger.tenantId, channel: trigger.channel },
+    alertDelivered: gate.alertDelivered,
+  };
+  let pauseLogId: string;
   try {
-    await prisma.platformAuditLog.create({
+    const pauseLog = await prisma.platformAuditLog.create({
       select: { id: true },
       data: {
         actorId: "reviews-sync",
@@ -154,17 +177,10 @@ export async function pauseApifyForQuota(
           : `Cota da Apify ainda estourada no reteste — pausa estendida até ${formatBrazilDateTime(pausedUntil)}.`,
         entityType: "Integration",
         entityId: "APIFY",
-        details: {
-          pausedUntil: pausedUntil.toISOString(),
-          cycleEndAt: usage?.cycleEndAt?.toISOString() ?? null,
-          usageUsd: usage?.usageUsd ?? null,
-          maxUsageUsd: usage?.maxUsageUsd ?? null,
-          apifyMessage,
-          triggeredBy: { tenantId: trigger.tenantId, channel: trigger.channel },
-          alerted: isNewEpisode,
-        },
+        details,
       },
     });
+    pauseLogId = pauseLog.id;
   } catch (err: any) {
     // Sem o registro, o próximo ciclo não enxerga a pausa e testaria de novo — melhor não mandar o
     // aviso agora (evita repetir o WhatsApp a cada ciclo enquanto o banco estiver com problema).
@@ -184,13 +200,15 @@ export async function pauseApifyForQuota(
 
   console.warn(
     `[reviews-sync] cota da Apify estourada — coletas via Apify pausadas até ${formatBrazilDateTime(pausedUntil)}` +
-      (isNewEpisode ? " (novo episódio, avisando a plataforma)." : " (reteste, sem novo aviso).")
+      (shouldAlert ? " — avisando a plataforma." : " (aviso deste episódio já entregue).")
   );
-  if (!isNewEpisode) return;
+  if (!shouldAlert) return;
 
   const alertPhone = process.env.PLATFORM_ALERT_PHONE || "";
   if (!alertPhone) {
-    console.error("[reviews-sync] PLATFORM_ALERT_PHONE não configurado — aviso de cota da Apify não enviado.");
+    console.error(
+      `[reviews-sync] PLATFORM_ALERT_PHONE não configurado — aviso de cota da Apify não enviado (nova tentativa no reteste).`
+    );
     return;
   }
   const lines = [
@@ -209,7 +227,16 @@ export async function pauseApifyForQuota(
     `O worker testa de novo sozinho a cada ${QUOTA_RECHECK_HOURS}h (tentativa recusada não é cobrada) e retoma assim que a cota voltar. Para retomar antes, aumente o limite ou o plano no console da Apify. Este aviso não se repete enquanto a cota continuar estourada.`
   );
   const sent = await sendPlatformWhatsApp(alertPhone, lines.join("\n"));
-  if (!sent) console.error("[reviews-sync] falha ao enviar o aviso de cota da Apify por WhatsApp.");
+  if (!sent) {
+    console.error("[reviews-sync] falha ao enviar o aviso de cota da Apify por WhatsApp (nova tentativa no reteste).");
+    return;
+  }
+  gate.alertDelivered = true;
+  // Se esta gravação falhar, o pior caso é o aviso repetir no próximo reteste (no máximo a cada 12h),
+  // nunca a cada ciclo.
+  await prisma.platformAuditLog
+    .update({ where: { id: pauseLogId }, select: { id: true }, data: { details: { ...details, alertDelivered: true } } })
+    .catch((err: any) => console.error("[reviews-sync] falha ao registrar entrega do aviso da Apify:", err?.message || err));
 }
 
 // Uma coleta via Apify funcionou: se havia um episódio de cota estourada aberto, encerra (o próximo
@@ -218,6 +245,7 @@ export async function markApifyResumed(prisma: PrismaClient, gate: ApifyQuotaGat
   if (!gate.episodeOpen) return;
   gate.episodeOpen = false;
   gate.pausedUntil = null;
+  gate.alertDelivered = false;
   try {
     await prisma.platformAuditLog.create({
       select: { id: true },
