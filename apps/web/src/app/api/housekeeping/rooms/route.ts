@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getHousekeeperUser } from "@/lib/housekeeperSession";
 import { prisma } from "@/lib/prisma";
-import { ensureDailyArrumacaoTasks } from "@/lib/housekeeping";
+import { ensureDailyArrumacaoTasks, taskFitsRoomStatus } from "@/lib/housekeeping";
 import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
 
 // Ordena andar e número de quarto numericamente quando possível ("2" antes de "10"), com
@@ -26,7 +26,8 @@ function naturalCompare(a: string, b: string): number {
 //    a ela; modo QUEUE mostra a fila geral de quartos VACANT_DIRTY sem limpeza em andamento.
 //  - OCCUPIED (arrumação com hóspede): modo RECEPTION só quando a recepção atribuiu a ela; modo
 //    QUEUE entra na fila geral (uma tarefa por quarto ocupado por dia, gerada automaticamente).
-//  - Quarto VACANT_CLEAN / MAINTENANCE nunca aparece.
+//  - Quarto VACANT_CLEAN / MAINTENANCE nunca aparece (exceto uma limpeza que a governanta já
+//    iniciou, para ela conseguir concluir) — ver taskFitsRoomStatus em lib/housekeeping.ts.
 export async function GET(req: NextRequest) {
   try {
     const session = await getHousekeeperUser(req);
@@ -123,11 +124,12 @@ export async function GET(req: NextRequest) {
     const pending: PendingRoom[] = [];
 
     for (const room of rooms) {
-      // Quarto já vago e sujo é limpeza pós check-out: uma tarefa OCCUPIED remanescente (arrumação
-      // do próprio dia, gerada de manhã com o hóspede ainda lá) perdeu o sentido assim que o
-      // check-out saiu — ignora para não mascarar o check-out real nem roubar a prioridade dele.
-      const active =
-        room.housekeepingTasks.find((t) => !(room.status === "VACANT_DIRTY" && t.type === "OCCUPIED")) || null;
+      // Só vale a tarefa que combina com a situação ATUAL do quarto (taskFitsRoomStatus): uma
+      // arrumação OCCUPIED que sobrou num quarto que já não está ocupado perdeu o sentido — num
+      // quarto vago e sujo ela mascarava a limpeza pós check-out real, e num quarto já livre e
+      // limpo ela fazia o quarto aparecer como "arrumação com hóspede" na lista da governanta
+      // enquanto o Mapa mostrava o quarto livre (bug do quarto 114).
+      const active = room.housekeepingTasks.find((t) => taskFitsRoomStatus(t, room.status)) || null;
 
       const base = {
         id: room.id,

@@ -11,6 +11,7 @@ import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValid
 import { dateOnlyBrasilia, parseBrasiliaDateTime, brDateKey, brTimeHHMM } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
 import { resolveOperator } from "@/lib/operator";
+import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
 
@@ -726,6 +727,14 @@ export async function POST(req: NextRequest) {
       }
 
       await tx.room.update({ where: { id: room.id }, data: { status: "OCCUPIED" } });
+      // Novo hóspede no quarto: nenhuma tarefa de governança anterior (arrumação do hóspede
+      // passado, limpeza pós check-out ainda não iniciada) vale mais.
+      await syncHousekeepingTasksWithRoomStatus(tx, {
+        tenantId: session.tenantId!,
+        roomId: room.id,
+        newStatus: "OCCUPIED",
+        interruptedNote: ARRUMACAO_INTERRUPTED_NOTE.CHECKIN,
+      });
 
       // Vincula a(s) FNRH já preenchida(s) desta reserva à hospedagem física que acabou de nascer —
       // stayCheckinId só passa a existir a partir do check-in de fato (ver comentário no schema).
@@ -1049,6 +1058,14 @@ export async function PATCH(req: NextRequest) {
       await tx.room.update({
         where: { id: closedStay.roomId },
         data: { status: "VACANT_DIRTY", notes: "Pendente troca de enxoval & higienização" },
+      });
+      // A arrumação com hóspede deste quarto (inclusive a atribuída manualmente pela recepção)
+      // acaba aqui — sem isto ela ficava em aberto para sempre (ver lib/housekeeping.ts).
+      await syncHousekeepingTasksWithRoomStatus(tx, {
+        tenantId: session.tenantId!,
+        roomId: closedStay.roomId,
+        newStatus: "VACANT_DIRTY",
+        interruptedNote: ARRUMACAO_INTERRUPTED_NOTE.CHECKOUT,
       });
 
       // Check-out com valor zerado (cortesia, hospedagem sem diária, desconto total): nenhum

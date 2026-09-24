@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, requireAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 import { normalizeRoomPhotos, removeRoomPhotoObjects, RoomPhotoError } from "@/lib/roomPhotoStorage";
+import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
 
 // Reexecuta uma operação do Prisma uma vez em caso de falha de conexão com o banco
 // (ex.: reconexão "fria" do pool do Supabase após período ocioso), evitando expor
@@ -325,6 +326,17 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
+    // Situação anterior do quarto — só uma troca DE FATO de situação mexe nas tarefas de governança
+    // (o cadastro de apartamentos reenvia o status atual junto com os demais campos).
+    const previousRoom = mappedStatus
+      ? await withDbRetry(() =>
+          prisma.room.findFirst({
+            where: { OR: [{ number: target }, { id: target }], tenantId: session.tenantId! },
+            select: { id: true, status: true },
+          })
+        )
+      : null;
+
     // 1. Atualizar no Prisma — sempre restrito ao tenant da sessão, senão um número de quarto
     // comum (ex: "101") podia editar o quarto de outro hotel.
     let updated;
@@ -349,6 +361,18 @@ export async function PATCH(req: NextRequest) {
     if (updated.count === 0) {
       await removeRoomPhotoObjects(session.tenantId, uploadedNow);
       return NextResponse.json({ success: false, error: `Quarto ${target} não encontrado.` }, { status: 404 });
+    }
+
+    // Recepção trocou a situação do quarto pelo Mapa (ex.: marcou como limpo, mandou para
+    // manutenção): encerra a tarefa de governança que deixou de combinar, senão o quarto continua
+    // na lista do app da governanta com o Mapa mostrando outra coisa (ver lib/housekeeping.ts).
+    if (previousRoom && mappedStatus && previousRoom.status !== mappedStatus) {
+      await syncHousekeepingTasksWithRoomStatus(prisma, {
+        tenantId: session.tenantId,
+        roomId: previousRoom.id,
+        newStatus: mappedStatus as "VACANT_CLEAN" | "VACANT_DIRTY" | "OCCUPIED" | "MAINTENANCE",
+        interruptedNote: ARRUMACAO_INTERRUPTED_NOTE.STATUS_CHANGE,
+      });
     }
 
     if (Array.isArray(data.photos)) {

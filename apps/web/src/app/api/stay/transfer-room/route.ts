@@ -4,6 +4,7 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { resolveOperator } from "@/lib/operator";
+import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
 import {
   findBlockingOpenStay,
   findConflictingReservation,
@@ -160,6 +161,21 @@ export async function POST(req: NextRequest) {
         data: { status: "VACANT_DIRTY", notes: ORIGIN_ROOM_NOTES },
       });
       if (releasedOrigin.count !== 1) throw new TransferRoomError(`O quarto ${fromRoom.number} deixou de estar ocupado. Atualize o mapa.`);
+
+      // Tarefas de governança acompanham a nova situação dos dois quartos: a arrumação com hóspede
+      // do quarto de origem acaba aqui (o hóspede saiu), e o destino começa sem tarefa antiga.
+      await syncHousekeepingTasksWithRoomStatus(tx, {
+        tenantId,
+        roomId: fromRoom.id,
+        newStatus: "VACANT_DIRTY",
+        interruptedNote: ARRUMACAO_INTERRUPTED_NOTE.TRANSFER,
+      });
+      await syncHousekeepingTasksWithRoomStatus(tx, {
+        tenantId,
+        roomId: toRoom.id,
+        newStatus: "OCCUPIED",
+        interruptedNote: ARRUMACAO_INTERRUPTED_NOTE.CHECKIN,
+      });
 
       // A reserva que originou a hospedagem acompanha o hóspede: sem isso o Mapa de Reservas
       // continuaria desenhando a barra no quarto antigo.
