@@ -61,6 +61,14 @@ import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/Selec
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { usePolling } from "@/lib/usePolling";
 import { brDateKey } from "@/lib/brasiliaDate";
+import AbrirOsManutencaoModal from "@/components/manutencao/AbrirOsManutencaoModal";
+import OsManutencaoModal from "@/components/manutencao/OsManutencaoModal";
+import {
+  MAINTENANCE_STAGE_LABEL,
+  formatMaintenanceDateTime,
+  formatMaintenanceDuration,
+  type MaintenanceStageValue,
+} from "@/lib/maintenanceShared";
 
 // Converte "DD/MM/YYYY HH:MM:SS" (formato usado pelo modal de check-in) para ISO "YYYY-MM-DDTHH:MM:SS",
 // formato exigido pela coluna timestamp do Postgres na API /api/reservations.
@@ -87,6 +95,18 @@ function formatBrDateTime(iso: string | null | undefined): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+interface RoomMaintenanceSummary {
+  ticketId: string;
+  number: number;
+  stage: MaintenanceStageValue;
+  openedAt: string;
+  expectedReleaseAt: string | null;
+  notifyStatus: "PENDING" | "SENT" | "FAILED";
+  problemType: string;
+  employeeName: string;
+  waitReason: string | null;
+}
+
 interface RoomItem {
   id: string;
   number: string;
@@ -97,7 +117,8 @@ interface RoomItem {
   dates: string;
   expectedCheckOutDate?: string | null;
   notes?: string;
-  maintenanceUntil?: string;
+  // OS de manutenção aberta do quarto (vem do polling) — null quando não há.
+  maintenance?: RoomMaintenanceSummary | null;
   fnrh?: boolean;
   corporate?: string | null;
   uazapiSent?: boolean;
@@ -224,9 +245,9 @@ export default function TenantDashboardPage() {
   const [targetRoomNumber, setTargetRoomNumber] = useState<string>("101");
   const [showInactive, setShowInactive] = useState(false);
 
-  const [maintenanceUntilInput, setMaintenanceUntilInput] = useState("20/08/2026 18:00");
-  const [maintenanceNotesInput, setMaintenanceNotesInput] = useState("OS #402 Manutenção Geral");
-  const [isSettingMaintenance, setIsSettingMaintenance] = useState(false);
+  // Manutenção de quartos: abertura de OS (quarto escolhido) e "Ver OS" (id da OS aberta).
+  const [abrirOsRoom, setAbrirOsRoom] = useState<RoomItem | null>(null);
+  const [osModalTicketId, setOsModalTicketId] = useState<string | null>(null);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
@@ -360,10 +381,12 @@ export default function TenantDashboardPage() {
             dbStatus === "VACANT_CLEAN" || !activeStay?.expectedCheckOut
               ? null
               : brDateKey(activeStay.expectedCheckOut);
+          const dbMaintenance: RoomMaintenanceSummary | null = r.maintenance ?? null;
 
           if (existing) {
             // Manter a mesma referência de objeto se nada mudou para garantir ZERO piscamento na UI
             if (
+              JSON.stringify(existing.maintenance ?? null) === JSON.stringify(dbMaintenance) &&
               existing.status === dbStatus &&
               existing.active === isActive &&
               existing.category === dbCategory &&
@@ -390,6 +413,7 @@ export default function TenantDashboardPage() {
               guest: dbGuest,
               totalConsumption: dbConsumption,
               unreadWhatsappCount: dbUnreadWhatsapp,
+              maintenance: dbMaintenance,
             };
           }
 
@@ -407,6 +431,7 @@ export default function TenantDashboardPage() {
             ratePerNight: r.ratePerNight || 180,
             totalConsumption: dbConsumption,
             unreadWhatsappCount: dbUnreadWhatsapp,
+            maintenance: dbMaintenance,
           };
         });
 
@@ -450,12 +475,24 @@ export default function TenantDashboardPage() {
     showMinibarCheckModal ||
     showTransferDebitoModal ||
     showLancarReservaModal ||
-    showSelecaoReservaModal;
+    showSelecaoReservaModal ||
+    !!abrirOsRoom ||
+    !!osModalTicketId;
 
   // Polling em segundo plano a cada 3 segundos — pausado enquanto qualquer modal estiver aberto
   // e também enquanto a aba estiver em segundo plano (ver usePolling), para não gastar egress do
   // Supabase com telas que ninguém está olhando.
   usePolling(syncRoomsFromDatabase, 3000, { paused: anyModalOpen });
+
+  // "Parado há …" dos quartos em manutenção é calculado na hora do render; com o polling
+  // respondendo 304 (nada mudou) nada re-renderiza, então um tique por minuto mantém o tempo em dia.
+  const [, setMinuteTick] = useState(0);
+  const hasRoomInMaintenance = rooms.some((r) => r.maintenance);
+  useEffect(() => {
+    if (!hasRoomInMaintenance) return;
+    const t = setInterval(() => setMinuteTick((x) => x + 1), 60000);
+    return () => clearInterval(t);
+  }, [hasRoomInMaintenance]);
 
   // Espelha anyModalOpen num ref para ser lido dentro do intervalo de diária extra abaixo, sem
   // precisar reiniciar esse intervalo toda vez que um modal abre/fecha.
@@ -1129,6 +1166,10 @@ export default function TenantDashboardPage() {
                 key={room.id}
                 onContextMenu={(e) => handleOpenContextMenu(e, room)}
                 onDoubleClick={() => {
+                  if (isMaintenance && room.maintenance) {
+                    setOsModalTicketId(room.maintenance.ticketId);
+                    return;
+                  }
                   if (isInactive || isMaintenance) return;
                   if (isOccupied) {
                     // Quarto ocupado: abre a tela de check-out (fechamento de conta) com os dados da hospedagem.
@@ -1188,7 +1229,7 @@ export default function TenantDashboardPage() {
                       : "bg-emerald-700 text-white border-emerald-500 shadow-emerald-700/30 shadow-sm"
                   }`}>
                     {isMaintenance ? (
-                      <><AlertTriangle className="w-3 h-3 shrink-0" /> MANUÇÃO + RESERVA HOJE!</>
+                      <><AlertTriangle className="w-3 h-3 shrink-0" /> MANUTENÇÃO + RESERVA HOJE!</>
                     ) : isOccupied ? (
                       <><AlertTriangle className="w-3 h-3 shrink-0" /> OCUPADO + RESERVA HOJE!</>
                     ) : isCleaning && !isOccupied ? (
@@ -1274,21 +1315,56 @@ export default function TenantDashboardPage() {
                   <div className={`p-3 rounded-xl border space-y-2 text-xs ${
                     theme.isDark ? "bg-rose-950/40 border-rose-900/60" : "bg-rose-100 border-rose-300"
                   }`}>
-                    <div className="flex items-center justify-between font-medium">
-                      <span className="flex items-center gap-1.5 text-rose-600 font-semibold">
-                        <Wrench className="w-3.5 h-3.5" /> Quarto em Manutenção
-                      </span>
-                    </div>
-                    <div className={`flex items-center justify-between text-[11px] pt-1.5 border-t ${theme.borderColor} ${theme.textMuted}`}>
-                      <span>Data Limite p/ Desbloqueio:</span>
-                      <span className="font-mono font-bold text-amber-600 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
-                        {room.maintenanceUntil || "20/08/2026 18:00"}
-                      </span>
-                    </div>
-                    {room.notes && (
-                      <p className={`text-[10px] italic ${theme.textMuted}`}>
-                        Motivo: {room.notes}
-                      </p>
+                    {room.maintenance ? (
+                      <>
+                        <div className="flex items-center justify-between gap-2 font-medium">
+                          <span className="flex items-center gap-1.5 text-rose-600 font-semibold">
+                            <Wrench className="w-3.5 h-3.5" /> OS nº {room.maintenance.number} · {room.maintenance.problemType}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-rose-700 text-white text-[9px] font-bold whitespace-nowrap">
+                            {MAINTENANCE_STAGE_LABEL[room.maintenance.stage]}
+                          </span>
+                        </div>
+                        {room.maintenance.stage === "WAITING" && room.maintenance.waitReason && (
+                          <p className="text-[10px] font-semibold text-amber-600">{room.maintenance.waitReason}</p>
+                        )}
+                        <div className={`space-y-1 text-[11px] pt-1.5 border-t ${theme.borderColor} ${theme.textMuted}`}>
+                          <div className="flex items-center justify-between">
+                            <span>Colaborador:</span>
+                            <span className={`font-bold ${theme.textMain}`}>{room.maintenance.employeeName}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Parado há:</span>
+                            <span className="font-mono font-bold">
+                              {formatMaintenanceDuration(Date.now() - new Date(room.maintenance.openedAt).getTime())}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Previsão:</span>
+                            <span className="font-mono font-bold">
+                              {room.maintenance.expectedReleaseAt ? formatMaintenanceDateTime(room.maintenance.expectedReleaseAt) : "não informada"}
+                            </span>
+                          </div>
+                        </div>
+                        {room.maintenance.notifyStatus === "FAILED" && (
+                          <p className="text-[10px] font-bold text-red-600 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 shrink-0" /> Aviso pelo WhatsApp não entregue — abra a OS para reenviar
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between font-medium">
+                          <span className="flex items-center gap-1.5 text-rose-600 font-semibold">
+                            <Wrench className="w-3.5 h-3.5" /> Quarto em Manutenção
+                          </span>
+                        </div>
+                        {room.notes && (
+                          <p className={`text-[10px] italic ${theme.textMuted}`}>
+                            Motivo: {room.notes}
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
                 ) : (
@@ -1416,6 +1492,17 @@ export default function TenantDashboardPage() {
                       }`}
                     >
                       <RefreshCw className="w-3.5 h-3.5" /> Alterar Situação
+                    </button>
+                  ) : isMaintenance && room.maintenance ? (
+                    <button
+                      onClick={() => setOsModalTicketId(room.maintenance!.ticketId)}
+                      className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 border shadow-sm ${
+                        theme.isDark
+                          ? "bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border-rose-800/60"
+                          : "bg-rose-100 hover:bg-rose-200 text-rose-900 border-rose-300"
+                      }`}
+                    >
+                      <Wrench className="w-3.5 h-3.5" /> Ver OS de manutenção
                     </button>
                   ) : isMaintenance ? (
                     <button
@@ -1843,6 +1930,21 @@ export default function TenantDashboardPage() {
                 Mudar Situação Quarto
               </button>
 
+              {contextMenu.room.maintenance && (
+                <button
+                  onClick={() => {
+                    setContextMenu(prev => ({ ...prev, visible: false }));
+                    if (contextMenu.room?.maintenance) setOsModalTicketId(contextMenu.room.maintenance.ticketId);
+                  }}
+                  className={`w-full px-3.5 py-2 text-left hover:bg-[#0284C7] hover:text-white flex items-center gap-2.5 transition-colors font-medium ${
+                    theme.isDark ? "text-slate-200" : "text-slate-800"
+                  }`}
+                >
+                  <Wrench className="w-4 h-4 text-rose-500" />
+                  Ver OS de Manutenção (nº {contextMenu.room.maintenance.number})
+                </button>
+              )}
+
               <button
                 disabled={contextMenu.room.status !== "OCCUPIED" && contextMenu.room.status !== "OCCUPIED_CLEANING"}
                 onClick={() => {
@@ -2257,11 +2359,8 @@ export default function TenantDashboardPage() {
               <h3 className={`font-bold text-base flex items-center gap-2 ${theme.isDark ? "text-white" : "text-slate-900"}`}>
                 <RefreshCw className="w-5 h-5 text-[#0284C7]" /> Alterar Situação • Quarto {activeRoom.number}
               </h3>
-              <button 
-                onClick={() => {
-                  setShowStatusModal(false);
-                  setIsSettingMaintenance(false);
-                }} 
+              <button
+                onClick={() => setShowStatusModal(false)}
                 className="opacity-70 hover:opacity-100 transition-opacity"
               >
                 <X className="w-5 h-5" />
@@ -2269,11 +2368,33 @@ export default function TenantDashboardPage() {
             </div>
 
             <div className="space-y-3 text-xs">
+              {activeRoom.maintenance ? (
+                // Quarto com OS aberta: só a própria OS tira o quarto da manutenção (o colaborador
+                // resolve pelo app dele; o admin pode cancelar). O servidor também recusa.
+                <div className={`rounded-xl border p-3 space-y-3 ${
+                  theme.isDark ? "border-rose-800/60 bg-rose-950/30" : "border-rose-300 bg-rose-50"
+                }`}>
+                  <p className={theme.isDark ? "text-rose-200" : "text-rose-900"}>
+                    O quarto {activeRoom.number} está com a <strong>OS de manutenção nº {activeRoom.maintenance.number}</strong> aberta
+                    ({activeRoom.maintenance.employeeName}). Ele só volta a ficar disponível quando o colaborador resolver a OS
+                    — ou se um administrador cancelá-la.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setShowStatusModal(false);
+                      setOsModalTicketId(activeRoom.maintenance!.ticketId);
+                    }}
+                    className="w-full py-2 rounded-lg bg-rose-700 hover:bg-rose-600 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Wrench className="w-4 h-4" /> Ver OS de manutenção
+                  </button>
+                </div>
+              ) : (
+              <>
               <button
                 onClick={async () => {
                   const room = activeRoom;
                   setShowStatusModal(false);
-                  setIsSettingMaintenance(false);
                   try {
                     const res = await fetch("/api/reservations/rooms", {
                       method: "PATCH",
@@ -2294,7 +2415,6 @@ export default function TenantDashboardPage() {
                     status: "VACANT_CLEAN",
                     guest: null,
                     dates: "Disponível para Check-in",
-                    maintenanceUntil: undefined,
                     notes: "Quarto Higienizado & Vistoriado"
                   } : r));
                   toast.success(`Quarto ${room.number} alterado para Livre / Higienizado.`);
@@ -2311,7 +2431,6 @@ export default function TenantDashboardPage() {
                 onClick={async () => {
                   const room = activeRoom;
                   setShowStatusModal(false);
-                  setIsSettingMaintenance(false);
                   try {
                     const res = await fetch("/api/reservations/rooms", {
                       method: "PATCH",
@@ -2332,7 +2451,6 @@ export default function TenantDashboardPage() {
                     status: "VACANT_DIRTY",
                     guest: null,
                     dates: "Checkout / Limpeza",
-                    maintenanceUntil: undefined,
                     notes: "Pendente troca de enxoval & higienização"
                   } : r));
                   toast.success(`Quarto ${room.number} alterado para Pendente Limpeza (Sujo).`);
@@ -2345,88 +2463,47 @@ export default function TenantDashboardPage() {
                 <span className="text-[10px] text-[#EAB308] font-bold">Governança</span>
               </button>
 
-              <div className={`rounded-xl border p-3 space-y-3 ${
-                theme.isDark ? "border-amber-500/30 bg-amber-500/10" : "border-amber-300 bg-amber-50"
-              }`}>
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-amber-600 flex items-center gap-1.5">
-                    <Wrench className="w-4 h-4 text-amber-500" /> Em Manutenção / Bloqueado
+              {/* Manutenção: só abrindo uma OS (problema, colaborador, data/hora de entrada). Quarto
+                  já em manutenção sem OS (anterior à OS) só pode ser liberado pelos botões acima. */}
+              {activeRoom.status !== "MAINTENANCE" && (
+                <button
+                  onClick={() => {
+                    setShowStatusModal(false);
+                    setAbrirOsRoom(activeRoom);
+                  }}
+                  className={`w-full p-3 rounded-xl border text-left font-semibold flex items-center justify-between transition-colors ${
+                    theme.isDark ? "bg-rose-500/15 hover:bg-rose-500/25 border-rose-500/30 text-white" : "bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-900"
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Wrench className="w-4 h-4 text-rose-500" /> Abrir OS de manutenção
                   </span>
-                  <span className="text-[10px] text-amber-600 font-mono font-bold">OS Manutenção</span>
-                </div>
-
-                <div className="space-y-2 pt-1 border-t border-amber-500/20">
-                  <div>
-                    <label className={`block font-semibold mb-1 text-[11px] ${theme.isDark ? "text-slate-300" : "text-slate-700"}`}>
-                      Data Limite para Desbloqueio:
-                    </label>
-                    <input
-                      type="text"
-                      value={maintenanceUntilInput}
-                      onChange={(e) => setMaintenanceUntilInput(e.target.value)}
-                      placeholder="Ex: 20/08/2026 18:00"
-                      className={`w-full border rounded-lg p-2 font-mono text-xs outline-none ${
-                        theme.isDark ? "bg-slate-900 border-slate-700 text-white focus:border-amber-400" : "bg-white border-slate-300 text-slate-900 focus:border-amber-500"
-                      }`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className={`block font-semibold mb-1 text-[11px] ${theme.isDark ? "text-slate-300" : "text-slate-700"}`}>
-                      Motivo / Observação da OS:
-                    </label>
-                    <input
-                      type="text"
-                      value={maintenanceNotesInput}
-                      onChange={(e) => setMaintenanceNotesInput(e.target.value)}
-                      placeholder="Ex: Manutenção no Ar-Condicionado (OS #402)"
-                      className={`w-full border rounded-lg p-2 text-xs outline-none ${
-                        theme.isDark ? "bg-slate-900 border-slate-700 text-white focus:border-amber-400" : "bg-white border-slate-300 text-slate-900 focus:border-amber-500"
-                      }`}
-                    />
-                  </div>
-
-                  <button
-                    onClick={async () => {
-                      const room = activeRoom;
-                      const maintenanceNotes = maintenanceNotesInput || "Em Manutenção";
-                      setShowStatusModal(false);
-                      setIsSettingMaintenance(false);
-                      try {
-                        const res = await fetch("/api/reservations/rooms", {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ roomNumber: room.number, status: "MAINTENANCE", notes: maintenanceNotes }),
-                        });
-                        const data = await res.json();
-                        if (!data.success) {
-                          toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados: ${data.error || "erro desconhecido"}.`, "Falha ao Alterar Situação");
-                          return;
-                        }
-                      } catch (err) {
-                        toast.error(`⚠️ Não foi possível alterar o Quarto ${room.number} no banco de dados.`, "Falha ao Alterar Situação");
-                        return;
-                      }
-                      setRooms(prev => prev.map(r => r.id === room.id ? {
-                        ...r,
-                        status: "MAINTENANCE",
-                        guest: null,
-                        dates: "Bloqueado para Manutenção",
-                        maintenanceUntil: maintenanceUntilInput || "20/08/2026 18:00",
-                        notes: maintenanceNotes
-                      } : r));
-                      toast.warning(`Quarto ${room.number} colocado em Manutenção / Bloqueado.`);
-                    }}
-                    className="w-full py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    Confirmar Bloqueio / Manutenção
-                  </button>
-                </div>
-              </div>
+                  <span className="text-[10px] text-rose-500 font-bold">Tira o quarto de venda</span>
+                </button>
+              )}
+              </>
+              )}
             </div>
           </div>
         </div>
       )}
+
+      {/* MANUTENÇÃO: abrir OS e ver OS (funil, linha do tempo, ações do admin) */}
+      <AbrirOsManutencaoModal
+        isOpen={!!abrirOsRoom}
+        room={abrirOsRoom}
+        onClose={() => setAbrirOsRoom(null)}
+        onOpened={() => syncRoomsFromDatabase()}
+      />
+      <OsManutencaoModal
+        isOpen={!!osModalTicketId}
+        ticketId={osModalTicketId}
+        onClose={() => {
+          setOsModalTicketId(null);
+          syncRoomsFromDatabase();
+        }}
+        onChanged={() => syncRoomsFromDatabase()}
+      />
 
       {/* LOADING OVERLAY: dados da hospedagem ainda não chegaram do servidor */}
       <LoadingOverlay
@@ -2684,7 +2761,6 @@ export default function TenantDashboardPage() {
               guest: null,
               dates: "Checkout / Limpeza",
               totalConsumption: 0,
-              maintenanceUntil: undefined,
               notes: "Pendente troca de enxoval & higienização",
             } : r));
 

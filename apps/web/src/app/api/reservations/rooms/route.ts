@@ -82,6 +82,9 @@ async function resolveCategoryId(tenantId: string, categoryName: string): Promis
 // para a coluna status.
 const ROOM_STATUS_VALUES = new Set(["VACANT_CLEAN", "VACANT_DIRTY", "OCCUPIED", "MAINTENANCE"]);
 
+const MSG_ABRIR_OS_MANUTENCAO =
+  "Para colocar o quarto em manutenção, abra uma OS de manutenção pelo Mapa de Quartos (Alterar Situação → Abrir OS de manutenção).";
+
 function mapStatusToDb(status?: string): string | undefined {
   if (!status) return undefined;
   const map: Record<string, string> = {
@@ -178,6 +181,10 @@ export async function POST(req: NextRequest) {
 
     if (!numero || !String(numero).trim()) {
       return NextResponse.json({ success: false, error: "Número do quarto é obrigatório." }, { status: 400 });
+    }
+
+    if (mapStatusToDb(status) === "MAINTENANCE") {
+      return NextResponse.json({ success: false, error: MSG_ABRIR_OS_MANUTENCAO }, { status: 400 });
     }
 
     const effectiveTenantId = session!.tenantId!;
@@ -303,6 +310,22 @@ export async function PATCH(req: NextRequest) {
     // colaborador (app /manutencao) ou cancelamento pelo admin —, nunca pela troca genérica de
     // situação (Mapa de Quartos / cadastro de apartamentos). Checado antes das fotos para não
     // subir arquivo que seria descartado; a escrita abaixo repete a condição (atômica).
+    // Entrar em manutenção só abrindo uma OS (Mapa de Quartos → Alterar Situação → Abrir OS de
+    // manutenção): é a OS que guarda o problema, o colaborador e a data/hora de entrada. Reenviar
+    // MAINTENANCE para um quarto que já está nela (o cadastro de apartamentos reenvia a situação
+    // atual junto com os outros campos) continua valendo.
+    if (mappedStatus === "MAINTENANCE") {
+      const current = await withDbRetry(() =>
+        prisma.room.findFirst({
+          where: { OR: [{ number: target }, { id: target }], tenantId: session.tenantId! },
+          select: { status: true },
+        })
+      );
+      if (current && current.status !== "MAINTENANCE") {
+        return NextResponse.json({ success: false, error: MSG_ABRIR_OS_MANUTENCAO }, { status: 400 });
+      }
+    }
+
     const leavingMaintenanceGuard = mappedStatus && mappedStatus !== "MAINTENANCE";
     if (leavingMaintenanceGuard) {
       const openTicket = await withDbRetry(() =>

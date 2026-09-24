@@ -140,6 +140,44 @@ export async function maintenanceBlockedRoomIds(
   return new Set(rooms.map((r) => r.id));
 }
 
+// Motivo para recusar uma chegada em `checkIn` num quarto em manutenção (null = liberado). Mesma
+// régua de maintenanceBlockedRoomIds, com a previsão de liberação na mensagem para o operador saber
+// a partir de quando o quarto volta a receber hóspede. Usado pelas rotas de reserva da recepção
+// (a grade do Mapa de Reservas faz a mesma checagem na tela, mas a trava de verdade é esta).
+export async function maintenanceBlockReason(
+  tx: PrismaClientOrTx,
+  roomId: string,
+  checkIn: Date
+): Promise<string | null> {
+  const blocked = await maintenanceBlockedRoomIds(tx, [roomId], checkIn);
+  if (!blocked.has(roomId)) return null;
+  const room = await tx.room.findUnique({
+    where: { id: roomId },
+    select: {
+      number: true,
+      maintenanceTickets: {
+        where: { stage: { in: ["OPEN", "EVALUATING", "WAITING"] } },
+        take: 1,
+        select: { number: true, expectedReleaseAt: true },
+      },
+    },
+  });
+  const ticket = room?.maintenanceTickets[0];
+  const os = ticket ? ` (OS nº ${ticket.number})` : "";
+  if (ticket?.expectedReleaseAt) {
+    const quando = ticket.expectedReleaseAt.toLocaleString("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `O quarto ${room?.number} está em manutenção${os}, com liberação prevista para ${quando}. Ele não recebe chegadas antes disso — escolha outro quarto ou outra data.`;
+  }
+  return `O quarto ${room?.number} está em manutenção${os} e não recebe chegadas hoje. Escolha outro quarto ou outra data.`;
+}
+
 // Conjunto de ids de quartos (dentre os informados) indisponíveis no período — reserva ativa/futura
 // (PRE_RESERVATION/CONFIRMED/CHECKED_IN) que se sobrepõe, hospedagem em aberto cuja ocupação
 // efetiva (stayOccupiedUntil, cobre overstay) alcança o período, ou quarto em manutenção

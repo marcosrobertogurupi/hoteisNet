@@ -6,6 +6,7 @@ import {
   resolveRoomId,
   findConflictingReservation,
   findBlockingOpenStay,
+  maintenanceBlockReason,
   lockRoomsForReservation,
   nextReservationNumber,
   reservationPeriodError,
@@ -174,6 +175,10 @@ export async function POST(req: NextRequest) {
           "Este quarto está ocupado por uma hospedagem em aberto que se estende sobre o período informado. Finalize o check-out antes de reservar."
         );
       }
+
+      // Quarto em manutenção não recebe chegada antes da liberação prevista (ou hoje, sem previsão).
+      const maintenanceBlock = await maintenanceBlockReason(tx as any, realRoomId, checkIn);
+      if (maintenanceBlock) throw new ReservationConflictError(maintenanceBlock);
 
       // guestId, se informado, precisa pertencer ao mesmo tenant — senão a reserva ficaria
       // vinculada ao hóspede de outro hotel.
@@ -464,6 +469,14 @@ export async function PATCH(req: NextRequest) {
           throw new ReservationConflictError(
             "Este quarto está ocupado por uma hospedagem em aberto que se estende sobre o período informado."
           );
+        }
+
+        // Manutenção só pesa quando a CHEGADA está sendo decidida (troca de quarto, nova data de
+        // entrada ou reativação) — prorrogar a saída de quem já está hospedado nunca esbarra nela.
+        const arrivalChanges = realRoomId !== undefined || !!checkInDate || reactivating;
+        if (arrivalChanges && existing.status !== "CHECKED_IN") {
+          const maintenanceBlock = await maintenanceBlockReason(tx as any, realRoomId ?? existing.roomId, effectiveCheckIn);
+          if (maintenanceBlock) throw new ReservationConflictError(maintenanceBlock);
         }
       }
 

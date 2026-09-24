@@ -12,6 +12,7 @@ import { runSaasMonitor } from "./saasMonitor";
 import { runNoShowSweep } from "./noShowSweep";
 import { runReviewsSync } from "./reviewsSync";
 import { runReviewFeedbackFunnel } from "./reviewFeedbackFunnel";
+import { runMaintenanceNotify } from "./maintenanceNotify";
 
 console.log("[worker] Virada de diária — worker iniciado.");
 
@@ -36,6 +37,14 @@ cron.schedule("* * * * *", () => {
 cron.schedule("* * * * *", () => {
   runPreCheckinFnrh().catch((err) => {
     console.error("[worker] Erro ao rodar envio de pré-check-in FNRH:", err);
+  });
+});
+
+// Aviso de OS de manutenção ao colaborador por WhatsApp — a cada minuto, para o técnico saber do
+// problema logo depois que a recepção abre (ou reatribui) a OS. Ver maintenanceNotify.ts.
+cron.schedule("* * * * *", () => {
+  runMaintenanceNotify().catch((err) => {
+    console.error("[worker] Erro ao enviar avisos de manutenção:", err);
   });
 });
 

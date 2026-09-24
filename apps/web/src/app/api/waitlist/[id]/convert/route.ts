@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
-import { findConflictingReservation, findBlockingOpenStay, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
+import { findConflictingReservation, findBlockingOpenStay, maintenanceBlockedRoomIds, lockRoomsForReservation, nextReservationNumber } from "@/lib/reservationHelpers";
 import {
   waitlistCheckInAt,
   waitlistCheckOutAt,
@@ -124,9 +124,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         excludeWaitlistId: entry.id,
       });
 
+      // Quarto em manutenção para esta chegada não serve (mesma régua do match da fila).
+      const inMaintenance = await maintenanceBlockedRoomIds(tx, rooms.map((r) => r.id), checkIn);
+
       let chosen: (typeof rooms)[number] | null = null;
       for (const room of ordered) {
-        if (heldByOthers.has(room.id)) continue;
+        if (heldByOthers.has(room.id) || inMaintenance.has(room.id)) continue;
         const [conflict, openStay] = await Promise.all([
           findConflictingReservation(tx, room.id, checkIn, checkOut),
           findBlockingOpenStay(tx, room.id, checkIn, checkOut),

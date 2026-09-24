@@ -1,6 +1,7 @@
 import type { MaintenanceStage, Prisma, RoomStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
+import { MAINTENANCE_STAGE_LABEL } from "@/lib/maintenanceShared";
 
 // Controle de manutenção de quartos — regras da OS (MaintenanceTicket). Funil:
 //   OPEN (Entrada) → EVALUATING (Avaliando) → WAITING (Aguardando peça/profissional…) → RESOLVED
@@ -12,13 +13,7 @@ type Db = Prisma.TransactionClient | typeof prisma;
 
 export const OPEN_MAINTENANCE_STAGES: MaintenanceStage[] = ["OPEN", "EVALUATING", "WAITING"];
 
-export const MAINTENANCE_STAGE_LABEL: Record<MaintenanceStage, string> = {
-  OPEN: "Entrada em manutenção",
-  EVALUATING: "Avaliando",
-  WAITING: "Aguardando",
-  RESOLVED: "Resolvido",
-  CANCELLED: "Cancelada",
-};
+export { MAINTENANCE_STAGE_LABEL };
 
 // Situações a partir das quais um quarto pode entrar em manutenção: livre ou sujo. Nunca ocupado
 // — o hóspede precisa ser transferido antes (Transferência de Quarto).
@@ -307,6 +302,27 @@ export async function cancelMaintenanceTicket(params: {
 
     return { number: ticket.number, roomNumber: ticket.room.number, roomStatus: ticket.previousRoomStatus };
   });
+}
+
+// Máximo de tentativas automáticas de envio do aviso por WhatsApp (worker). Esgotadas, o aviso
+// fica FAILED e a recepção vê o alerta no card do quarto — reenviar é manual, nunca um retry sem teto.
+export const MAX_MAINTENANCE_NOTIFY_ATTEMPTS = 3;
+
+// Recepção pede para reenviar um aviso que não foi entregue: volta a PENDING com tentativas
+// zeradas, e o worker tenta de novo (até MAX_MAINTENANCE_NOTIFY_ATTEMPTS).
+export async function resendMaintenanceNotice(params: { tenantId: string; ticketId: string }) {
+  const updated = await prisma.maintenanceTicket.updateMany({
+    where: {
+      id: params.ticketId,
+      tenantId: params.tenantId,
+      stage: { in: OPEN_MAINTENANCE_STAGES },
+      notifyStatus: "FAILED",
+    },
+    data: { notifyStatus: "PENDING", notifyAttempts: 0 },
+  });
+  if (updated.count === 0) {
+    throw new MaintenanceError("Só dá para reenviar o aviso de uma OS aberta cujo envio falhou.", 409);
+  }
 }
 
 // OS aberta do quarto, se houver — usada pela trava da troca genérica de situação.

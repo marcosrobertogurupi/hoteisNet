@@ -7,6 +7,7 @@ import {
   resolveRoomId,
   findConflictingReservation,
   findBlockingOpenStay,
+  maintenanceBlockReason,
   lockRoomsForReservation,
   nextReservationNumber,
   reservationPeriodError,
@@ -142,6 +143,11 @@ export async function POST(req: NextRequest) {
           throw new Error(
             `Conflito de reserva: o quarto ${r.roomId} está ocupado por uma hospedagem em aberto que se estende sobre o período informado para "${r.guestName}". Nenhuma reserva do lote foi salva.`
           );
+        }
+
+        const maintenanceBlock = await maintenanceBlockReason(tx as any, realRoomId, checkInDate);
+        if (maintenanceBlock) {
+          throw new Error(`${maintenanceBlock} (reserva de "${r.guestName}"). Nenhuma reserva do lote foi salva.`);
         }
 
         let realGuestId: string | null = null;
