@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { OPEN_MAINTENANCE_STAGES } from "@/lib/maintenance";
 import { validatePasswordStrength } from "@/lib/passwordPolicy";
 import { getSessionUser, requireAdmin, hashPassword } from "@/lib/auth";
 
@@ -13,10 +15,14 @@ const EMPLOYEE_SELECT = {
   phone: true,
   email: true,
   active: true,
+  maintenanceTech: true,
   passwordHash: true,
   createdAt: true,
   updatedAt: true,
 } as const;
+
+const MSG_MANUTENCAO_SEM_TELEFONE =
+  "Informe o WhatsApp do colaborador de manutenção — é por ele que chega o aviso das ordens de serviço.";
 
 function serialize(e: {
   id: string;
@@ -26,6 +32,7 @@ function serialize(e: {
   phone: string | null;
   email: string | null;
   active: boolean;
+  maintenanceTech: boolean;
   passwordHash: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -59,10 +66,13 @@ export async function POST(req: NextRequest) {
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await req.json();
-    const { nome, cargo, cpf, telefone, email, status, senha } = body;
+    const { nome, cargo, cpf, telefone, email, status, senha, manutencao } = body;
 
     if (!nome || !String(nome).trim()) {
       return NextResponse.json({ success: false, error: "O nome do colaborador é obrigatório." }, { status: 400 });
+    }
+    if (manutencao === true && !String(telefone || "").trim()) {
+      return NextResponse.json({ success: false, error: MSG_MANUTENCAO_SEM_TELEFONE }, { status: 400 });
     }
 
     // Senha opcional — só quem tem senha acessa o app de contagem de estoque (login por telefone).
@@ -87,6 +97,7 @@ export async function POST(req: NextRequest) {
         phone: telefone || null,
         email: email || null,
         active: status !== "INATIVO",
+        maintenanceTech: manutencao === true,
         passwordHash: senhaTrim ? await hashPassword(senhaTrim) : null,
       },
       select: EMPLOYEE_SELECT,
@@ -106,7 +117,7 @@ export async function PUT(req: NextRequest) {
     if (adminError) return NextResponse.json(adminError.body, { status: adminError.status });
 
     const body = await req.json();
-    const { id, nome, cargo, cpf, telefone, email, status, senha, removerSenha } = body;
+    const { id, nome, cargo, cpf, telefone, email, status, senha, removerSenha, manutencao } = body;
 
     if (!id) {
       return NextResponse.json({ success: false, error: "ID do colaborador é obrigatório." }, { status: 400 });
@@ -124,6 +135,29 @@ export async function PUT(req: NextRequest) {
       email: email || null,
       active: status !== "INATIVO",
     };
+
+    // Colaborador de manutenção: precisa de WhatsApp (é por ele que recebe o aviso da OS). Não pode
+    // deixar de atender manutenção, ser desativado nem perder o telefone com OS aberta no nome dele —
+    // a OS ficaria sem ninguém para dar continuidade. O admin reatribui antes.
+    if (manutencao !== undefined) data.maintenanceTech = manutencao === true;
+    if (manutencao === true && !telefoneTrim) {
+      return NextResponse.json({ success: false, error: MSG_MANUTENCAO_SEM_TELEFONE }, { status: 400 });
+    }
+    if (manutencao === false || status === "INATIVO" || !telefoneTrim) {
+      const openTicket = await prisma.maintenanceTicket.findFirst({
+        where: { tenantId: session!.tenantId!, assignedEmployeeId: String(id), stage: { in: OPEN_MAINTENANCE_STAGES } },
+        select: { number: true },
+      });
+      if (openTicket) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Este colaborador está com a OS de manutenção nº ${openTicket.number} aberta. Passe a OS para outro colaborador antes de desativá-lo, tirar a manutenção ou remover o telefone.`,
+          },
+          { status: 409 }
+        );
+      }
+    }
 
     // Senha do app de contagem: `removerSenha` tira o acesso; `senha` (não vazia) define/troca.
     // Trocar a senha zera o bloqueio por tentativas. Sessões já emitidas continuam válidas até
@@ -185,6 +219,14 @@ export async function DELETE(req: NextRequest) {
 
     return NextResponse.json({ success: true, message: "Colaborador excluído com sucesso." });
   } catch (error: any) {
+    // Colaborador com OS de manutenção no histórico (FK RESTRICT): o registro de quem atendeu cada
+    // OS precisa ficar — desativar em vez de excluir.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      return NextResponse.json(
+        { success: false, error: "Este colaborador tem histórico de manutenção. Desative-o em vez de excluir." },
+        { status: 409 }
+      );
+    }
     console.error("[DELETE /api/cadastros/colaboradores] Erro ao excluir colaborador:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

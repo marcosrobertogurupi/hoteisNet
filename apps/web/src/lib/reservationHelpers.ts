@@ -112,10 +112,9 @@ export async function findBlockingOpenStay(
 
 // Ids de quartos (dentre os informados) que a manutenção tira de venda para um período que começa
 // em `checkIn`. Regra: quarto em MAINTENANCE fica indisponível para chegadas até o fim do dia de hoje
-// em Brasília — sem previsão de liberação, não dá para prometer o quarto nem para hoje; chegadas de
-// amanhã em diante continuam possíveis. Quando a OS de manutenção ganhar previsão de liberação, a
-// régua passa a ser "até a data prevista" — ajustar SÓ aqui, que é a fonte única usada pelo agente de
-// IA e pela fila de espera (o worker tem a cópia em apps/worker/src/stayOccupancy.ts).
+// em Brasília ou até a previsão de liberação da OS aberta, o que for maior. Sem previsão, chegadas de
+// amanhã em diante continuam possíveis. Fonte única usada pelo agente de IA e pela fila de espera — o
+// worker tem a cópia em apps/worker/src/stayOccupancy.ts (mudou aqui, muda lá).
 export async function maintenanceBlockedRoomIds(
   tx: PrismaClientOrTx,
   roomIds: string[],
@@ -123,9 +122,19 @@ export async function maintenanceBlockedRoomIds(
 ): Promise<Set<string>> {
   if (roomIds.length === 0) return new Set();
   const endOfTodayBrasilia = new Date(dateOnlyBrasilia(new Date()).getTime() + 24 * 60 * 60 * 1000);
-  if (checkIn >= endOfTodayBrasilia) return new Set();
   const rooms = await tx.room.findMany({
-    where: { id: { in: roomIds }, status: "MAINTENANCE" },
+    where: {
+      id: { in: roomIds },
+      status: "MAINTENANCE",
+      // Chegada depois de hoje: só bloqueia quem tem OS aberta com previsão além da chegada.
+      ...(checkIn >= endOfTodayBrasilia
+        ? {
+            maintenanceTickets: {
+              some: { stage: { in: ["OPEN", "EVALUATING", "WAITING"] }, expectedReleaseAt: { gt: checkIn } },
+            },
+          }
+        : {}),
+    },
     select: { id: true },
   });
   return new Set(rooms.map((r) => r.id));
