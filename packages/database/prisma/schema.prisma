@@ -82,7 +82,9 @@ model AiBillingConfig {
   rateUpdatedAt DateTime?
   markupPct     Int      @default(100)
   updatedByName String?
-  updatedAt     DateTime @updatedAt
+  // @default(now()) espelha o DEFAULT do banco — o seed da migration 20260909150000 faz INSERT cru
+  // sem updatedAt; sem o default declarado aqui, um `db push` o removeria (ver 20260924200946).
+  updatedAt     DateTime @default(now()) @updatedAt
 
   @@map("ai_billing_config")
 }
@@ -99,7 +101,7 @@ model AiCostReconciliation {
   note               String?
   enteredByName      String?
   createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  updatedAt          DateTime @default(now()) @updatedAt
 
   @@map("ai_cost_reconciliations")
 }
@@ -469,7 +471,9 @@ model AIUsageLog {
 model AiModelDefault {
   feature     String   @id
   model       String
-  updatedAt   DateTime @updatedAt
+  // @default(now()) espelha o DEFAULT do banco — o seed da migration 20260909100000 faz INSERT cru
+  // sem updatedAt (ver 20260924200946).
+  updatedAt   DateTime @default(now()) @updatedAt
   updatedById String?
 
   @@map("ai_model_defaults")
@@ -482,7 +486,7 @@ model TenantAiModelOverride {
   tenantId  String
   feature   String
   model     String
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, feature])
@@ -1423,9 +1427,11 @@ model Reservation {
   wppSent                Boolean?          @default(false)
   // Número gerado da sequência `reservation_number_seq` (ver nextReservationNumber em
   // lib/reservationHelpers). @unique aqui para o Prisma manter o índice (senão um `db push`
-  // futuro o removeria) — a deduplicação do histórico roda ANTES, na migration
-  // 20260910120000_reservation_number_dedup_unique.sql, que cria o índice com o mesmo nome
-  // (`reservations_reservationNumber_key`) que o Prisma geraria, então não há índice duplicado.
+  // futuro o removeria) — a deduplicação do histórico rodou na migration
+  // 20260910120000_reservation_number_dedup_unique.sql. Aquela migration criou o índice PARCIAL
+  // (`WHERE ... IS NOT NULL`), que o Prisma não enxerga; a 20260924200946 o trocou por um índice
+  // único comum com o mesmo nome (`reservations_reservationNumber_key`), que continua aceitando
+  // vários NULL (padrão do Postgres). Nunca recriar este índice como parcial.
   reservationNumber      String?           @unique
   roomDescription        String?
   roomCategory           String?
@@ -1978,7 +1984,7 @@ model ReviewChannelConnector {
   // o projeto de referência já sofreu em produção e documentou em duas migrations corretivas.
   firstErrorAt DateTime?
   createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  updatedAt    DateTime  @default(now()) @updatedAt
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reviews      Review[]
   syncJobs     ReviewSyncJob[]
