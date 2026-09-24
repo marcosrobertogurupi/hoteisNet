@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { sendUazapiText } from "./uazapiSend";
-import { stayOccupiedUntil } from "./stayOccupancy";
+import { stayOccupiedUntil, maintenanceBlockedRoomIds } from "./stayOccupancy";
 
 const prisma = new PrismaClient();
 
@@ -22,7 +22,8 @@ function checkOutAt(d: Date): Date {
 
 // Procura um quarto ativo da categoria genuinamente livre para todo o período pedido. A reserva tem
 // prioridade absoluta: um quarto só "casa" se nenhuma reserva ativa/futura nem hospedagem em aberto
-// o reivindica, e se ele não está em "soft hold" por outra entrada da fila já avisada.
+// o reivindica, se não está em manutenção para uma chegada de hoje e se ele não está em "soft hold"
+// por outra entrada da fila já avisada.
 async function findVacancy(params: {
   tenantId: string;
   roomCategoryId: string;
@@ -41,7 +42,7 @@ async function findVacancy(params: {
   if (rooms.length === 0) return null;
   const roomIds = rooms.map((r) => r.id);
 
-  const [reservations, openStays, held] = await Promise.all([
+  const [reservations, openStays, held, inMaintenance] = await Promise.all([
     prisma.reservation.findMany({
       where: {
         roomId: { in: roomIds },
@@ -66,12 +67,14 @@ async function findVacancy(params: {
       },
       select: { notifiedRoomId: true },
     }),
+    maintenanceBlockedRoomIds(prisma, roomIds, checkIn),
   ]);
 
   const busy = new Set<string>([
     ...reservations.map((r) => r.roomId),
     ...openStays.filter((s) => stayOccupiedUntil(s) > checkIn).map((s) => s.roomId),
     ...(held.map((h) => h.notifiedRoomId).filter(Boolean) as string[]),
+    ...inMaintenance,
   ]);
   return roomIds.find((id) => !busy.has(id)) ?? null;
 }
@@ -287,7 +290,7 @@ async function roomFreeForPeriod(
 ): Promise<boolean> {
   const checkIn = checkInAt(checkInRaw);
   const checkOut = checkOutAt(checkOutRaw);
-  const [res, stays, held] = await Promise.all([
+  const [res, stays, held, inMaintenance] = await Promise.all([
     prisma.reservation.findFirst({
       where: {
         roomId,
@@ -312,7 +315,8 @@ async function roomFreeForPeriod(
       },
       select: { id: true },
     }),
+    maintenanceBlockedRoomIds(prisma, [roomId], checkIn),
   ]);
-  if (res || held) return false;
+  if (res || held || inMaintenance.size > 0) return false;
   return !stays.some((s) => stayOccupiedUntil(s) > checkIn);
 }

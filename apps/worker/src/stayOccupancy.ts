@@ -1,3 +1,5 @@
+import type { PrismaClient } from "@prisma/client";
+
 // Ocupação EFETIVA de uma hospedagem — o maior valor entre a saída prevista e (check-in + diárias
 // já lançadas). Cobre overstay: enquanto a recepção não finaliza a hospedagem, a ocupação vai no
 // mínimo até o fim do dia em Brasília, mesmo que `dailiesCount` esteja momentaneamente atrasado.
@@ -19,6 +21,23 @@ export function stayOccupiedUntil(stay: {
     return endOfDayBrasilia(new Date(Math.max(effective.getTime(), Date.now())));
   }
   return effective;
+}
+
+// Ids de quartos (dentre os informados) que a manutenção tira de venda para um período que começa em
+// `checkIn`: quarto em MAINTENANCE fica indisponível para chegadas até o fim do dia de hoje em
+// Brasília. Espelha maintenanceBlockedRoomIds de apps/web/src/lib/reservationHelpers.ts — mudou a
+// régua lá, muda aqui também.
+export async function maintenanceBlockedRoomIds(
+  db: Pick<PrismaClient, "room">,
+  roomIds: string[],
+  checkIn: Date
+): Promise<Set<string>> {
+  if (roomIds.length === 0 || checkIn >= endOfDayBrasilia(new Date())) return new Set();
+  const rooms = await db.room.findMany({
+    where: { id: { in: roomIds }, status: "MAINTENANCE" },
+    select: { id: true },
+  });
+  return new Set(rooms.map((r) => r.id));
 }
 
 // Meia-noite (Brasília) do dia seguinte ao da data informada. Usado para "arredondar" a ocupação de
