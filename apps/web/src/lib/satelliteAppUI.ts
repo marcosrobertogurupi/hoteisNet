@@ -8,7 +8,7 @@
 // e o claro/escuro sai de `isDark`.
 //
 // `accent` = cor de destaque do app (emerald na Contagem, rose na Governança).
-export function satelliteAppUI(isDark: boolean, accent: "emerald" | "rose" = "emerald") {
+export function satelliteAppUI(isDark: boolean, accent: "emerald" | "rose" | "amber" = "emerald") {
   return {
     bar: isDark ? "bg-[#0a0f1a]/95 border-slate-800" : "bg-white/95 border-slate-200",
     card: isDark ? "bg-slate-900/80 border-slate-800" : "bg-white border-slate-200 shadow-sm",
@@ -29,7 +29,11 @@ export function satelliteAppUI(isDark: boolean, accent: "emerald" | "rose" = "em
         ? isDark
           ? "text-rose-400"
           : "text-rose-600"
-        : isDark
+        : accent === "amber"
+          ? isDark
+            ? "text-amber-400"
+            : "text-amber-600"
+          : isDark
           ? "text-emerald-400"
           : "text-emerald-600",
   };

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireTenantAdmin, getClientIp, getTerminalName } from "@/lib/auth";
 import { logActivity } from "@/lib/audit";
+import { signedMaintenancePhotoUrls } from "@/lib/maintenancePhotoStorage";
 import {
   MaintenanceError,
   cancelMaintenanceTicket,
@@ -54,9 +55,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
             waitReason: { select: { name: true } },
           },
         },
+        photos: { orderBy: { createdAt: "asc" }, select: { id: true, storagePath: true, createdAt: true, actorName: true } },
       },
     });
     if (!t) return NextResponse.json({ success: false, error: "OS não encontrada." }, { status: 404 });
+
+    // Fotos no bucket privado: URL assinada de curta duração, gerada só na abertura do "Ver OS".
+    const photoUrls = await signedMaintenancePhotoUrls(t.photos.map((p) => p.storagePath));
 
     return NextResponse.json({
       success: true,
@@ -93,6 +98,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           createdAt: e.createdAt,
           waitReason: e.waitReason?.name ?? null,
         })),
+        photos: t.photos.map((p, i) => ({ id: p.id, url: photoUrls[i], createdAt: p.createdAt, actorName: p.actorName })),
       },
     });
   } catch (error: any) {

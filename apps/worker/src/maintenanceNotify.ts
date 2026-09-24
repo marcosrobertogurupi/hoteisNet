@@ -13,6 +13,11 @@ const prisma = new PrismaClient();
 const MAX_ATTEMPTS = 3;
 const BATCH = 20;
 
+// Mesma base de URL dos links de pré-check-in e do funil de reviews.
+function appBaseUrl(): string {
+  return (process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/$/, "");
+}
+
 function fmtBr(d: Date): string {
   return d.toLocaleString("pt-BR", {
     timeZone: "America/Sao_Paulo",
@@ -72,6 +77,8 @@ export async function runMaintenanceNotify(): Promise<void> {
         t.expectedReleaseAt ? `Previsão de liberação: ${fmtBr(t.expectedReleaseAt)}` : null,
         ``,
         `${employee.name}, você é o responsável por esta ordem de serviço.`,
+        `Registre o andamento e as fotos no app de manutenção:`,
+        `${appBaseUrl()}/manutencao/os/${t.id}`,
       ].filter((l): l is string => l !== null);
       sent = await sendUazapiText(prisma, phone, lines.join("\n"), t.tenantId);
     }

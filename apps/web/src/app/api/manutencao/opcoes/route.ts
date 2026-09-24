@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
         select: { id: true, name: true },
       }),
       prisma.employee.findMany({
-        where: { tenantId, active: true, maintenanceTech: true, phone: { not: null } },
+        where: { tenantId, active: true, maintenanceTech: true, phone: { not: null }, passwordHash: { not: null } },
         orderBy: { name: "asc" },
         select: { id: true, name: true, phone: true },
       }),
