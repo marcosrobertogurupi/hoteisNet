@@ -4,7 +4,7 @@
 //
 // Todos os 6 canais do módulo estão implementados, com análise de sentimento por IA e alerta de
 // review crítico (sino de HumanEscalation + WhatsApp).
-import { PrismaClient, ReviewChannel, ReviewChannelConnector, TenantStatus } from "@prisma/client";
+import { Prisma, PrismaClient, ReviewChannel, TenantStatus } from "@prisma/client";
 import { fetchGoogleMapsReviews } from "./reviewConnectors/googleMaps";
 import { fetchTripAdvisorReviews } from "./reviewConnectors/tripadvisor";
 import { fetchBookingReviews } from "./reviewConnectors/booking";
@@ -13,6 +13,16 @@ import { fetchFacebookCommentsViaGraph, fetchInstagramCommentsViaGraph } from ".
 import { fetchReclameAquiComplaints } from "./reviewConnectors/reclameAqui";
 import { analyzeReviewSentiment, CHANNEL_LABELS, type ReviewSentimentResult } from "./reviewSentiment";
 import { sendUazapiText } from "./uazapiSend";
+import {
+  APIFY_PAUSED_CONNECTOR_MESSAGE,
+  formatBrazilDateTime,
+  isApifyPaused,
+  loadApifyQuotaGate,
+  markApifyResumed,
+  pauseApifyForQuota,
+  type ApifyQuotaGate,
+} from "./apifyQuotaPause";
+import { APIFY_ACCOUNT_BLOCKED_ERROR_TYPE } from "./reviewConnectors/apifyErrors";
 import type { NormalizedReviewInput, ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
@@ -39,6 +49,42 @@ const RUNNING_TIMEOUT_MINUTES = 20;
 // referência que originou este módulo).
 const RETRY_WINDOW_HOURS = 72;
 const ERROR_BACKOFF_MINUTES = 30;
+
+// Só as colunas que o ciclo de sincronização usa — o token OAuth cifrado entra porque decide o
+// caminho do Facebook/Instagram (Graph API x Apify).
+const DUE_CONNECTOR_SELECT = {
+  id: true,
+  tenantId: true,
+  channel: true,
+  externalId: true,
+  lastSyncAt: true,
+  oauthAccessTokenEnc: true,
+  firstErrorAt: true,
+} satisfies Prisma.ReviewChannelConnectorSelect;
+type DueConnector = Prisma.ReviewChannelConnectorGetPayload<{ select: typeof DUE_CONNECTOR_SELECT }>;
+
+// Conectores coletados via Apify (scraping pago) — os que param quando a cota mensal da Apify estoura
+// (ver apifyQuotaPause.ts). Facebook só usa Apify como fallback sem OAuth; Instagram nunca usa.
+// usesApify e NOT_APIFY_WHERE são o MESMO critério (em código e em filtro Prisma) — mudar um exige
+// mudar o outro, e ambos precisam acompanhar o switch de fetchChannelReviews.
+const APIFY_CHANNELS: ReviewChannel[] = [
+  ReviewChannel.GOOGLE_MAPS,
+  ReviewChannel.TRIPADVISOR,
+  ReviewChannel.BOOKING,
+  ReviewChannel.RECLAME_AQUI,
+];
+function usesApify(connector: Pick<DueConnector, "channel" | "oauthAccessTokenEnc">): boolean {
+  return (
+    APIFY_CHANNELS.includes(connector.channel) ||
+    (connector.channel === ReviewChannel.FACEBOOK && !connector.oauthAccessTokenEnc)
+  );
+}
+// Com a Apify pausada, o lote de devidos nem traz conectores Apify — senão eles (sempre com
+// nextSyncAt vencido) ocupariam as vagas de SYNC_BATCH_SIZE à frente dos que ainda funcionam.
+const NOT_APIFY_WHERE: Prisma.ReviewChannelConnectorWhereInput = {
+  channel: { notIn: APIFY_CHANNELS },
+  NOT: { channel: ReviewChannel.FACEBOOK, oauthAccessTokenEnc: null },
+};
 
 let reviewsSyncRunning = false;
 
@@ -86,6 +132,14 @@ async function runReviewsSyncInner(): Promise<void> {
   const now = new Date();
   const retryWindowStart = new Date(now.getTime() - RETRY_WINDOW_HOURS * 60 * 60 * 1000);
 
+  const apifyGate = await loadApifyQuotaGate(prisma);
+  const apifyPaused = isApifyPaused(apifyGate, now);
+  if (apifyPaused) {
+    console.log(
+      `[reviews-sync] cota da Apify estourada — coletas via Apify pausadas até ${formatBrazilDateTime(apifyGate.pausedUntil!)}; só canais sem Apify neste ciclo.`
+    );
+  }
+
   const due = await prisma.reviewChannelConnector.findMany({
     where: {
       externalId: { not: null },
@@ -95,21 +149,30 @@ async function runReviewsSyncInner(): Promise<void> {
           OR: [
             { status: "ACTIVE" },
             { status: "ERROR", firstErrorAt: { gte: retryWindowStart } },
+            // Cota da Apify estourada não é defeito do conector: um conector que saiu da janela de
+            // 72h por causa dela (caso real de 22-26/09/2026, antes desta pausa existir) não pode
+            // ficar parado para sempre — volta a ser devido e é normalizado por pauseApifyForQuota.
+            { status: "ERROR", errorMessage: { contains: APIFY_ACCOUNT_BLOCKED_ERROR_TYPE } },
           ],
         },
+        ...(apifyPaused ? [NOT_APIFY_WHERE] : []),
       ],
       tenant: { status: { notIn: [TenantStatus.SUSPENDED, TenantStatus.CANCELLED] } },
     },
+    select: DUE_CONNECTOR_SELECT,
     take: SYNC_BATCH_SIZE,
     orderBy: { nextSyncAt: "asc" },
   });
 
   for (const connector of due) {
-    await syncConnector(connector);
+    // A cota pode estourar no meio deste ciclo: depois do primeiro 403, os demais conectores Apify do
+    // lote nem são chamados (só o primeiro serve de sonda).
+    if (usesApify(connector) && isApifyPaused(apifyGate)) continue;
+    await syncConnector(connector, apifyGate);
   }
 }
 
-async function fetchChannelReviews(connector: ReviewChannelConnector): Promise<ReviewConnectorResult> {
+async function fetchChannelReviews(connector: DueConnector): Promise<ReviewConnectorResult> {
   switch (connector.channel) {
     case ReviewChannel.GOOGLE_MAPS:
       return fetchGoogleMapsReviews({ placeId: connector.externalId, sinceDate: connector.lastSyncAt });
@@ -224,16 +287,51 @@ async function maybeCreateCriticalReviewAlert(params: {
   }
 }
 
-async function syncConnector(connector: ReviewChannelConnector): Promise<void> {
+// Cota mensal da Apify estourada: problema da conta da plataforma, não do conector nem do hotel. Pausa
+// todas as coletas via Apify (e avisa a plataforma, uma vez por episódio) e NÃO conta como erro do
+// conector — zera errorCount/firstErrorAt, senão a pausa, que pode durar dias, estouraria a janela de
+// retry de 72h e o conector ficaria parado para sempre mesmo depois da cota voltar.
+async function handleApifyQuotaExceeded(
+  connector: DueConnector,
+  jobId: string,
+  errorMessage: string,
+  apifyGate: ApifyQuotaGate
+): Promise<void> {
+  await pauseApifyForQuota(prisma, apifyGate, { tenantId: connector.tenantId, channel: connector.channel, errorMessage });
+
+  await prisma.reviewSyncJob
+    .update({ where: { id: jobId }, data: { status: "failed", finishedAt: new Date(), errorMessage: errorMessage.slice(0, 500) } })
+    .catch(() => {});
+
+  await prisma.reviewChannelConnector.update({
+    where: { id: connector.id },
+    select: { id: true },
+    data: {
+      status: "ACTIVE",
+      errorMessage: APIFY_PAUSED_CONNECTOR_MESSAGE,
+      errorCount: 0,
+      firstErrorAt: null,
+      nextSyncAt: apifyGate.pausedUntil,
+    },
+  });
+}
+
+async function syncConnector(connector: DueConnector, apifyGate: ApifyQuotaGate): Promise<void> {
   await prisma.reviewChannelConnector.update({ where: { id: connector.id }, data: { status: "RUNNING" } });
 
   const job = await prisma.reviewSyncJob.create({
     data: { connectorId: connector.id, tenantId: connector.tenantId, status: "running" },
+    select: { id: true },
   });
 
   try {
     const result = await fetchChannelReviews(connector);
+    if (result.apifyQuotaExceeded && result.errorMessage) {
+      await handleApifyQuotaExceeded(connector, job.id, result.errorMessage, apifyGate);
+      return;
+    }
     if (result.errorMessage) throw new Error(result.errorMessage);
+    if (usesApify(connector)) await markApifyResumed(prisma, apifyGate);
 
     const recentReviews = filterRecentReviews(result.reviews);
 
