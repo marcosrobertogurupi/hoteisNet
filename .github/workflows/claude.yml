@@ -1,0 +1,65 @@
+name: Claude Code
+
+# Tarefas de código pedidas pelo WhatsApp (assistente pessoal) ou por comentário "@claude" numa issue.
+# O Claude trabalha numa branch própria e nunca faz merge — o PR e o merge na master continuam
+# manuais. Ao terminar, avisa o assistente pessoal, que manda o resultado no WhatsApp do dono.
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude:
+    # Repositório público: qualquer pessoa pode abrir issue/comentar. Só o dono aciona o Claude —
+    # senão um estranho poderia mandar o Claude alterar código e gastar a assinatura.
+    if: |
+      github.actor == 'marcosrobertogurupi' && (
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))) ||
+        (github.event_name == 'issue_comment' && !github.event.issue.pull_request && contains(github.event.comment.body, '@claude'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --max-turns 80
+            --append-system-prompt "Responda sempre em português. Siga à risca o CLAUDE.md do repositório (regras de segurança multi-tenant e de performance/egress). Trabalhe só na branch criada para esta tarefa: nunca faça push, merge ou rebase na master. Se o pedido for ambíguo ou arriscado (schema, dinheiro, check-in/check-out, reservas), explique as dúvidas no comentário em vez de adivinhar. Termine com um resumo curto e em linguagem simples do que mudou e de como testar."
+
+      - name: Avisar assistente pessoal
+        if: always()
+        env:
+          NOTIFY_URL: ${{ secrets.ASSISTENTE_NOTIFY_URL }}
+          NOTIFY_SECRET: ${{ secrets.ASSISTENTE_NOTIFY_SECRET }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          BRANCH: ${{ steps.claude.outputs.branch_name }}
+          CONCLUSION: ${{ steps.claude.outputs.conclusion || job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          if [ -z "$NOTIFY_URL" ] || [ -z "$NOTIFY_SECRET" ]; then echo "Aviso do assistente não configurado"; exit 0; fi
+          COMPARE_URL=""
+          if [ -n "$BRANCH" ]; then COMPARE_URL="$REPO_URL/compare/master...$BRANCH?expand=1"; fi
+          jq -n \
+            --arg issue_number "$ISSUE_NUMBER" --arg issue_url "$ISSUE_URL" --arg issue_title "$ISSUE_TITLE" \
+            --arg branch "$BRANCH" --arg conclusion "$CONCLUSION" --arg run_url "$RUN_URL" --arg compare_url "$COMPARE_URL" \
+            '{issue_number: ($issue_number|tonumber), issue_url: $issue_url, issue_title: $issue_title, branch: $branch, conclusion: $conclusion, run_url: $run_url, compare_url: $compare_url}' \
+          | curl -sS --max-time 20 -X POST "$NOTIFY_URL" -H "Content-Type: application/json" -H "x-webhook-secret: $NOTIFY_SECRET" --data-binary @- || true
