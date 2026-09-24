@@ -83,7 +83,7 @@ model AiBillingConfig {
   markupPct     Int      @default(100)
   updatedByName String?
   // @default(now()) espelha o DEFAULT do banco — o seed da migration 20260909150000 faz INSERT cru
-  // sem updatedAt; sem o default declarado aqui, um `db push` o removeria (ver 20260924180000).
+  // sem updatedAt; sem o default declarado aqui, um `db push` o removeria (ver 20260924200946).
   updatedAt     DateTime @default(now()) @updatedAt
 
   @@map("ai_billing_config")
@@ -472,7 +472,7 @@ model AiModelDefault {
   feature     String   @id
   model       String
   // @default(now()) espelha o DEFAULT do banco — o seed da migration 20260909100000 faz INSERT cru
-  // sem updatedAt (ver 20260924180000).
+  // sem updatedAt (ver 20260924200946).
   updatedAt   DateTime @default(now()) @updatedAt
   updatedById String?
 
@@ -1429,7 +1429,7 @@ model Reservation {
   // lib/reservationHelpers). @unique aqui para o Prisma manter o índice (senão um `db push`
   // futuro o removeria) — a deduplicação do histórico rodou na migration
   // 20260910120000_reservation_number_dedup_unique.sql. Aquela migration criou o índice PARCIAL
-  // (`WHERE ... IS NOT NULL`), que o Prisma não enxerga; a 20260924180000 o trocou por um índice
+  // (`WHERE ... IS NOT NULL`), que o Prisma não enxerga; a 20260924200946 o trocou por um índice
   // único comum com o mesmo nome (`reservations_reservationNumber_key`), que continua aceitando
   // vários NULL (padrão do Postgres). Nunca recriar este índice como parcial.
   reservationNumber      String?           @unique
