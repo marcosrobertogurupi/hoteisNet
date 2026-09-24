@@ -55,11 +55,19 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
+          # A action esconde a saída do Claude por segurança; em caso de falha, extrai só o motivo
+          # (ex: limite de uso, token inválido) do resultado final para o log e para o WhatsApp.
+          ERRO=""
+          EXEC_FILE="$RUNNER_TEMP/claude-execution-output.json"
+          if [ "$CONCLUSION" != "success" ] && [ -f "$EXEC_FILE" ]; then
+            ERRO=$(jq -r '[.[] | select(.type == "result")] | last | "\(.api_error_status // "")|\(.result // "")"' "$EXEC_FILE" 2>/dev/null | tr '\n' ' ' | head -c 300 || true)
+            echo "Motivo da falha: $ERRO"
+          fi
           if [ -z "$NOTIFY_URL" ] || [ -z "$NOTIFY_SECRET" ]; then echo "Aviso do assistente não configurado"; exit 0; fi
           COMPARE_URL=""
           if [ -n "$BRANCH" ]; then COMPARE_URL="$REPO_URL/compare/master...$BRANCH?expand=1"; fi
           jq -n \
             --arg issue_number "$ISSUE_NUMBER" --arg issue_url "$ISSUE_URL" --arg issue_title "$ISSUE_TITLE" \
-            --arg branch "$BRANCH" --arg conclusion "$CONCLUSION" --arg run_url "$RUN_URL" --arg compare_url "$COMPARE_URL" \
-            '{issue_number: ($issue_number|tonumber), issue_url: $issue_url, issue_title: $issue_title, branch: $branch, conclusion: $conclusion, run_url: $run_url, compare_url: $compare_url}' \
+            --arg branch "$BRANCH" --arg conclusion "$CONCLUSION" --arg run_url "$RUN_URL" --arg compare_url "$COMPARE_URL" --arg erro "$ERRO" \
+            '{issue_number: ($issue_number|tonumber), issue_url: $issue_url, issue_title: $issue_title, branch: $branch, conclusion: $conclusion, run_url: $run_url, compare_url: $compare_url, erro: $erro}' \
           | curl -sS --max-time 20 -X POST "$NOTIFY_URL" -H "Content-Type: application/json" -H "x-webhook-secret: $NOTIFY_SECRET" --data-binary @- || true
