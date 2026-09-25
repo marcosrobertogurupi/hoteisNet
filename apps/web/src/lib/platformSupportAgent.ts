@@ -102,6 +102,7 @@ export async function answerSupportTicket(ticketId: string): Promise<SupportAgen
   const modelId = await resolveAiModel(AI_FEATURES.PLATFORM_SUPPORT, ticket.tenantId);
 
   try {
+    const startedAt = Date.now();
     const { object, usage } = await generateObject({
       model: google(modelId),
       schema: answerSchema,
@@ -113,6 +114,7 @@ export async function answerSupportTicket(ticketId: string): Promise<SupportAgen
       feature: AI_FEATURES.PLATFORM_SUPPORT,
       model: modelId,
       ...readUsage(usage),
+      durationMs: Date.now() - startedAt,
     });
 
     const handled = !object.needsHuman && object.confidence >= CONFIDENCE_THRESHOLD;

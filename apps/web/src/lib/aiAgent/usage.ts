@@ -57,6 +57,8 @@ export async function logAiUsage(params: {
   tokensCachedInput?: number;
   tokensReasoning?: number;
   stepCount?: number;
+  // Duração da chamada ao provedor (ms), medida por quem chamou. Opcional.
+  durationMs?: number;
 }): Promise<void> {
   const tokensCachedInput = Math.max(0, params.tokensCachedInput ?? 0);
   const tokensReasoning = Math.max(0, params.tokensReasoning ?? 0);
@@ -76,6 +78,7 @@ export async function logAiUsage(params: {
       tokensOutput: params.tokensOutput,
       tokensReasoning,
       stepCount: Math.max(1, params.stepCount ?? 1),
+      durationMs: params.durationMs != null ? Math.max(0, Math.round(params.durationMs)) : null,
       totalCostUsd,
     },
   });

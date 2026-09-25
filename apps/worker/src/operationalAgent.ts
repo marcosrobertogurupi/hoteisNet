@@ -6,6 +6,7 @@ import {
   readGeminiUsage,
   logWorkerAiUsage,
   AI_MODEL_FALLBACK,
+  geminiThinkingConfig,
   type GeminiUsageMetadata,
 } from "./aiUsage";
 import { stayOccupiedUntil, maintenanceBlockedRoomIds } from "./stayOccupancy";
@@ -17,7 +18,7 @@ const prisma = new PrismaClient();
 // com ERR_REQUIRE_ESM. O agente de atendimento em apps/web usa o SDK normalmente porque o bundler
 // do Next.js resolve ESM sem problema; aqui, para uma única chamada simples de geração de texto,
 // é mais robusto falar direto com a API do que lutar contra o CJS/ESM.
-type GeminiResult<T> = { data: T; usage: GeminiUsageMetadata | undefined };
+type GeminiResult<T> = { data: T; usage: GeminiUsageMetadata | undefined; durationMs: number };
 
 async function generateSummaryText(prompt: string, model: string): Promise<GeminiResult<string>> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
@@ -28,12 +29,17 @@ async function generateSummaryText(prompt: string, model: string): Promise<Gemin
   // (ver apps/web/src/lib/aiAgent/agent.ts). O id do modelo agora é resolvido por recurso/assinante
   // (ver ./aiUsage). AbortSignal.timeout aqui é defesa adicional: sem ele, uma trava do provedor
   // prende o worker (cron a cada 15min) até o fetch nunca resolver.
+  const thinkingConfig = geminiThinkingConfig(model);
+  const startedAt = Date.now();
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        ...(thinkingConfig ? { generationConfig: { thinkingConfig } } : {}),
+      }),
       signal: AbortSignal.timeout(45_000),
     }
   );
@@ -42,7 +48,7 @@ async function generateSummaryText(prompt: string, model: string): Promise<Gemin
   const json: any = await response.json();
   const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
   if (!text) throw new Error("Gemini não retornou texto.");
-  return { data: text, usage: json?.usageMetadata };
+  return { data: text, usage: json?.usageMetadata, durationMs: Date.now() - startedAt };
 }
 
 // Versão estruturada de generateSummaryText: pede JSON com um responseSchema fixo. Mesma API REST
@@ -56,6 +62,8 @@ async function generateStructured<T>(
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY não configurada.");
 
+  const thinkingConfig = geminiThinkingConfig(model);
+  const startedAt = Date.now();
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
@@ -63,7 +71,7 @@ async function generateStructured<T>(
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", responseSchema },
+        generationConfig: { responseMimeType: "application/json", responseSchema, ...(thinkingConfig ? { thinkingConfig } : {}) },
       }),
       signal: AbortSignal.timeout(45_000),
     }
@@ -72,7 +80,7 @@ async function generateStructured<T>(
 
   const json: any = await response.json();
   const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
-  return { data: JSON.parse(text) as T, usage: json?.usageMetadata };
+  return { data: JSON.parse(text) as T, usage: json?.usageMetadata, durationMs: Date.now() - startedAt };
 }
 
 // O envio por WhatsApp (instância uazapi do tenant + fallback via env + verificação do corpo da
@@ -536,12 +544,13 @@ async function composeAlertMessage(
     const prompt = hasIssues
       ? `Você é o agente operacional do sistema do hotel "${hotelName}". Encontrou os seguintes problemas novos que precisam de atenção da equipe:\n\n${bulletList}${actionsList}\n\nEscreva um resumo curto e direto em português do Brasil para enviar por WhatsApp à recepção/gerência, listando os pontos de forma clara. Se houver ações já tomadas automaticamente, mencione isso brevemente. Não use markdown. Não mencione que você é uma IA.${personaLine}`
       : `Você é o agente operacional do sistema do hotel "${hotelName}". Você tomou automaticamente as seguintes ações e precisa avisar a recepção/gerência:\n${autoActionNotes.map((n) => `- ${n}`).join("\n")}\n\nEscreva um aviso curto e direto em português do Brasil para WhatsApp. Não use markdown. Não mencione que você é uma IA.${personaLine}`;
-    const { data: text, usage } = await generateSummaryText(prompt, model);
+    const { data: text, usage, durationMs } = await generateSummaryText(prompt, model);
     await logWorkerAiUsage(prisma, {
       tenantId,
       feature: WORKER_AI_FEATURES.OPERATIONAL_MONITORING,
       model,
       ...readGeminiUsage(usage),
+      durationMs,
     });
     return text.trim();
   } catch {
@@ -814,6 +823,7 @@ async function runKnowledgeDrift(
       feature: WORKER_AI_FEATURES.OPERATIONAL_KNOWLEDGE_DRIFT,
       model: driftModel,
       ...readGeminiUsage(res.usage),
+      durationMs: res.durationMs,
     });
   } catch (err: any) {
     console.error(`[operational-agent] verificação de valores da base falhou — tenant=${tenantId}:`, err?.message || err);

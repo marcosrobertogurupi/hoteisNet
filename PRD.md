@@ -335,6 +335,14 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   de Tokens e Bloqueio por Assinante"), restrita a `SUPER_ADMIN`.
 * **`AIUsageLog` ✅:** grava tokens/custo real a cada chamada de qualquer um dos dois agentes; cota
   vem de `SaaSPlan.aiTokenQuota`, sobrescrita por `AIAgentSetting.tokenQuotaOverride` quando definido.
+  Desde 25/09/2026 grava também `durationMs` (duração da chamada ao provedor, ida e volta).
+* **Thinking do Gemini desligado onde não precisa ✅ (25/09/2026, "Fase 0" do estudo do Jev):**
+  conferência da Base de Conhecimento, análise de reviews, alertas operacionais e resumo da conversa
+  chamam o Gemini com `thinkingBudget: 0` (2.5-flash) / mínimo 128 (2.5-pro) — helper
+  `geminiThinkingConfig` em `apps/worker/src/aiUsage.ts` e `apps/web/src/lib/aiAgent/thinking.ts`.
+  Medição mostrou 84–99% da saída faturada dessas funções como thinking; A/B real: 4,1 s → 1,5 s e
+  −69% de custo com a mesma classificação. O agente de atendimento (ToolLoopAgent) não muda — decide
+  reservas. Próximas fases: Jev (TypeSafe via OpenRouter) para decisões/classificação.
 * **Ressalva:** `app/principal/support/page.tsx` (Central de Ajuda voltada ao hóspede/staff, distinta dos
   dois agentes acima) continua sendo um **mock de chat/ticket** com respostas de "IA" fabricadas por
   `setTimeout` — não foi tocada nesta feature. Os modelos `SupportTicket`/`TicketMessage` também

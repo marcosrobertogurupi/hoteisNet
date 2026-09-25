@@ -28,6 +28,20 @@ export interface GeminiUsageMetadata {
   thoughtsTokenCount?: number;
 }
 
+// Configuração de "thinking" para as chamadas do worker. Medição de 30 dias (25/09/2026) mostrou
+// que 84–99% da saída faturada destas funcionalidades era thinking do gemini-2.5-flash — tarefas de
+// classificação/redação curta que não precisam dele. Por família:
+//  - 2.5-flash / 2.5-flash-lite: thinkingBudget 0 desliga;
+//  - 2.5-pro: não pode desligar — usa o mínimo aceito (128);
+//  - demais (2.0/1.5 sem thinking; 3.x usa thinkingLevel, ainda não validado aqui): não envia nada,
+//    para nunca quebrar a chamada com um campo que o modelo rejeita.
+// Espelhado em apps/web/src/lib/aiAgent/thinking.ts — mude os dois juntos.
+export function geminiThinkingConfig(model: string): { thinkingBudget: number } | undefined {
+  if (/^gemini-2\.5-flash/.test(model)) return { thinkingBudget: 0 };
+  if (/^gemini-2\.5-pro/.test(model)) return { thinkingBudget: 128 };
+  return undefined;
+}
+
 export function readGeminiUsage(meta: GeminiUsageMetadata | undefined | null) {
   const promptTokens = Math.max(0, Math.round(meta?.promptTokenCount ?? 0));
   const cached = Math.max(0, Math.round(meta?.cachedContentTokenCount ?? 0));
@@ -91,6 +105,7 @@ export async function logWorkerAiUsage(
     tokensOutput: number;
     tokensCachedInput?: number;
     tokensReasoning?: number;
+    durationMs?: number;
   }
 ): Promise<void> {
   const tokensCachedInput = Math.max(0, params.tokensCachedInput ?? 0);
@@ -113,6 +128,7 @@ export async function logWorkerAiUsage(
         tokensOutput: params.tokensOutput,
         tokensReasoning,
         stepCount: 1,
+        durationMs: params.durationMs != null ? Math.max(0, Math.round(params.durationMs)) : null,
         totalCostUsd,
       },
     });
