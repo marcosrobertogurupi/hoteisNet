@@ -6,6 +6,9 @@ import { hasAiQuotaAvailable, logAiUsage } from "@/lib/aiAgent/usage";
 import { resolveAiModel } from "@/lib/aiAgent/modelResolver";
 import { AI_FEATURES } from "@/lib/aiAgent/features";
 import { readUsage } from "@/lib/aiAgent/readUsage";
+import { runJevDecision, recordJevObservedOutcome } from "@/lib/jev/decisions";
+import { JEV_FEATURES } from "@/lib/jev/features";
+import type { JevAnswer, JevQuestion } from "@/lib/jev/client";
 
 // Agente de IA de SUPORTE AO ASSINANTE (a equipe do hotel pedindo ajuda ao Hoteis.Net). Gemini
 // via @ai-sdk/google (mesmo provider/modelo do agente de atendimento ao hóspede — não usar
@@ -18,6 +21,45 @@ import { readUsage } from "@/lib/aiAgent/readUsage";
 
 const CONFIDENCE_THRESHOLD = 0.7;
 const MAX_MESSAGES = 12;
+
+// Jev — conferência da resposta antes de publicar (limites iniciais; recalibrar pelo modo observação).
+const JEV_SUPPORTED_MIN = 0.7;
+const JEV_RESOLVES_MIN = 0.7;
+// O Jev aceita até 32k tokens de contexto: limita o acervo enviado (~15k tokens).
+const JEV_DOCS_MAX_CHARS = 60_000;
+
+export const SUPPORT_CHECK_QUESTIONS: Record<string, JevQuestion> = {
+  apoiada: {
+    type: "noul",
+    instructions:
+      "Tudo o que a `resposta_proposta` afirma (procedimentos, valores, prazos, telas) está apoiado nos `artigos` ou nos `dados_da_conta`?",
+    criteria: {
+      true: "Cada afirmação da resposta aparece nos artigos ou nos dados da conta",
+      false: "A resposta afirma algo que não está nos artigos nem nos dados da conta (inventado ou suposto)",
+    },
+  },
+  resolve: {
+    type: "noul",
+    instructions: "A `resposta_proposta` responde de fato ao que a equipe do hotel perguntou na `conversa`?",
+  },
+};
+
+export function jevApprovesAnswer(answers: Record<string, JevAnswer>): boolean {
+  const a = answers.apoiada;
+  const r = answers.resolve;
+  return a?.type === "noul" && r?.type === "noul" && a.noul >= JEV_SUPPORTED_MIN && r.noul >= JEV_RESOLVES_MIN;
+}
+
+function docsForJev(docs: { title: string; category: string; content: string }[]) {
+  const out: { titulo: string; conteudo: string }[] = [];
+  let total = 0;
+  for (const d of docs) {
+    if (total + d.content.length > JEV_DOCS_MAX_CHARS) break;
+    out.push({ titulo: `${d.title} [${d.category}]`, conteudo: d.content });
+    total += d.content.length;
+  }
+  return out;
+}
 
 const answerSchema = z.object({
   answer: z
@@ -79,15 +121,18 @@ export async function answerSupportTicket(ticketId: string): Promise<SupportAgen
     .map((m) => `${m.senderType === "TENANT" ? "HOTEL" : m.senderType === "PLATFORM" ? "SUPORTE" : "IA"} (${m.senderName}): ${m.content}`)
     .join("\n");
 
+  const accountLines = [
+    `- Plano: ${sub?.plan?.name ?? "—"} (${sub?.cycle ?? "—"})`,
+    `- Situação: ${ticket.tenant.status}`,
+    `- Acesso válido até: ${ticket.tenant.accessValidUntil ? ticket.tenant.accessValidUntil.toISOString().slice(0, 10) : "—"}`,
+    `- Próxima cobrança: ${sub?.nextBilling ? sub.nextBilling.toISOString().slice(0, 10) : "—"}`,
+  ];
   const prompt = [
     `Você é o assistente de suporte do Hoteis.Net (o SaaS de gestão hoteleira). Está atendendo a equipe do hotel "${ticket.tenant.tradeName || ticket.tenant.name}".`,
     `Responda SOMENTE com base nos ARTIGOS abaixo e nos DADOS DA CONTA. Se a resposta não estiver clara neles, marque needsHuman=true e confidence baixa — nunca invente procedimento, valor ou prazo.`,
     ``,
     `DADOS DA CONTA:`,
-    `- Plano: ${sub?.plan?.name ?? "—"} (${sub?.cycle ?? "—"})`,
-    `- Situação: ${ticket.tenant.status}`,
-    `- Acesso válido até: ${ticket.tenant.accessValidUntil ? ticket.tenant.accessValidUntil.toISOString().slice(0, 10) : "—"}`,
-    `- Próxima cobrança: ${sub?.nextBilling ? sub.nextBilling.toISOString().slice(0, 10) : "—"}`,
+    ...accountLines,
     ``,
     `ARTIGOS DA BASE DE CONHECIMENTO (${docs.length}):`,
     docs.length ? docs.map((d) => `### ${d.title} [${d.category}]\n${d.content}`).join("\n\n") : "(nenhum artigo cadastrado ainda)",
@@ -117,7 +162,38 @@ export async function answerSupportTicket(ticketId: string): Promise<SupportAgen
       durationMs: Date.now() - startedAt,
     });
 
-    const handled = !object.needsHuman && object.confidence >= CONFIDENCE_THRESHOLD;
+    const llmHandled = !object.needsHuman && object.confidence >= CONFIDENCE_THRESHOLD;
+    let handled = llmHandled;
+
+    // Conferência pelo Jev (lib/jev): a "confiança" acima é o próprio Gemini se avaliando. O Jev
+    // checa, de fora, se a resposta está apoiada nos artigos/dados da conta e se resolve o chamado.
+    // ACTIVE: publicar exige o Jev aprovar (e o Gemini não ter pedido humano). SHADOW: só registra.
+    const check = await runJevDecision({
+      tenantId: ticket.tenantId,
+      feature: JEV_FEATURES.SUPPORT_ANSWER_CHECK,
+      state: {
+        artigos: docsForJev(docs),
+        dados_da_conta: accountLines.join("\n"),
+        chamado: { assunto: ticket.subject, categoria: ticket.category },
+        conversa: conv.slice(-6000),
+        resposta_proposta: object.answer,
+      },
+      questions: SUPPORT_CHECK_QUESTIONS,
+      subjectRef: ticket.id,
+      decide: (a) => (jevApprovesAnswer(a) ? "publicar" : "revisao_humana"),
+      timeoutMs: 5000,
+    });
+    if (check?.answers) {
+      if (check.mode === "ACTIVE") handled = !object.needsHuman && jevApprovesAnswer(check.answers);
+      await recordJevObservedOutcome(
+        ticket.tenantId,
+        check.logId,
+        check.mode === "ACTIVE"
+          ? handled ? "published" : "held_for_human"
+          : llmHandled ? "llm_would_publish" : "llm_would_hold"
+      );
+    }
+
     return { answer: object.answer, confidence: object.confidence, needsHuman: object.needsHuman, handled };
   } catch (err) {
     console.error("[platformSupportAgent] falha:", (err as Error)?.message || err);

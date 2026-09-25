@@ -377,6 +377,14 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   `applyActiveTriageDecision` em `lib/jev/whatsappTriage.ts`. Teste real com 11 casos difíceis: 10
   certos, o erro foi para o lado seguro (pedido indireto de atendente ficou com o agente). O modo
   continua em observação até haver dados reais para calibrar; o admin master liga o ACTIVE no painel.
+* **Jev — Fase 4 (suporte ao assinante + sugestões repetidas) ✅ (25/09/2026):**
+  **Suporte** (`jev_support_answer_check`, `lib/platformSupportAgent.ts`): antes de publicar a resposta
+  automática de um chamado, o Jev confere se tudo o que ela afirma está nos artigos/dados da conta
+  ("apoiada" ≥ 0,7) e se responde ao que foi perguntado ("resolve" ≥ 0,7); em ACTIVE isso substitui a
+  autoavaliação do Gemini (que ainda pode pedir humano). **Sugestões da Base** (`jev_kb_gap_dedupe`,
+  `recordAgentKnowledgeGap` em `lib/knowledgeBase.ts`): antes de criar outra sugestão pendente, o Jev
+  escolhe entre as até 50 pendentes (ou "nenhuma") a que é a mesma dúvida; em ACTIVE, com confiança
+  ≥ 0,8, não cria a repetida. Teste real: 7/7 (resposta inventada barrada com 0,01).
 * **Ressalva:** `app/principal/support/page.tsx` (Central de Ajuda voltada ao hóspede/staff, distinta dos
   dois agentes acima) continua sendo um **mock de chat/ticket** com respostas de "IA" fabricadas por
   `setTimeout` — não foi tocada nesta feature. Os modelos `SupportTicket`/`TicketMessage` também

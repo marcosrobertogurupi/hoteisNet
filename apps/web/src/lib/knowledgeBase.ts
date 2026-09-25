@@ -11,6 +11,8 @@ import { prisma } from "@/lib/prisma";
 import type { KnowledgeChangeSource } from "@prisma/client";
 import { KNOWLEDGE_TOPIC_SEEDS } from "@/lib/knowledgeTopics";
 import { KNOWLEDGE_TOPIC_LABEL } from "@/lib/knowledgeTopicLabels";
+import { runJevDecision, recordJevObservedOutcome, getJevSetting } from "@/lib/jev/decisions";
+import { JEV_FEATURES } from "@/lib/jev/features";
 
 // Cria os 12 tópicos que ainda não existem para o tenant, com conteúdo VAZIO. O texto-guia
 // ("o que preencher aqui") vive só na tela (placeholder do campo, ver KNOWLEDGE_TOPIC_GUIDE_BY_KEY)
@@ -52,6 +54,11 @@ export async function recordAgentKnowledgeGap(params: {
   });
   if (existing) return;
 
+  // Dedupe por SENTIDO (Jev, lib/jev): "que horas é o café?" e "qual o horário do café da manhã?"
+  // são a mesma sugestão. ACTIVE: não cria outra se o Jev apontar, com certeza, uma pendente
+  // equivalente. SHADOW: só registra o que faria. Falha/OFF: cria como antes.
+  if (await isDuplicateOfPendingGap(params.tenantId, question)) return;
+
   await prisma.supportKnowledgeBase.create({
     data: {
       tenantId: params.tenantId,
@@ -65,6 +72,55 @@ export async function recordAgentKnowledgeGap(params: {
       resolution: "",
     },
   });
+}
+
+const GAP_DEDUPE_MAX_PENDING = 50;
+const GAP_DEDUPE_MIN_CONFIDENCE = 0.8;
+
+async function isDuplicateOfPendingGap(tenantId: string, question: string): Promise<boolean> {
+  // Modo antes da consulta: com o recurso desligado não lê as pendentes à toa (egress).
+  if ((await getJevSetting(JEV_FEATURES.KB_GAP_DEDUPE)).mode === "OFF") return false;
+  const pending = await prisma.supportKnowledgeBase.findMany({
+    where: { tenantId, status: "PENDING_REVIEW", sourceType: "ESCALATION_SUGGESTED" },
+    orderBy: { createdAt: "desc" },
+    take: GAP_DEDUPE_MAX_PENDING,
+    select: { question: true },
+  });
+  if (pending.length === 0) return false;
+
+  const criteria: Record<string, string> = { nenhuma: "Nenhuma das pendentes é a mesma dúvida (é um assunto novo)" };
+  pending.forEach((p, i) => {
+    criteria[`pendente_${i + 1}`] = p.question.slice(0, 300);
+  });
+
+  const result = await runJevDecision({
+    tenantId,
+    feature: JEV_FEATURES.KB_GAP_DEDUPE,
+    state: { pergunta_nova: question },
+    questions: {
+      mesma_duvida: {
+        type: "choice",
+        instructions:
+          "A `pergunta_nova` do hóspede é a mesma dúvida (mesmo assunto, mesma informação pedida) de qual pergunta já pendente? Perguntas sobre assuntos diferentes não contam.",
+        criteria,
+      },
+    },
+    decide: (a) =>
+      a.mesma_duvida?.type === "choice" &&
+      a.mesma_duvida.choice !== "nenhuma" &&
+      (a.mesma_duvida.confidence ?? 0) >= GAP_DEDUPE_MIN_CONFIDENCE
+        ? "duplicada"
+        : "nova",
+    timeoutMs: 3000,
+  });
+  if (!result?.answers) return false;
+
+  const a = result.answers.mesma_duvida;
+  const duplicate =
+    a?.type === "choice" && a.choice !== "nenhuma" && (a.confidence ?? 0) >= GAP_DEDUPE_MIN_CONFIDENCE;
+  const skip = result.mode === "ACTIVE" && duplicate;
+  await recordJevObservedOutcome(tenantId, result.logId, skip ? "not_created" : "created");
+  return skip;
 }
 
 // Registra uma alteração de conteúdo no histórico append-only (KnowledgeRevision). Toda edição de

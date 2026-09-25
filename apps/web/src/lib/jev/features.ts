@@ -11,6 +11,8 @@ export const JEV_FEATURES = {
   WHATSAPP_TRIAGE: "jev_whatsapp_triage",
   REVIEW_CLASSIFICATION: "jev_review_classification",
   KNOWLEDGE_DRIFT_PRECHECK: "jev_knowledge_drift_precheck",
+  SUPPORT_ANSWER_CHECK: "jev_support_answer_check",
+  KB_GAP_DEDUPE: "jev_kb_gap_dedupe",
 } as const;
 
 export type JevFeature = (typeof JEV_FEATURES)[keyof typeof JEV_FEATURES];
@@ -19,6 +21,8 @@ export const JEV_FEATURE_DEFS: Record<JevFeature, { activeAvailable: boolean }> 
   [JEV_FEATURES.WHATSAPP_TRIAGE]: { activeAvailable: true },
   [JEV_FEATURES.REVIEW_CLASSIFICATION]: { activeAvailable: true },
   [JEV_FEATURES.KNOWLEDGE_DRIFT_PRECHECK]: { activeAvailable: true },
+  [JEV_FEATURES.SUPPORT_ANSWER_CHECK]: { activeAvailable: true },
+  [JEV_FEATURES.KB_GAP_DEDUPE]: { activeAvailable: true },
 };
 
 export const JEV_FEATURE_LIST = Object.keys(JEV_FEATURE_DEFS) as JevFeature[];
