@@ -16,7 +16,7 @@ export const JEV_FEATURES = {
 export type JevFeature = (typeof JEV_FEATURES)[keyof typeof JEV_FEATURES];
 
 export const JEV_FEATURE_DEFS: Record<JevFeature, { activeAvailable: boolean }> = {
-  [JEV_FEATURES.WHATSAPP_TRIAGE]: { activeAvailable: false },
+  [JEV_FEATURES.WHATSAPP_TRIAGE]: { activeAvailable: true },
   [JEV_FEATURES.REVIEW_CLASSIFICATION]: { activeAvailable: true },
   [JEV_FEATURES.KNOWLEDGE_DRIFT_PRECHECK]: { activeAvailable: true },
 };

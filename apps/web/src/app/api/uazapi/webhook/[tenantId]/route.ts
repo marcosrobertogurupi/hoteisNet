@@ -32,8 +32,9 @@ import { resolveAiModel } from "@/lib/aiAgent/modelResolver";
 import { AI_FEATURES } from "@/lib/aiAgent/features";
 import { readUsage } from "@/lib/aiAgent/readUsage";
 import { recordAgentKnowledgeGap } from "@/lib/knowledgeBase";
-import { runWhatsappTriage } from "@/lib/jev/whatsappTriage";
-import { recordJevObservedOutcome } from "@/lib/jev/decisions";
+import { runWhatsappTriage, decideWhatsappTriage, applyActiveTriageDecision } from "@/lib/jev/whatsappTriage";
+import { recordJevObservedOutcome, getJevSetting } from "@/lib/jev/decisions";
+import { JEV_FEATURES } from "@/lib/jev/features";
 
 type AgentMessageContent = string | Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: string }>;
 
@@ -128,7 +129,30 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
       resolveAiModel(AI_FEATURES.WHATSAPP_GUEST_SUPPORT_SUMMARY, tenantId),
     ]);
 
-    const { memoryPrompt, rawWindowMessageIds } = await prepareConversationContext(tenantId, phone, summaryModelId);
+    const contextPromise = prepareConversationContext(tenantId, phone, summaryModelId);
+
+    // Triagem ATIVA (Fase 3): espera o Jev em paralelo com a preparação do contexto (latência =
+    // o maior dos dois) e, se ele decidiu "escalar" ou "despedida" com segurança, resolve com uma
+    // resposta fixa cordial e o agente nem roda. Qualquer dúvida/falha → agente normal.
+    if (triagePromise && (await getJevSetting(JEV_FEATURES.WHATSAPP_TRIAGE)).mode === "ACTIVE") {
+      const triage = await triagePromise;
+      if (triage?.mode === "ACTIVE" && triage.answers) {
+        const outcome = await applyActiveTriageDecision({
+          tenantId,
+          phone,
+          decision: decideWhatsappTriage(triage.answers),
+          tonePreset: setting.tonePreset,
+          lastOutText: prevMsg?.direction === "OUT" ? prevMsg.content : null,
+        });
+        if (outcome) {
+          await recordJevObservedOutcome(tenantId, triage.logId, outcome);
+          await contextPromise.catch(() => null); // deixa o refold (se houve) terminar antes de sair
+          return;
+        }
+      }
+    }
+
+    const { memoryPrompt, rawWindowMessageIds } = await contextPromise;
     const rawWindowIdSet = new Set(rawWindowMessageIds);
 
     // Inclui mídia recebida do hóspede (IN) além de texto — mídia enviada pelo próprio hotel (OUT,

@@ -367,6 +367,16 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   em ACTIVE, se nenhum fato parece divergente (< 0,5) o Gemini nem é chamado, e toda correção automática
   só é aplicada se o Jev confirmar que o trecho é mesmo aquele dado (≥ 0,5; senão vira aviso). Os dois
   recursos aceitam ACTIVE no painel; entram em observação para calibrar.
+* **Jev — Fase 3 (triagem ativa do WhatsApp) ✅ (25/09/2026):** com `jev_whatsapp_triage` em ACTIVE, o
+  webhook espera o Jev em paralelo com a preparação do contexto e, se a decisão for **"escalar"**
+  (pedido explícito de atendente, ≥ 0,9) cria a `HumanEscalation` e manda um aviso fixo; se for
+  **"despedida"** (nada pendente, ≥ 0,85 de confiança) manda uma despedida curta e cordial no tom
+  configurado pelo hotel (`AIAgentSetting.tonePreset`) — em ambos o agente Gemini nem roda. Não repete
+  despedida se a nossa última mensagem já foi uma (evita pingue-pongue de "👍"). Intenções de
+  reserva/consulta/cancelamento sempre vão ao agente; falha/dúvida do Jev = agente normal. Código:
+  `applyActiveTriageDecision` em `lib/jev/whatsappTriage.ts`. Teste real com 11 casos difíceis: 10
+  certos, o erro foi para o lado seguro (pedido indireto de atendente ficou com o agente). O modo
+  continua em observação até haver dados reais para calibrar; o admin master liga o ACTIVE no painel.
 * **Ressalva:** `app/principal/support/page.tsx` (Central de Ajuda voltada ao hóspede/staff, distinta dos
   dois agentes acima) continua sendo um **mock de chat/ticket** com respostas de "IA" fabricadas por
   `setTimeout` — não foi tocada nesta feature. Os modelos `SupportTicket`/`TicketMessage` também
