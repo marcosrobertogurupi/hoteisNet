@@ -5,6 +5,7 @@ import { Settings, Loader2, RotateCw, ShieldAlert, X, IdCard, Cpu } from "lucide
 import { useToast } from "@/context/ToastContext";
 import { cadastroUI } from "../../principal/cadastros/_ui";
 import AiModelSettings from "./AiModelSettings";
+import JevSettings from "./JevSettings";
 
 const c = cadastroUI(false);
 
@@ -234,6 +235,8 @@ export default function AdminSettingsPage() {
       </div>
 
       <AiModelSettings tenants={tenants} canEdit={canEdit} />
+
+      <JevSettings canEdit={canEdit} />
     </div>
   );
 }

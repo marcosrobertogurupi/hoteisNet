@@ -32,6 +32,8 @@ import { resolveAiModel } from "@/lib/aiAgent/modelResolver";
 import { AI_FEATURES } from "@/lib/aiAgent/features";
 import { readUsage } from "@/lib/aiAgent/readUsage";
 import { recordAgentKnowledgeGap } from "@/lib/knowledgeBase";
+import { runWhatsappTriage } from "@/lib/jev/whatsappTriage";
+import { recordJevObservedOutcome } from "@/lib/jev/decisions";
 
 type AgentMessageContent = string | Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: string }>;
 
@@ -78,6 +80,9 @@ async function buildMediaContent(
 // Nunca deixa uma falha do agente derrubar o webhook — a mensagem do hóspede já foi salva antes
 // desta função ser chamada, então o pior caso é só não haver resposta automática.
 async function runGuestSupportAgent(tenantId: string, phone: string) {
+  // Triagem do Jev (lib/jev/whatsappTriage.ts), disparada em paralelo com a preparação do agente
+  // para não somar latência. Fase 1 = modo sombra: só registra a decisão e o desfecho real abaixo.
+  let triagePromise: ReturnType<typeof runWhatsappTriage> | null = null;
   try {
     const setting = await prisma.aIAgentSetting.findUnique({ where: { tenantId } });
     if (!setting?.enabled) return;
@@ -95,6 +100,22 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
       },
     });
     if (recentHumanReply) return;
+
+    // Só texto: mídia (foto/áudio/PDF) vai direto ao agente, que é quem consegue interpretá-la.
+    const [lastMsg, prevMsg] = await prisma.whatsappMessage.findMany({
+      where: { tenantId, phone, OR: [{ type: "text" }, { direction: "IN", type: "media" }] },
+      orderBy: { createdAt: "desc" },
+      take: 2,
+      select: { id: true, direction: true, type: true, content: true },
+    });
+    if (lastMsg?.direction === "IN" && lastMsg.type === "text" && lastMsg.content?.trim()) {
+      triagePromise = runWhatsappTriage({
+        tenantId,
+        guestMessageId: lastMsg.id,
+        guestText: lastMsg.content,
+        lastAttendantText: prevMsg?.direction === "OUT" ? prevMsg.content : null,
+      });
+    }
 
     // Memória de longo prazo da conversa: prepara o bloco de resumo/estado (comprimindo as
     // mensagens antigas via um refold, se for hora) e decide quais mensagens vão CRUAS no prompt.
@@ -217,8 +238,21 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
         });
       }
     }
+
+    if (triagePromise) {
+      const triage = await triagePromise;
+      await recordJevObservedOutcome(
+        tenantId,
+        triage?.logId,
+        escalationReason ? "escalated" : result.text?.trim() ? "replied" : "no_reply"
+      );
+    }
   } catch (error) {
     console.error("[runGuestSupportAgent] Erro:", error);
+    if (triagePromise) {
+      const triage = await triagePromise.catch(() => null);
+      await recordJevObservedOutcome(tenantId, triage?.logId, "agent_error");
+    }
     // Mesma lógica de dedupe da escalação normal (ver acima) — nunca deixa o hóspede sem nenhuma
     // resposta: se o agente falhou ou travou (ex: timeout do provedor de IA), avisa e aciona a
     // recepção, em vez de simplesmente não responder nada.

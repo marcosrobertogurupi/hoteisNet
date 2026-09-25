@@ -106,23 +106,25 @@ export async function logWorkerAiUsage(
     tokensCachedInput?: number;
     tokensReasoning?: number;
     durationMs?: number;
+    // Provedor (default "google") e custo exato informado por ele (ex.: usage.cost do OpenRouter
+    // para o Jev) — quando presente, substitui o cálculo pela tabela de preços.
+    provider?: string;
+    costUsd?: number;
   }
 ): Promise<void> {
   const tokensCachedInput = Math.max(0, params.tokensCachedInput ?? 0);
   const tokensReasoning = Math.max(0, params.tokensReasoning ?? 0);
   try {
-    const totalCostUsd = await computeCostUsd(
-      prisma,
-      params.model,
-      params.tokensInput,
-      tokensCachedInput,
-      params.tokensOutput
-    );
+    const totalCostUsd =
+      params.costUsd != null && Number.isFinite(params.costUsd)
+        ? Math.round(Math.max(0, params.costUsd) * 1e8) / 1e8
+        : await computeCostUsd(prisma, params.model, params.tokensInput, tokensCachedInput, params.tokensOutput);
     await prisma.aIUsageLog.create({
       data: {
         tenantId: params.tenantId,
         feature: params.feature,
         model: params.model,
+        ...(params.provider ? { provider: params.provider } : {}),
         tokensInput: params.tokensInput,
         tokensCachedInput,
         tokensOutput: params.tokensOutput,

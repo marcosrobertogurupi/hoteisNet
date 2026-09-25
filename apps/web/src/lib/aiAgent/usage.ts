@@ -59,20 +59,29 @@ export async function logAiUsage(params: {
   stepCount?: number;
   // Duração da chamada ao provedor (ms), medida por quem chamou. Opcional.
   durationMs?: number;
+  // Provedor da chamada (default "google"). Ex.: "openrouter" para o Jev.
+  provider?: string;
+  // Custo exato informado pelo próprio provedor (ex.: usage.cost do OpenRouter). Quando presente,
+  // é gravado no lugar do cálculo pela tabela de preços — fatura bate centavo a centavo.
+  costUsd?: number;
 }): Promise<void> {
   const tokensCachedInput = Math.max(0, params.tokensCachedInput ?? 0);
   const tokensReasoning = Math.max(0, params.tokensReasoning ?? 0);
-  const totalCostUsd = await computeAiCostUsd({
-    model: params.model,
-    tokensInput: params.tokensInput,
-    tokensCachedInput,
-    tokensOutput: params.tokensOutput,
-  });
+  const totalCostUsd =
+    params.costUsd != null && Number.isFinite(params.costUsd)
+      ? Math.round(Math.max(0, params.costUsd) * 1e8) / 1e8
+      : await computeAiCostUsd({
+          model: params.model,
+          tokensInput: params.tokensInput,
+          tokensCachedInput,
+          tokensOutput: params.tokensOutput,
+        });
   await prisma.aIUsageLog.create({
     data: {
       tenantId: params.tenantId,
       feature: params.feature,
       model: params.model,
+      ...(params.provider ? { provider: params.provider } : {}),
       tokensInput: params.tokensInput,
       tokensCachedInput,
       tokensOutput: params.tokensOutput,
