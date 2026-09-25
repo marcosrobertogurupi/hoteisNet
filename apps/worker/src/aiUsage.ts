@@ -99,7 +99,8 @@ export async function logWorkerAiUsage(
   prisma: PrismaClient,
   params: {
     tenantId: string;
-    feature: WorkerAiFeature;
+    // Recursos Gemini (WORKER_AI_FEATURES) ou do Jev (chaves "jev_*", ver ./jev.ts).
+    feature: WorkerAiFeature | `jev_${string}`;
     model: string;
     tokensInput: number;
     tokensOutput: number;

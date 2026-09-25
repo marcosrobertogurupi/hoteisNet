@@ -358,6 +358,15 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   (ACTIVE bloqueado): registra a decisão e o desfecho real do agente para calibrar os limites.
   Próximas: Fase 2 (reviews + conferência da Base no worker), Fase 3 (triagem ativa — despedida cordial
   e escalação imediata), Fase 4 (suporte ao assinante, deduplicação de sugestões da Base).
+* **Jev — Fase 2 (worker) ✅ (25/09/2026):** espelho da orquestração em `apps/worker/src/jev.ts`.
+  **Reviews** (`jev_review_classification`, `reviewSentiment.ts`): o Jev decide sentimento (inclusive
+  "crítico"), grau de insatisfação (escala de 5 níveis → 0–100) e temas de uma lista fixa; em ACTIVE, com
+  confiança ≥ 0,5 o Gemini só escreve resumo + rascunho (`method: "jev+gemini"`); sem certeza ou falha,
+  análise completa pelo Gemini como antes; em SHADOW só compara com o Gemini. **Conferência da Base**
+  (`jev_knowledge_drift_precheck`, `runKnowledgeDrift`): um sim/não por fato do cadastro numa chamada;
+  em ACTIVE, se nenhum fato parece divergente (< 0,5) o Gemini nem é chamado, e toda correção automática
+  só é aplicada se o Jev confirmar que o trecho é mesmo aquele dado (≥ 0,5; senão vira aviso). Os dois
+  recursos aceitam ACTIVE no painel; entram em observação para calibrar.
 * **Ressalva:** `app/principal/support/page.tsx` (Central de Ajuda voltada ao hóspede/staff, distinta dos
   dois agentes acima) continua sendo um **mock de chat/ticket** com respostas de "IA" fabricadas por
   `setTimeout` — não foi tocada nesta feature. Os modelos `SupportTicket`/`TicketMessage` também

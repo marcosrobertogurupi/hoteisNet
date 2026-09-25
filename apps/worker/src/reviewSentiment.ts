@@ -18,6 +18,14 @@ import {
   AI_MODEL_FALLBACK,
   geminiThinkingConfig,
 } from "./aiUsage";
+import {
+  WORKER_JEV_FEATURES,
+  getJevSetting,
+  runWorkerJevDecision,
+  recordJevObservedOutcome,
+  type JevAnswer,
+  type JevQuestion,
+} from "./jev";
 
 const GEMINI_TIMEOUT_MS = 45_000;
 
@@ -28,7 +36,9 @@ export interface ReviewSentimentResult {
   summary: string;
   replyDraft: string | null;
   replyConfidence: number; // 0-1
-  method: "gemini" | "rating_only";
+  // "jev+gemini": classificação pelo Jev, textos pelo Gemini; "jev": classificação pelo Jev e a
+  // redação falhou (sem resumo/rascunho).
+  method: "gemini" | "rating_only" | "jev+gemini" | "jev";
 }
 
 const SENTIMENT_RESPONSE_SCHEMA = {
@@ -79,7 +89,11 @@ function classifyByRatingOnly(rating: number | null): ReviewSentimentResult {
   };
 }
 
-async function callGeminiStructured(prompt: string, model: string): Promise<{ data: any; usage: any; durationMs: number }> {
+async function callGeminiStructured(
+  prompt: string,
+  model: string,
+  responseSchema: Record<string, unknown> = SENTIMENT_RESPONSE_SCHEMA
+): Promise<{ data: any; usage: any; durationMs: number }> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY não configurada.");
 
@@ -94,7 +108,7 @@ async function callGeminiStructured(prompt: string, model: string): Promise<{ da
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
           responseMimeType: "application/json",
-          responseSchema: SENTIMENT_RESPONSE_SCHEMA,
+          responseSchema,
           ...(thinkingConfig ? { thinkingConfig } : {}),
         },
       }),
@@ -132,8 +146,29 @@ export async function analyzeReviewSentiment(
   const model = await resolveWorkerAiModel(prisma, WORKER_AI_FEATURES.REVIEW_SENTIMENT_ANALYSIS, params.tenantId).catch(
     () => AI_MODEL_FALLBACK
   );
-
   const channelLabel = CHANNEL_LABELS[params.channel] || params.channel;
+
+  // Jev decide a classificação (ver ./jev.ts). SHADOW: roda em paralelo e só é comparado com o
+  // Gemini. ACTIVE: se o Jev tiver certeza, o Gemini só ESCREVE (resumo + rascunho); se não tiver
+  // certeza ou falhar, segue a análise completa pelo Gemini, como antes.
+  const jevPromise = runWorkerJevDecision(prisma, {
+    tenantId: params.tenantId,
+    feature: WORKER_JEV_FEATURES.REVIEW_CLASSIFICATION,
+    state: { canal: channelLabel, nota: params.rating != null ? `${params.rating}/5` : "sem nota", texto: params.body.slice(0, 6000) },
+    questions: REVIEW_JEV_QUESTIONS,
+    decide: (a) => (a.sentimento?.type === "choice" ? a.sentimento.choice : "sem_sentimento"),
+  });
+  const jevMode = (await getJevSetting(prisma, WORKER_JEV_FEATURES.REVIEW_CLASSIFICATION)).mode;
+  if (jevMode === "ACTIVE") {
+    const jev = await jevPromise;
+    const classification = jev?.answers ? mapJevReviewClassification(jev.answers) : null;
+    if (classification) {
+      await recordJevObservedOutcome(prisma, params.tenantId, jev?.logId, "applied");
+      return writeReviewTexts(prisma, params, model, channelLabel, classification);
+    }
+    await recordJevObservedOutcome(prisma, params.tenantId, jev?.logId, "low_confidence_fallback_gemini");
+  }
+
   const prompt = [
     `Você analisa reviews de hóspedes para o sistema de gestão do hotel "${params.hotelName}".`,
     `Canal: ${channelLabel}. Nota informada: ${params.rating != null ? `${params.rating}/5` : "sem nota"}. Autor: ${params.authorName || "anônimo"}.`,
@@ -161,6 +196,10 @@ export async function analyzeReviewSentiment(
     });
 
     const sentiment = String(data.sentiment || "neutral").toUpperCase() as ReviewSentimentResult["sentiment"];
+    if (jevMode === "SHADOW") {
+      const jev = await jevPromise;
+      await recordJevObservedOutcome(prisma, params.tenantId, jev?.logId, `gemini:${sentiment.toLowerCase()}`);
+    }
     return {
       sentiment: ["POSITIVE", "NEUTRAL", "NEGATIVE", "CRITICAL"].includes(sentiment) ? sentiment : "NEUTRAL",
       dissatisfactionScore: Math.min(100, Math.max(0, Number(data.dissatisfactionScore) || 0)),
@@ -173,5 +212,123 @@ export async function analyzeReviewSentiment(
   } catch (err: any) {
     console.error(`[review-sentiment] falha na IA — tenant=${params.tenantId} canal=${params.channel}:`, err?.message || err);
     return classifyByRatingOnly(params.rating);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Jev — classificação do review (sentimento, insatisfação, temas). Mesmas regras do prompt do Gemini.
+const SENTIMENT_MIN_CONFIDENCE = 0.5; // abaixo disso o Jev "não tem certeza" → Gemini completo
+const TOPIC_MIN_NOUL = 0.6;
+
+const REVIEW_TOPICS: Record<string, string> = {
+  limpeza: "limpeza",
+  atendimento: "atendimento",
+  localizacao: "localização",
+  cafe_da_manha: "café da manhã",
+  custo_beneficio: "custo-benefício",
+  infraestrutura: "infraestrutura",
+  conforto_quarto: "conforto do quarto",
+  ruido: "ruído",
+  wifi: "wifi",
+  estacionamento: "estacionamento",
+};
+
+export const REVIEW_JEV_QUESTIONS: Record<string, JevQuestion> = {
+  sentimento: {
+    type: "choice",
+    instructions: "Qual é o sentimento geral deste review de hóspede sobre o hotel?",
+    criteria: {
+      positive: "Satisfeito, elogia a estadia; ressalvas pequenas no máximo",
+      neutral: "Misto ou neutro: pontos bons e ruins equilibrados, ou só informativo",
+      negative: "Insatisfeito com a estadia (limpeza, atendimento, barulho, preço etc.), sem ser um caso grave",
+      critical:
+        "Problema grave: segurança, saúde, fraude, ameaça de ação legal/judicial, ou relato com potencial real de viralizar negativamente",
+    },
+  },
+  insatisfacao: {
+    type: "score",
+    instructions: "Quão insatisfeito o hóspede ficou com a estadia?",
+    criteria: [
+      "Muito satisfeito: só elogios, recomendaria",
+      "Satisfeito: gostou, com pequenas ressalvas",
+      "Dividido: pontos bons e ruins na mesma medida",
+      "Insatisfeito: problemas concretos atrapalharam a estadia",
+      "Muito insatisfeito: experiência ruim, não voltaria",
+    ],
+  },
+  ...Object.fromEntries(
+    Object.entries(REVIEW_TOPICS).map(([key, label]) => [
+      `tema_${key}`,
+      { type: "noul" as const, instructions: `O review comenta (elogiando ou criticando) o tema "${label}" do hotel?` },
+    ])
+  ),
+};
+
+type JevReviewClassification = Pick<ReviewSentimentResult, "sentiment" | "dissatisfactionScore" | "topics">;
+
+export function mapJevReviewClassification(answers: Record<string, JevAnswer>): JevReviewClassification | null {
+  const s = answers.sentimento;
+  const d = answers.insatisfacao;
+  if (s?.type !== "choice" || d?.type !== "score") return null;
+  if ((s.confidence ?? 0) < SENTIMENT_MIN_CONFIDENCE) return null;
+  const sentiment = s.choice.toUpperCase() as ReviewSentimentResult["sentiment"];
+  if (!["POSITIVE", "NEUTRAL", "NEGATIVE", "CRITICAL"].includes(sentiment)) return null;
+  const topics = Object.entries(REVIEW_TOPICS)
+    .filter(([key]) => {
+      const a = answers[`tema_${key}`];
+      return a?.type === "noul" && a.noul >= TOPIC_MIN_NOUL;
+    })
+    .map(([, label]) => label);
+  return { sentiment, dissatisfactionScore: Math.round((Math.min(4, Math.max(0, d.score)) / 4) * 100), topics };
+}
+
+const WRITING_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: { summary: { type: "string" }, replyDraft: { type: "string" }, replyConfidence: { type: "number" } },
+  required: ["summary", "replyDraft", "replyConfidence"],
+};
+
+// Modo ACTIVE: a classificação já veio do Jev — o Gemini só redige. Se a redação falhar, o review
+// fica classificado, só sem resumo/rascunho (nunca perde a classificação por falha de texto).
+async function writeReviewTexts(
+  prisma: PrismaClient,
+  params: { tenantId: string; hotelName: string; rating: number | null; body: string | null; authorName: string | null; channel: string },
+  model: string,
+  channelLabel: string,
+  classification: JevReviewClassification
+): Promise<ReviewSentimentResult> {
+  const sentimentPt = { POSITIVE: "positivo", NEUTRAL: "neutro", NEGATIVE: "negativo", CRITICAL: "crítico" }[classification.sentiment];
+  const prompt = [
+    `Você escreve para a equipe do hotel "${params.hotelName}" sobre um review de hóspede.`,
+    `Canal: ${channelLabel}. Nota: ${params.rating != null ? `${params.rating}/5` : "sem nota"}. Autor: ${params.authorName || "anônimo"}. Sentimento já classificado: ${sentimentPt}.`,
+    ``,
+    `Texto do review:`,
+    `"""${params.body}"""`,
+    ``,
+    `Responda em JSON:`,
+    `- summary: um resumo de uma frase em português para a equipe do hotel ler rápido.`,
+    `- replyDraft: rascunho de resposta pública em português, educada e profissional, no tom de um hotel brasileiro — nunca invente fatos, promessas ou detalhes que não estão no review; se o review for muito genérico, um agradecimento simples e sincero já basta.`,
+    `- replyConfidence: 0 a 1 — sua confiança de que replyDraft poderia ser publicado sem revisão humana (reviews muito negativos ou reclamações específicas merecem confiança baixa).`,
+  ].join("\n");
+
+  try {
+    const { data, usage, durationMs } = await callGeminiStructured(prompt, model, WRITING_RESPONSE_SCHEMA);
+    await logWorkerAiUsage(prisma, {
+      tenantId: params.tenantId,
+      feature: WORKER_AI_FEATURES.REVIEW_SENTIMENT_ANALYSIS,
+      model,
+      ...readGeminiUsage(usage),
+      durationMs,
+    });
+    return {
+      ...classification,
+      summary: String(data.summary || "").slice(0, 500),
+      replyDraft: data.replyDraft ? String(data.replyDraft).slice(0, 2000) : null,
+      replyConfidence: Math.min(1, Math.max(0, Number(data.replyConfidence) || 0)),
+      method: "jev+gemini",
+    };
+  } catch (err: any) {
+    console.error(`[review-sentiment] falha ao redigir (classificação do Jev mantida) — tenant=${params.tenantId}:`, err?.message || err);
+    return { ...classification, summary: "", replyDraft: null, replyConfidence: 0, method: "jev" };
   }
 }

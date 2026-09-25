@@ -42,6 +42,16 @@ const AI_FEATURE_LABELS: Record<string, AiFeatureLabel> = {
     description:
       "Decisão instantânea sobre cada mensagem do hóspede (pede atendente? só está se despedindo? qual o assunto?) antes do agente de atendimento.",
   },
+  jev_review_classification: {
+    label: "Classificação rápida de reviews",
+    description:
+      "Sentimento, grau de insatisfação e temas de cada review decididos na hora; a IA de texto só escreve o resumo e o rascunho de resposta.",
+  },
+  jev_knowledge_drift_precheck: {
+    label: "Pré-checagem da base de conhecimento",
+    description:
+      "Verifica rapidamente se algum horário/preço da base parece diferente do cadastro antes de acionar a verificação completa, e confirma cada correção automática.",
+  },
 };
 
 export function aiFeatureLabel(feature: string): AiFeatureLabel {

@@ -32,13 +32,36 @@ const DECISION_LABEL: Record<string, string> = {
   escalate: "chamaria um atendente",
   farewell: "só despediria",
   agent: "seguiria para o agente",
+  positive: "classificou positivo",
+  neutral: "classificou neutro",
+  negative: "classificou negativo",
+  critical: "classificou crítico",
+  suspeita: "viu possível divergência",
+  sem_divergencia: "não viu divergência",
+  confirma_correcao: "confirmou a correção",
+  nao_confirma: "barrou a correção",
 };
 const OUTCOME_LABEL: Record<string, string> = {
   escalated: "o agente escalou",
   replied: "o agente respondeu",
   no_reply: "o agente não respondeu",
   agent_error: "o agente falhou",
+  applied: "classificação do Jev aplicada",
+  low_confidence_fallback_gemini: "Jev sem certeza — a IA de texto decidiu",
+  gemini_skipped: "verificação completa dispensada",
+  "gemini:positive": "a IA de texto disse positivo",
+  "gemini:neutral": "a IA de texto disse neutro",
+  "gemini:negative": "a IA de texto disse negativo",
+  "gemini:critical": "a IA de texto disse crítico",
 };
+
+function outcomeLabel(o: string | null): string {
+  if (!o) return "desfecho não registrado";
+  if (OUTCOME_LABEL[o]) return OUTCOME_LABEL[o];
+  const n = /^gemini:(\d+)$/.exec(o);
+  if (n) return `a verificação completa achou ${n[1]} divergência(s)`;
+  return o;
+}
 
 export default function JevSettings({ canEdit }: { canEdit: boolean }) {
   const toast = useToast();
@@ -149,8 +172,8 @@ export default function JevSettings({ canEdit }: { canEdit: boolean }) {
                   .map((b, i) => (
                     <div key={i} className="flex justify-between gap-2 px-2 py-1 rounded bg-slate-50 text-slate-600">
                       <span>
-                        Jev {DECISION_LABEL[b.decision ?? ""] ?? "sem decisão (falha)"} →{" "}
-                        {OUTCOME_LABEL[b.observedOutcome ?? ""] ?? "desfecho não registrado"}
+                        Jev {b.decision ? DECISION_LABEL[b.decision] ?? b.decision : "sem decisão (falha)"} →{" "}
+                        {outcomeLabel(b.observedOutcome)}
                       </span>
                       <b>{b.count}</b>
                     </div>
