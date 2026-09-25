@@ -52,6 +52,16 @@ const AI_FEATURE_LABELS: Record<string, AiFeatureLabel> = {
     description:
       "Verifica rapidamente se algum horário/preço da base parece diferente do cadastro antes de acionar a verificação completa, e confirma cada correção automática.",
   },
+  jev_support_answer_check: {
+    label: "Conferência das respostas do suporte",
+    description:
+      "Antes de uma resposta automática de suporte ser enviada ao hotel, confere se ela está apoiada nos artigos de ajuda e resolve o que foi perguntado.",
+  },
+  jev_kb_gap_dedupe: {
+    label: "Sugestões repetidas na base de conhecimento",
+    description:
+      "Evita criar outra sugestão pendente quando o hóspede faz, com outras palavras, uma pergunta que já está aguardando revisão.",
+  },
 };
 
 export function aiFeatureLabel(feature: string): AiFeatureLabel {

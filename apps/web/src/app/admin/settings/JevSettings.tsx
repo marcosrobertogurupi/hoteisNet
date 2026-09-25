@@ -40,6 +40,10 @@ const DECISION_LABEL: Record<string, string> = {
   sem_divergencia: "não viu divergência",
   confirma_correcao: "confirmou a correção",
   nao_confirma: "barrou a correção",
+  publicar: "aprovou a resposta",
+  revisao_humana: "pediu revisão humana",
+  duplicada: "viu sugestão repetida",
+  nova: "viu sugestão nova",
 };
 const OUTCOME_LABEL: Record<string, string> = {
   escalated: "o agente escalou",
@@ -49,6 +53,12 @@ const OUTCOME_LABEL: Record<string, string> = {
   jev_escalated: "atendente chamado na hora (sem agente)",
   jev_farewell: "despedida enviada (sem agente)",
   jev_farewell_silent: "já tinha se despedido — nada enviado",
+  published: "resposta enviada ao hotel",
+  held_for_human: "resposta segurada para a equipe",
+  llm_would_publish: "a IA de texto enviaria",
+  llm_would_hold: "a IA de texto seguraria",
+  created: "sugestão criada",
+  not_created: "sugestão repetida não criada",
   applied: "classificação do Jev aplicada",
   low_confidence_fallback_gemini: "Jev sem certeza — a IA de texto decidiu",
   gemini_skipped: "verificação completa dispensada",
