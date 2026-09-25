@@ -107,6 +107,24 @@ function computeRoomsStatusMapVersion(tenantId: string): Promise<string> {
   ]);
 }
 
+// Funil da tela Manutenção de Quartos — GET /api/manutencao/os (polling de 3 s, como os mapas).
+// Qualquer mudança numa OS (etapa, colaborador, aviso, previsão) mexe em updatedAt; abertura e
+// exclusão mexem na contagem. Fotos e linha do tempo não aparecem no cartão do funil, exceto a
+// contagem de fotos — por isso entram também.
+export async function maintenanceTicketsVersion(tenantId: string): Promise<string> {
+  try {
+    return await combinedSig(tenantId, [
+      { label: "mt", sql: `SELECT 'mt' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "maintenance_tickets" WHERE "tenantId" = $1` },
+      { label: "mtp", sql: `SELECT 'mtp' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("createdAt"), 'epoch') AS ts FROM "maintenance_ticket_photos" WHERE "tenantId" = $1` },
+      // Nome do quarto/colaborador/tipo aparece no cartão; mudanças nesses cadastros são raras,
+      // mas renomear precisa refletir — o carimbo dos quartos cobre a troca de número.
+      { label: "room", sql: `SELECT 'room' AS lbl, COUNT(*)::int AS c, COALESCE(MAX("updatedAt"), 'epoch') AS ts FROM "rooms" WHERE "tenantId" = $1` },
+    ]);
+  } catch (err) {
+    return volatileFallback("maintenanceTicketsVersion", err);
+  }
+}
+
 // Selos de governança nos dois mapas — GET /api/tenant/housekeeping-tasks
 export async function housekeepingTasksVersion(tenantId: string): Promise<string> {
   try {

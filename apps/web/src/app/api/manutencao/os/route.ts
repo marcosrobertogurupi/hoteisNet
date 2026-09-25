@@ -5,6 +5,7 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { logActivity } from "@/lib/audit";
 import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
 import { OPEN_MAINTENANCE_STAGES, MaintenanceError, openMaintenanceTicket } from "@/lib/maintenance";
+import { maintenanceTicketsVersion, notModifiedResponse } from "@/lib/mapVersion";
 
 // Campos da listagem de OS — só o que o painel/mapa desenha (CLAUDE.md, ⚡ Performance §1–§4).
 const TICKET_LIST_SELECT = {
@@ -41,6 +42,17 @@ export async function GET(req: NextRequest) {
     const sp = req.nextUrl.searchParams;
     const situacaoParam = sp.get("situacao");
     const situacao = situacaoParam === "todas" || situacaoParam === "resolvidas" ? situacaoParam : "abertas";
+
+    // Funil da tela Manutenção de Quartos consulta abertas/resolvidas a cada 3 s (como os mapas):
+    // resposta condicional — se nenhuma OS mudou, 304 sem corpo e sem a consulta pesada. A janela
+    // "últimos N dias" das resolvidas anda com o relógio, então o dia (Brasília) entra no carimbo.
+    let etag: string | null = null;
+    if (situacao !== "todas") {
+      const day = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+      etag = `"os-${situacao}-${sp.get("dias") || ""}-${day}-${await maintenanceTicketsVersion(session.tenantId)}"`;
+      const notModified = notModifiedResponse(req, etag);
+      if (notModified) return notModified;
+    }
 
     let where: Prisma.MaintenanceTicketWhereInput = { tenantId: session.tenantId, stage: { in: OPEN_MAINTENANCE_STAGES } };
     if (situacao === "resolvidas") {
@@ -90,7 +102,7 @@ export async function GET(req: NextRequest) {
         waitReason: t.waitReason?.name ?? null,
         photoCount: t._count.photos,
       })),
-    });
+    }, etag ? { headers: { ETag: etag, "Cache-Control": "no-cache, must-revalidate" } } : undefined);
   } catch (error: any) {
     console.error("[GET /api/manutencao/os] Erro:", error);
     return NextResponse.json({ success: false, error: "Erro ao carregar as ordens de serviço." }, { status: 500 });

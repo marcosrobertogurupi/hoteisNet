@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Wrench, RefreshCw, Camera, Clock, AlertTriangle, BarChart3, Columns3 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
+import { usePolling } from "@/lib/usePolling";
 import { useToast } from "@/context/ToastContext";
 import OsManutencaoModal from "@/components/manutencao/OsManutencaoModal";
 import {
@@ -14,8 +15,10 @@ import {
 } from "@/lib/maintenanceShared";
 
 // Painel de Manutenção: o funil das OS (Entrada / Avaliando / Aguardando / Resolvidas) e o
-// relatório de tempo inativo dos quartos. Sem polling (a atualização automática é exclusiva dos
-// mapas): recarrega ao voltar para a aba e pelo botão Atualizar.
+// relatório de tempo inativo dos quartos. O funil se atualiza sozinho a cada 3 s, como os mapas
+// (exceção à regra "polling só nos mapas", pedida pelo usuário em 25/09/2026): pausa com o "Ver OS"
+// aberto, na aba Tempo inativo e com a aba do navegador escondida (usePolling), e o servidor
+// responde 304 quando nenhuma OS mudou (ETag em /api/manutencao/os).
 
 interface TicketRow {
   id: string;
@@ -102,20 +105,23 @@ export default function ManutencaoPainelPage() {
   const [report, setReport] = useState<Report | null>(null);
   const [loadingReport, setLoadingReport] = useState(false);
 
-  const loadFunnel = useCallback(async () => {
-    setLoadingFunnel(true);
+  // manual = clique no Atualizar (mostra o giro e avisa erro). No tique automático do polling a
+  // falha é silenciosa (tenta de novo em 3 s) e o estado só troca quando o conteúdo mudou — sem
+  // repintar o funil a cada tique.
+  const loadFunnel = useCallback(async (manual = false) => {
+    if (manual) setLoadingFunnel(true);
     try {
       const [a, r] = await Promise.all([
         fetch("/api/manutencao/os?situacao=abertas").then((x) => x.json()),
         fetch("/api/manutencao/os?situacao=resolvidas&dias=7").then((x) => x.json()),
       ]);
       if (!a.success || !r.success) throw new Error(a.error || r.error);
-      setOpenTickets(a.tickets);
-      setResolved(r.tickets);
+      setOpenTickets((prev) => (JSON.stringify(prev) === JSON.stringify(a.tickets) ? prev : a.tickets));
+      setResolved((prev) => (JSON.stringify(prev) === JSON.stringify(r.tickets) ? prev : r.tickets));
     } catch {
-      toastRef.current.error("Não foi possível carregar as ordens de serviço.", "Manutenção");
+      if (manual) toastRef.current.error("Não foi possível carregar as ordens de serviço.", "Manutenção");
     } finally {
-      setLoadingFunnel(false);
+      if (manual) setLoadingFunnel(false);
     }
   }, []);
 
@@ -134,18 +140,21 @@ export default function ManutencaoPainelPage() {
   }, [de, ate]);
 
   useEffect(() => {
-    if (tab === "funil") loadFunnel();
-    else loadReport();
+    if (tab === "relatorio") loadReport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  // Funil ao vivo, como os mapas — pausado com o "Ver OS" aberto e fora da aba Funil.
+  usePolling(loadFunnel, 3000, { paused: tab !== "funil" || !!osTicketId });
+
+  // "Parado há …" é calculado na hora do render; com o polling respondendo 304 nada re-renderiza,
+  // então um tique por minuto mantém o tempo em dia.
+  const [, setMinuteTick] = useState(0);
   useEffect(() => {
-    const refresh = () => {
-      if (!document.hidden && tab === "funil" && !osTicketId) loadFunnel();
-    };
-    document.addEventListener("visibilitychange", refresh);
-    return () => document.removeEventListener("visibilitychange", refresh);
-  }, [tab, osTicketId, loadFunnel]);
+    if (tab !== "funil") return;
+    const t = setInterval(() => setMinuteTick((x) => x + 1), 60000);
+    return () => clearInterval(t);
+  }, [tab]);
 
   const card = isDark ? "bg-slate-900/80 border-slate-800" : "bg-white border-slate-200 shadow-sm";
   const muted = isDark ? "text-slate-400" : "text-slate-500";
@@ -199,7 +208,7 @@ export default function ManutencaoPainelPage() {
               <p className={`text-xs ${muted}`}>
                 {openTickets.length} OS aberta(s) · {resolved.length} resolvida(s) nos últimos 7 dias
               </p>
-              <button onClick={loadFunnel} disabled={loadingFunnel} className={`text-xs font-semibold flex items-center gap-1.5 ${isDark ? "text-rose-400" : "text-rose-600"}`}>
+              <button onClick={() => loadFunnel(true)} disabled={loadingFunnel} className={`text-xs font-semibold flex items-center gap-1.5 ${isDark ? "text-rose-400" : "text-rose-600"}`}>
                 <RefreshCw className={`w-3.5 h-3.5 ${loadingFunnel ? "animate-spin" : ""}`} /> Atualizar
               </button>
             </div>
@@ -413,9 +422,9 @@ export default function ManutencaoPainelPage() {
         ticketId={osTicketId}
         onClose={() => {
           setOsTicketId(null);
-          if (tab === "funil") loadFunnel();
+          if (tab === "funil") loadFunnel(true);
         }}
-        onChanged={() => (tab === "funil" ? loadFunnel() : loadReport())}
+        onChanged={() => (tab === "funil" ? loadFunnel(true) : loadReport())}
       />
     </div>
   );
