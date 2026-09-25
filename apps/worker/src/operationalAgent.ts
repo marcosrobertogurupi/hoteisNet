@@ -79,7 +79,11 @@ async function generateStructured<T>(
 // resposta) vive em ./uazapiSend, compartilhado com checkoutPrevision.ts / preCheckinFnrh.ts.
 
 // Quanto tempo um quarto pode ficar parado em cada status antes de virar alerta.
+// MAINTENANCE_STUCK_HOURS só vale para quarto em manutenção SEM OS (ver detectMaintenanceIssues).
 const MAINTENANCE_STUCK_HOURS = 24;
+// OS de manutenção em "Entrada" (colaborador não começou) — alerta para a recepção. O próprio
+// colaborador já recebe um lembrete antes, em 2h (maintenanceNotify.ts).
+const MAINTENANCE_NOT_STARTED_HOURS = 4;
 const DIRTY_STUCK_HOURS = 6;
 // Avisa de FNRH pendente de pré-check-in quando faltam menos que isso para o check-in.
 const PRECHECKIN_WARNING_HOURS = 24;
@@ -318,6 +322,86 @@ async function detectRoomBedRegistrationIssues(tenantId: string): Promise<Detect
   return issues;
 }
 
+// Manutenção de quartos, pelas etapas reais da OS (antes era só "quarto em MAINTENANCE com
+// Room.updatedAt velho", e a ação autônoma cobrava a governanta — a pessoa errada). Tudo
+// determinístico; o colaborador já recebe os próprios lembretes em maintenanceNotify.ts — aqui é o
+// alerta para a recepção/gerência. entityId = id da OS: o alerta some sozinho quando a situação se
+// resolve (a OS avança, ganha nova previsão, é resolvida/cancelada ou o aviso é reenviado).
+//  - MAINTENANCE_NOT_STARTED: OS em "Entrada" há mais de MAINTENANCE_NOT_STARTED_HOURS.
+//  - MAINTENANCE_FORECAST_OVERDUE: previsão de liberação vencida com a OS ainda aberta.
+//  - MAINTENANCE_NOTICE_FAILED: o aviso por WhatsApp não chegou ao colaborador.
+//  - ROOM_MAINTENANCE_STUCK: quarto em manutenção SEM OS aberta (situação antiga, anterior à OS)
+//    parado há mais de MAINTENANCE_STUCK_HOURS.
+export async function detectMaintenanceIssues(tenantId: string, now: Date): Promise<DetectedIssue[]> {
+  const issues: DetectedIssue[] = [];
+  const fmt = (d: Date) =>
+    d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const stageLabel: Record<string, string> = { OPEN: "entrada", EVALUATING: "avaliação", WAITING: "aguardando" };
+
+  const openTickets = await prisma.maintenanceTicket.findMany({
+    where: { tenantId, stage: { in: ["OPEN", "EVALUATING", "WAITING"] } },
+    select: {
+      id: true,
+      number: true,
+      stage: true,
+      openedAt: true,
+      expectedReleaseAt: true,
+      notifyStatus: true,
+      room: { select: { number: true } },
+      problemType: { select: { name: true } },
+      assignedEmployee: { select: { name: true } },
+      waitReason: { select: { name: true } },
+    },
+  });
+
+  const notStartedCutoff = now.getTime() - MAINTENANCE_NOT_STARTED_HOURS * 60 * 60 * 1000;
+  for (const t of openTickets) {
+    const who = t.assignedEmployee.name;
+    if (t.stage === "OPEN" && t.openedAt.getTime() < notStartedCutoff) {
+      issues.push({
+        issueType: "MAINTENANCE_NOT_STARTED",
+        entityId: t.id,
+        description: `Quarto ${t.room.number}: a OS de manutenção nº ${t.number} (${t.problemType.name}) está aberta desde ${fmt(t.openedAt)} e ${who} ainda não começou o serviço.`,
+      });
+    }
+    if (t.expectedReleaseAt && t.expectedReleaseAt < now) {
+      issues.push({
+        issueType: "MAINTENANCE_FORECAST_OVERDUE",
+        entityId: t.id,
+        description: `Quarto ${t.room.number}: a previsão de liberação da OS nº ${t.number} era ${fmt(t.expectedReleaseAt)} e ela ainda está em ${stageLabel[t.stage] ?? t.stage}${t.waitReason ? ` (${t.waitReason.name})` : ""} com ${who}.`,
+      });
+    }
+    if (t.notifyStatus === "FAILED") {
+      issues.push({
+        issueType: "MAINTENANCE_NOTICE_FAILED",
+        entityId: t.id,
+        description: `Quarto ${t.room.number}: o aviso da OS nº ${t.number} não chegou ao WhatsApp de ${who}. Confira o telefone no cadastro e reenvie o aviso pela OS no Mapa de Quartos.`,
+      });
+    }
+  }
+
+  const legacyCutoff = new Date(now.getTime() - MAINTENANCE_STUCK_HOURS * 60 * 60 * 1000);
+  const legacy = await prisma.room.findMany({
+    where: {
+      tenantId,
+      active: true,
+      status: "MAINTENANCE",
+      updatedAt: { lt: legacyCutoff },
+      maintenanceTickets: { none: { stage: { in: ["OPEN", "EVALUATING", "WAITING"] } } },
+    },
+    select: { id: true, number: true },
+  });
+  for (const room of legacy) {
+    issues.push({
+      issueType: "ROOM_MAINTENANCE_STUCK",
+      entityId: room.id,
+      description: `Quarto ${room.number} está em manutenção há mais de ${MAINTENANCE_STUCK_HOURS}h sem ordem de serviço. Libere o quarto ou abra uma OS para acompanhar o conserto.`,
+    });
+  }
+
+  return issues;
+}
+
 async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
   const issues: DetectedIssue[] = [];
   const now = new Date();
@@ -384,19 +468,8 @@ async function detectIssues(tenantId: string): Promise<DetectedIssue[]> {
     });
   }
 
-  // 3) Quarto preso em manutenção há tempo demais.
-  const maintenanceCutoff = new Date(now.getTime() - MAINTENANCE_STUCK_HOURS * 60 * 60 * 1000);
-  const stuckMaintenance = await prisma.room.findMany({
-    where: { tenantId, active: true, status: "MAINTENANCE", updatedAt: { lt: maintenanceCutoff } },
-    omit: { photos: true },
-  });
-  for (const room of stuckMaintenance) {
-    issues.push({
-      issueType: "ROOM_MAINTENANCE_STUCK",
-      entityId: room.id,
-      description: `Quarto ${room.number} em manutenção há mais de ${MAINTENANCE_STUCK_HOURS}h sem atualização.`,
-    });
-  }
+  // 3) Manutenção de quartos — pelas etapas reais da OS (ver apps/web/src/lib/maintenance.ts).
+  issues.push(...(await detectMaintenanceIssues(tenantId, now)));
 
   // 4) Quarto sujo (limpeza pendente) há tempo demais.
   const dirtyCutoff = new Date(now.getTime() - DIRTY_STUCK_HOURS * 60 * 60 * 1000);
@@ -547,7 +620,9 @@ async function runAutonomousActions(tenantId: string, issues: DetectedIssue[]): 
   const notes: string[] = [];
   for (const issue of issues) {
     try {
-      if (issue.issueType === "ROOM_MAINTENANCE_STUCK" || issue.issueType === "ROOM_DIRTY_STUCK") {
+      // Quarto em manutenção NÃO cobra a governanta (pessoa errada) — o colaborador de manutenção
+      // já é lembrado pelas etapas da OS em maintenanceNotify.ts.
+      if (issue.issueType === "ROOM_DIRTY_STUCK") {
         const note = await nudgeHousekeeperForRoom(tenantId, issue.entityId);
         if (note) notes.push(note);
       } else if (issue.issueType === "SNRHOS_STUCK") {

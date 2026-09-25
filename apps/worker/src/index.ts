@@ -12,7 +12,7 @@ import { runSaasMonitor } from "./saasMonitor";
 import { runNoShowSweep } from "./noShowSweep";
 import { runReviewsSync } from "./reviewsSync";
 import { runReviewFeedbackFunnel } from "./reviewFeedbackFunnel";
-import { runMaintenanceNotify } from "./maintenanceNotify";
+import { runMaintenanceNotify, runMaintenanceReminders } from "./maintenanceNotify";
 
 console.log("[worker] Virada de diária — worker iniciado.");
 
@@ -45,6 +45,13 @@ cron.schedule("* * * * *", () => {
 cron.schedule("* * * * *", () => {
   runMaintenanceNotify().catch((err) => {
     console.error("[worker] Erro ao enviar avisos de manutenção:", err);
+  });
+});
+
+// Lembretes ao colaborador de manutenção (OS sem início, previsão vencida) — uma vez por situação.
+cron.schedule("*/10 * * * *", () => {
+  runMaintenanceReminders().catch((err) => {
+    console.error("[worker] Erro ao enviar lembretes de manutenção:", err);
   });
 });
 
