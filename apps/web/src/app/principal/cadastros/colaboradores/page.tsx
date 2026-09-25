@@ -256,7 +256,7 @@ export default function ColaboradoresPage() {
 
       {isModalOpen && (
         <div className={ui.modalBackdrop}>
-          <div className={`${ui.modalCard} max-w-lg`}>
+          <div className={`${ui.modalCard} max-w-lg max-h-[calc(100dvh-2rem)] flex flex-col`}>
             <div className={`p-6 border-b flex items-center justify-between ${ui.modalDivider}`}>
               <h2 className="text-lg font-bold">{form.id ? "Editar Colaborador" : "Novo Colaborador"}</h2>
               <button
@@ -266,7 +266,7 @@ export default function ColaboradoresPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto min-h-0">
               <div className="space-y-1.5">
                 <label className={ui.label}>
                   Nome <span className="text-rose-500">*</span>
