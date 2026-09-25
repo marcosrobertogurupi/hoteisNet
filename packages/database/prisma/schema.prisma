@@ -215,6 +215,7 @@ model Tenant {
   accountPlans               AccountPlan[]
   aiAgentSettings            AIAgentSetting?
   aiUsageLogs                AIUsageLog[]
+  jevDecisionLogs            JevDecisionLog[]
   aiModelOverrides           TenantAiModelOverride[]
   cashRegisters              CashRegister[]          @relation("TenantCashRegisters")
   companies                  Company[]
@@ -512,6 +513,58 @@ model AiModelPrice {
 
   @@index([model, effectiveFrom])
   @@map("ai_model_prices")
+}
+
+// Jev (TypeSafe, via OpenRouter `typesafe/jev-1.13`) — modelo de DECISÃO: não escreve texto, só
+// responde Choice/Score/Noul com probabilidades, em ~0,5 s e ~US$ 0,00003 por chamada. Usado para
+// triagem/classificação no lugar de chamadas caras ao Gemini. Regra: Jev decide, o Gemini escreve;
+// qualquer falha/lentidão do Jev cai no fluxo atual (nunca bloqueia).
+//
+// Modo por recurso, definido só pelo admin master (nunca pelo assinante):
+//  - OFF: não chama o Jev;
+//  - SHADOW: chama e registra a decisão em JevDecisionLog, mas o sistema segue exatamente como hoje
+//    (serve para calibrar limites comparando com o que de fato aconteceu);
+//  - ACTIVE: a decisão do Jev passa a mudar o fluxo (cada recurso liga isso na sua fase).
+enum JevMode {
+  OFF
+  SHADOW
+  ACTIVE
+}
+
+model JevFeatureSetting {
+  feature     String   @id
+  mode        JevMode  @default(OFF)
+  model       String   @default("typesafe/jev-1.13")
+  updatedAt   DateTime @default(now()) @updatedAt
+  updatedById String?
+
+  @@map("jev_feature_settings")
+}
+
+// Uma linha por decisão do Jev. Guarda só as respostas (probabilidades) e o desfecho observado —
+// nunca o texto avaliado (privacidade + egress). O custo faturável vai também para AIUsageLog.
+model JevDecisionLog {
+  id              String   @id @default(uuid())
+  tenantId        String
+  feature         String
+  mode            JevMode
+  // Referência opcional ao que foi avaliado (ex.: id da WhatsappMessage), sem copiar o conteúdo.
+  subjectRef      String?
+  // Respostas cruas do Jev ({ id: { type, choice|score|noul, probabilities, confidence } }). Null se falhou.
+  answers         Json?
+  // O que o Jev faria/fez (ex.: "escalate", "farewell", "agent").
+  decision        String?
+  // O que o sistema de fato fez depois (ex.: no modo sombra, o desfecho do agente) — para calibrar.
+  observedOutcome String?
+  durationMs      Int
+  costUsd         Decimal  @db.Decimal(12, 8)
+  error           String?
+  createdAt       DateTime @default(now())
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([feature, createdAt])
+  @@map("jev_decision_logs")
 }
 
 // Volume de dados (egress) que cada assinante puxa do banco por dia — instrumentado no cliente

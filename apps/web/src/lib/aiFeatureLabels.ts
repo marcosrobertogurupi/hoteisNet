@@ -32,6 +32,16 @@ const AI_FEATURE_LABELS: Record<string, AiFeatureLabel> = {
     description:
       "Verificação de valores desatualizados (preços, horários) na base de conhecimento do hotel em relação ao cadastro.",
   },
+  review_sentiment_analysis: {
+    label: "Análise de reviews",
+    description:
+      "Classificação de sentimento, temas e rascunho de resposta dos reviews coletados (Google, TripAdvisor, Booking, Reclame Aqui…).",
+  },
+  jev_whatsapp_triage: {
+    label: "Triagem rápida de mensagens (WhatsApp)",
+    description:
+      "Decisão instantânea sobre cada mensagem do hóspede (pede atendente? só está se despedindo? qual o assunto?) antes do agente de atendimento.",
+  },
 };
 
 export function aiFeatureLabel(feature: string): AiFeatureLabel {

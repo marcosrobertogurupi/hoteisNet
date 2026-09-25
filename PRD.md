@@ -343,6 +343,21 @@ enquanto `gemini-2.5-flash` responde normalmente; reavaliar se o 3.7-flash norma
   Medição mostrou 84–99% da saída faturada dessas funções como thinking; A/B real: 4,1 s → 1,5 s e
   −69% de custo com a mesma classificação. O agente de atendimento (ToolLoopAgent) não muda — decide
   reservas. Próximas fases: Jev (TypeSafe via OpenRouter) para decisões/classificação.
+* **Jev — decisões rápidas, Fase 1 (base + modo observação) ✅ (25/09/2026):** Jev
+  (`typesafe/jev-1.13` via `POST https://openrouter.ai/api/alpha/decisions`, chave
+  `OPENROUTER_API_KEY`, pedido com `provider: { zdr: true, data_collection: "deny" }`) é um modelo de
+  DECISÃO — responde Choice/Score/Noul com probabilidades em ~0,5 s e ~US$ 0,00003, não escreve texto.
+  Regra: Jev decide, o Gemini escreve; falha/lentidão do Jev = fluxo atual. Código: `lib/jev/`
+  (`client.ts`, `decisions.ts`, `features.ts`, `whatsappTriage.ts`) e espelho `apps/worker/src/jev.ts`.
+  Modo por recurso (`JevFeatureSetting`: OFF/SHADOW/ACTIVE) só pelo admin master em Configurações →
+  "Decisões rápidas (Jev)", com estatísticas de 7 dias; cada decisão vai para `JevDecisionLog` (só
+  respostas/decisão/desfecho, nunca o texto) e o custo exato (`usage.cost`) para `AIUsageLog`
+  (provider `openrouter`). Primeiro recurso: **triagem do WhatsApp** (`jev_whatsapp_triage`) — decide
+  "escalar" (pede atendente), "despedida" (só agradece/se despede, nada pendente) ou "agente";
+  intenções de reserva/cancelamento/consulta nunca saem do agente. Nesta fase roda só em **observação**
+  (ACTIVE bloqueado): registra a decisão e o desfecho real do agente para calibrar os limites.
+  Próximas: Fase 2 (reviews + conferência da Base no worker), Fase 3 (triagem ativa — despedida cordial
+  e escalação imediata), Fase 4 (suporte ao assinante, deduplicação de sugestões da Base).
 * **Ressalva:** `app/principal/support/page.tsx` (Central de Ajuda voltada ao hóspede/staff, distinta dos
   dois agentes acima) continua sendo um **mock de chat/ticket** com respostas de "IA" fabricadas por
   `setTimeout` — não foi tocada nesta feature. Os modelos `SupportTicket`/`TicketMessage` também
