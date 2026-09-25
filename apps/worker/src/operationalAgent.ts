@@ -10,6 +10,7 @@ import {
   type GeminiUsageMetadata,
 } from "./aiUsage";
 import { stayOccupiedUntil, maintenanceBlockedRoomIds } from "./stayOccupancy";
+import { WORKER_JEV_FEATURES, runWorkerJevDecision, recordJevObservedOutcome, type JevAnswer } from "./jev";
 
 const prisma = new PrismaClient();
 
@@ -760,6 +761,40 @@ const DRIFT_RESPONSE_SCHEMA = {
 // determinístico antes de virar correção: valorCorreto tem que bater exatamente com um fato do
 // cadastro, valorNoTexto tem que existir literalmente no texto, a troca tem que mexer pouco, e a
 // confiança tem que ser alta. Sem isso, descarta. Nunca reescreve parágrafo — só troca a string.
+// Jev na conferência da Base: limites iniciais (recalibrar com os dados do modo observação).
+const KB_JEV_MAX_FACTS = 40;
+const KB_JEV_SUSPECT_MIN = 0.5; // algum fato ≥ isto = vale chamar o Gemini para localizar o trecho
+// Confirmação mínima para aplicar uma correção automática. Teste real (25/09/2026): trechos certos
+// 0,58–0,97, trechos de outra informação 0,01 — 0,5 separa os dois grupos com folga.
+const KB_JEV_CONFIRM_MIN = 0.5;
+
+function maxNoul(answers: Record<string, JevAnswer>): number {
+  return Object.values(answers).reduce((m, a) => (a.type === "noul" ? Math.max(m, a.noul) : m), 0);
+}
+
+async function jevConfirmsKbFix(tenantId: string, topicContent: string, stale: string, fact: KnowledgeFact): Promise<boolean> {
+  const check = await runWorkerJevDecision(prisma, {
+    tenantId,
+    feature: WORKER_JEV_FEATURES.KNOWLEDGE_DRIFT_PRECHECK,
+    state: { texto: topicContent.slice(0, 4000), trecho: stale },
+    // Só a identidade do trecho: que ele difere do cadastro o código acima já garantiu.
+    questions: {
+      confirma: {
+        type: "noul",
+        instructions: `No texto, o trecho \`trecho\` é exatamente a informação de "${fact.label}"?`,
+        criteria: {
+          true: `O trecho é o valor que o texto dá para "${fact.label}"`,
+          false: "O trecho se refere a outra informação (outro horário, serviço, preço ou contato)",
+        },
+      },
+    },
+    decide: (a) => (a.confirma?.type === "noul" && a.confirma.noul >= KB_JEV_CONFIRM_MIN ? "confirma_correcao" : "nao_confirma"),
+    timeoutMs: 8000,
+  });
+  const a = check?.answers?.confirma;
+  return a?.type === "noul" && a.noul >= KB_JEV_CONFIRM_MIN;
+}
+
 async function runKnowledgeDrift(
   tenantId: string,
   hotelName: string,
@@ -786,6 +821,34 @@ async function runKnowledgeDrift(
   if (facts.length === 0) return { driftIssues, autoNotes };
 
   lastKbDriftCheck.set(tenantId, Date.now());
+
+  // Pré-checagem pelo Jev (./jev.ts): um sim/não por fato do cadastro, numa única chamada. ACTIVE:
+  // se nenhum fato parece divergente, nem chama o Gemini (o caso de quase todos os ciclos). SHADOW:
+  // só registra, e o desfecho do Gemini é anotado depois para calibrar o limite.
+  const precheck = await runWorkerJevDecision(prisma, {
+    tenantId,
+    feature: WORKER_JEV_FEATURES.KNOWLEDGE_DRIFT_PRECHECK,
+    state: { topicos: filled.map((t) => ({ topico: t.topicKey, texto: t.content.slice(0, 4000) })) },
+    questions: Object.fromEntries(
+      facts.slice(0, KB_JEV_MAX_FACTS).map((f) => [
+        `fato_${f.key}`,
+        {
+          type: "noul" as const,
+          instructions: `Os textos dos tópicos informam "${f.label}" com um valor DIFERENTE de "${f.value}"?`,
+          criteria: {
+            true: "Algum trecho informa esse mesmo dado com outro valor (outro horário, preço, telefone ou endereço)",
+            false: "O dado não aparece nos textos, ou aparece com o mesmo valor, mesmo que escrito de outro jeito (ex.: 7h e 07:00)",
+          },
+        },
+      ])
+    ),
+    decide: (a) => (maxNoul(a) >= KB_JEV_SUSPECT_MIN ? "suspeita" : "sem_divergencia"),
+    timeoutMs: 8000,
+  });
+  if (precheck?.mode === "ACTIVE" && precheck.answers && maxNoul(precheck.answers) < KB_JEV_SUSPECT_MIN) {
+    await recordJevObservedOutcome(prisma, tenantId, precheck.logId, "gemini_skipped");
+    return { driftIssues, autoNotes };
+  }
 
   const driftModel = await resolveWorkerAiModel(prisma, WORKER_AI_FEATURES.OPERATIONAL_KNOWLEDGE_DRIFT, tenantId).catch(
     () => AI_MODEL_FALLBACK
@@ -834,6 +897,13 @@ async function runKnowledgeDrift(
   const topicByKey = new Map(filled.map((t) => [t.topicKey as string, t]));
   let applied = 0;
 
+  if (precheck) {
+    const validCount = (result.divergencias || []).filter(
+      (d) => typeof d.confianca === "number" && d.confianca >= KB_DRIFT_MIN_CONFIDENCE && factByKey.has(d.fato)
+    ).length;
+    await recordJevObservedOutcome(prisma, tenantId, precheck.logId, `gemini:${validCount}`);
+  }
+
   for (const d of result.divergencias || []) {
     const fact = factByKey.get(d.fato);
     const topic = topicByKey.get(d.topico);
@@ -847,7 +917,14 @@ async function runKnowledgeDrift(
     if (newContent === topic.content) continue;
     if (Math.abs(newContent.length - topic.content.length) > 40) continue; // troca mínima, nunca reescrita
 
-    if (!autoRewrite || applied >= KB_AUTOFIX_MAX_PER_RUN) {
+    // Com o Jev ativo, a correção automática só é aplicada se ele confirmar que aquele trecho é
+    // mesmo o valor do fato — senão vira só aviso para um humano (agente nunca altera sozinho sem
+    // segunda checagem). Checado por último para só gastar a chamada quando ia de fato aplicar.
+    if (
+      !autoRewrite ||
+      applied >= KB_AUTOFIX_MAX_PER_RUN ||
+      (precheck?.mode === "ACTIVE" && !(await jevConfirmsKbFix(tenantId, topic.content, stale, fact)))
+    ) {
       driftIssues.push({
         issueType: "KNOWLEDGE_DRIFT",
         entityId: `${topic.id}:${d.fato}`,
