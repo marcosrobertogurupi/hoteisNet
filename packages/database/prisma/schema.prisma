@@ -456,6 +456,9 @@ model AIUsageLog {
   tokensReasoning Int  @default(0)
   // Quantos passos de tool-loop a chamada consumiu (1 para chamadas simples). Detecta subcontagem.
   stepCount    Int      @default(1)
+  // Duração da chamada ao provedor em ms (ida e volta, medida no nosso lado). Null nos registros
+  // anteriores a 25/09/2026. Base para comparar latência entre modelos/provedores (ex.: Jev).
+  durationMs   Int?
   // Snapshot do custo no momento da escrita (calculado de AiModelPrice vigente). Recalculável.
   totalCostUsd Decimal  @db.Decimal(12, 8)
   createdAt    DateTime @default(now())

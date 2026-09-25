@@ -16,6 +16,7 @@ import {
   readGeminiUsage,
   logWorkerAiUsage,
   AI_MODEL_FALLBACK,
+  geminiThinkingConfig,
 } from "./aiUsage";
 
 const GEMINI_TIMEOUT_MS = 45_000;
@@ -78,10 +79,12 @@ function classifyByRatingOnly(rating: number | null): ReviewSentimentResult {
   };
 }
 
-async function callGeminiStructured(prompt: string, model: string): Promise<{ data: any; usage: any }> {
+async function callGeminiStructured(prompt: string, model: string): Promise<{ data: any; usage: any; durationMs: number }> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY não configurada.");
 
+  const thinkingConfig = geminiThinkingConfig(model);
+  const startedAt = Date.now();
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
@@ -89,7 +92,11 @@ async function callGeminiStructured(prompt: string, model: string): Promise<{ da
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", responseSchema: SENTIMENT_RESPONSE_SCHEMA },
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: SENTIMENT_RESPONSE_SCHEMA,
+          ...(thinkingConfig ? { thinkingConfig } : {}),
+        },
       }),
       signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
     }
@@ -99,7 +106,7 @@ async function callGeminiStructured(prompt: string, model: string): Promise<{ da
   const json: any = await response.json();
   const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
   if (!text) throw new Error("Gemini não retornou texto.");
-  return { data: JSON.parse(text), usage: json?.usageMetadata };
+  return { data: JSON.parse(text), usage: json?.usageMetadata, durationMs: Date.now() - startedAt };
 }
 
 /**
@@ -144,12 +151,13 @@ export async function analyzeReviewSentiment(
   ].join("\n");
 
   try {
-    const { data, usage } = await callGeminiStructured(prompt, model);
+    const { data, usage, durationMs } = await callGeminiStructured(prompt, model);
     await logWorkerAiUsage(prisma, {
       tenantId: params.tenantId,
       feature: WORKER_AI_FEATURES.REVIEW_SENTIMENT_ANALYSIS,
       model,
       ...readGeminiUsage(usage),
+      durationMs,
     });
 
     const sentiment = String(data.sentiment || "neutral").toUpperCase() as ReviewSentimentResult["sentiment"];

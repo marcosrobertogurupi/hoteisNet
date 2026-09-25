@@ -19,6 +19,7 @@ import { AI_AGENT_MODEL_FALLBACK } from "@/lib/aiAgent/agent";
 import { AI_FEATURES } from "@/lib/aiAgent/features";
 import { logAiUsage } from "@/lib/aiAgent/usage";
 import { readUsage } from "@/lib/aiAgent/readUsage";
+import { googleThinkingProviderOptions } from "@/lib/aiAgent/thinking";
 
 // Mensagens cruas que sempre acompanham o resumo no prompt do agente.
 export const RAW_WINDOW = 16;
@@ -104,6 +105,7 @@ async function foldOldMessages(
     "Produza o novo resumo consolidado e o novo estado. No resumo, preserve o que importa para fechar a reserva (quem é o hóspede, o que quer, o que já foi combinado, o que deu errado, o clima da conversa) e nunca invente. No estado, use null para o que ainda não se sabe e mantenha o que já estava preenchido, a menos que uma mensagem nova mude.",
   ].filter(Boolean);
 
+  const startedAt = Date.now();
   const { object, usage } = await generateObject({
     model: google(modelId),
     schema: z.object({
@@ -111,6 +113,8 @@ async function foldOldMessages(
       estado: negotiationStateSchema,
     }),
     prompt: promptParts.join("\n\n"),
+    // Resumo/extração não precisa de thinking (ver lib/aiAgent/thinking.ts).
+    providerOptions: googleThinkingProviderOptions(modelId),
   });
 
   await logAiUsage({
@@ -118,6 +122,7 @@ async function foldOldMessages(
     feature: AI_FEATURES.WHATSAPP_GUEST_SUPPORT_SUMMARY,
     model: modelId,
     ...readUsage(usage),
+    durationMs: Date.now() - startedAt,
   });
 
   const cursor = toFold[toFold.length - 1].createdAt;

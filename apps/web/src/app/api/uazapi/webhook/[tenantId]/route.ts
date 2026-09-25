@@ -170,7 +170,9 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
     // a API do Gemini) deixa a função presa até o limite de 300s da Vercel, e o hóspede fica sem
     // nenhuma resposta nem escalação — pior caso possível. Aborta bem antes desse limite para o
     // catch abaixo ter tempo de avisar o hóspede e acionar a recepção.
+    const agentStartedAt = Date.now();
     const result = await agent.generate({ messages, timeout: 45_000 });
+    const agentDurationMs = Date.now() - agentStartedAt;
 
     if (escalationReason) {
       console.log(`[runGuestSupportAgent] escalado para humano — tenant=${tenantId} phone=${phone} motivo=${escalationReason}`);
@@ -204,6 +206,7 @@ async function runGuestSupportAgent(tenantId: string, phone: string) {
       model: supportModelId,
       stepCount: result.steps?.length ?? 1,
       ...readUsage(result.usage),
+      durationMs: agentDurationMs,
     });
 
     if (result.text?.trim()) {
