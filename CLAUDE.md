@@ -168,7 +168,7 @@ Endpoint consultado em loop (mapas, telas que atualizam sozinhas) **nunca** baix
 
 ## Checklist rápido ao criar/revisar uma rota de API
 
-- [ ] A rota chama `getSessionUser` (ou é uma das 4 rotas explicitamente públicas, documentadas como tal em comentário)?
+- [ ] A rota chama `getSessionUser` (ou é uma das rotas explicitamente públicas listadas na regra 1 de Segurança, documentadas como tal em comentário)?
 - [ ] Toda query (`findMany`/`findFirst`/`update`/`delete`/`create`) usa `session.tenantId`, nunca um `tenantId` vindo de body/query/params?
 - [ ] `update`/`delete` usam `updateMany`/`deleteMany` com o filtro de tenant na própria escrita (não só numa checagem de leitura anterior)?
 - [ ] Todo ID estrangeiro recebido do cliente (guestId, roomId, cashRegisterId, companyId, accountPlanId...) é revalidado contra `session.tenantId` antes de usar?
