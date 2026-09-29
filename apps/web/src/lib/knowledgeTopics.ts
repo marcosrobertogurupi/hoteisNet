@@ -38,7 +38,7 @@ export const KNOWLEDGE_TOPIC_SEEDS: KnowledgeTopicSeed[] = [
     key: "LOCALIZACAO_ACESSO",
     title: "Localização, acesso e estacionamento",
     guide:
-      "IMPORTANTE: este é o ÚNICO lugar de onde o agente tira a localização do hotel. Quem pergunta \"onde fica\" quer chegar — o agente vai responder exatamente o que estiver aqui.\n\nPreencha:\n- Endereço completo e link do mapa (Google Maps)\n- Pontos de referência e distância aproximada de aeroporto/rodoviária\n- Instruções para quem vem de carro e de transporte público\n- Se tem estacionamento, se é gratuito, se precisa reservar vaga\n- Se há transfer (horários, ponto de embarque, se precisa agendar)",
+      "O endereço vem do cadastro do hotel — não repita aqui (se mudar, mude só lá). Quem pergunta \"onde fica\" quer chegar: o agente junta o endereço do cadastro com o que estiver aqui.\n\nPreencha:\n- Link do mapa (Google Maps)\n- Pontos de referência e distância aproximada de aeroporto/rodoviária\n- Instruções para quem vem de carro e de transporte público\n- Se tem estacionamento, se é gratuito, se precisa reservar vaga\n- Se há transfer (horários, ponto de embarque, se precisa agendar)",
   },
   {
     key: "QUARTO_COMODIDADES",
