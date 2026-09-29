@@ -29,12 +29,13 @@ $AllTables = @(
   "HospedagemPagto", "HospedagemTarifa", "HospOcorrencia", "OcorrenciaNet",
   "ReservasDatas", "ReservaAdiantamentos",
   "Caixa", "Caixa_Itens", "ConsumoNet", "ConsumoNetItens", "ConsumoNetPagto", "ReceberNet", "RecLancto",
-  "Colaborador", "Turnos"
+  "Colaborador", "Turnos", "Acesso"
 )
 if ($Tables) { $AllTables = $Tables }
 
-# Colunas binárias (fotos/bandeiras) — não exportadas.
-$Blobs = @("Hos_Foto", "Pai_Bandeira", "Col_Foto")
+# Colunas binárias (fotos/bandeiras) e credenciais (senha, digital) — NUNCA exportadas.
+# Acesso só entra para resolver o NOME de quem fez cada lançamento; usuários não são importados.
+$Blobs = @("Hos_Foto", "Pai_Bandeira", "Col_Foto", "Ace_Senha", "Ace_Digital", "Ace_Foto")
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $conn = New-Object System.Data.Odbc.OdbcConnection("DSN=$Dsn")

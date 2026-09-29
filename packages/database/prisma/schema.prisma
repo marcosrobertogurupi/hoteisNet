@@ -285,6 +285,8 @@ model Tenant {
   snrhosSettings             SNRHosSetting?
   users                      User[]
   vehicles                   Vehicle[]
+  guestPhones                GuestPhone[]
+  guestEmails                GuestEmail[]
   whatsappMessageSettings    WhatsappMessageSetting?
   whatsappMessages           WhatsappMessage[]
   conversationMemories       ConversationMemory[]
@@ -1461,6 +1463,8 @@ model Guest {
   tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   checkins       StayCheckin[]
   vehicles       Vehicle[]
+  phones         GuestPhone[]
+  emails         GuestEmail[]
   balanceEntries GuestBalanceEntry[]
   receivables    AccountsReceivable[]
 
@@ -1479,6 +1483,41 @@ model Vehicle {
 
   @@index([tenantId, guestId])
   @@map("vehicles")
+}
+
+// Telefones do hóspede (TelefonesHospede.fic do legado WinDev). O hóspede pode ter vários; Guest.phone /
+// Guest.whatsappPhone continuam sendo o principal (o que as telas atuais leem). whatsappId = JID do
+// WhatsApp quando conhecido (ex.: 5563999999999@s.whatsapp.net).
+model GuestPhone {
+  id              String   @id @default(uuid())
+  tenantId        String
+  guestId         String
+  number          String
+  description     String?
+  isPrimary       Boolean  @default(false)
+  whatsappId      String?
+  profilePhotoUrl String?
+  createdAt       DateTime @default(now())
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  guest           Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, guestId])
+  @@map("guest_phones")
+}
+
+// E-mails do hóspede (EmailHospedeNet.fic do legado). Guest.email continua sendo o principal.
+model GuestEmail {
+  id        String   @id @default(uuid())
+  tenantId  String
+  guestId   String
+  email     String
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  guest     Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, guestId])
+  @@map("guest_emails")
 }
 
 model FNRHRecord {

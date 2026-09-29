@@ -252,7 +252,8 @@ async function phase2(c: Ctx) {
     const k = String(x.ApC_IDApto);
     carByRoom.set(k, [...(carByRoom.get(k) || []), n]);
   }
-  const statusOf = (s: string) => (s === "O" ? "OCCUPIED" : s === "L" ? "VACANT_DIRTY" : "VACANT_CLEAN");
+  // Ocupação vem só de hospedagem ativa (nenhuma é importada como ativa — ver fase 4): "O" (ocupado) vira vago/limpo.
+  const statusOf = (s: string) => (s === "L" ? "VACANT_DIRTY" : "VACANT_CLEAN");
   const rooms: Prisma.RoomCreateManyInput[] = T("Apartamentos").map((a) => {
     const number = String(a.Ap_NoAp).trim();
     const isAud = norm(number) === "auditorio";
@@ -341,7 +342,356 @@ async function phase2(c: Ctx) {
 }
 
 // =====================================================================================
-const PHASE_FNS: Record<string, (c: Ctx) => Promise<void>> = { "1": phase1, "2": phase2 };
+// FASE 3 — hóspedes: HospedeNet + telefones, e-mails, veículos
+// =====================================================================================
+/** Data/hora sem fuso do legado é horário de Brasília (America/Sao_Paulo, sem horário de verão desde 2019). */
+const dt = (s: any): Date | null => (s ? new Date(String(s) + "-03:00") : null);
+const dateOnly = (s: any): Date | null => (s ? new Date(String(s).slice(0, 10) + "T00:00:00.000Z") : null);
+const titleCase = (s: string) => s.toLowerCase().replace(/(^|\s)(\S)/g, (_, a, b) => a + b.toUpperCase());
+
+async function phase3(c: Ctx) {
+  say("\n=== FASE 3 — hóspedes ===");
+  const { tx, tenantId } = c;
+
+  // países (para nacionalidade ISO e nome do país)
+  const cty = new Map((await tx.country.findMany({ where: { id: { startsWith: "hf-country-" } }, select: { id: true, name: true, isoCode: true } })).map((x) => [x.id, x]));
+  const companies = new Set((await tx.company.findMany({ where: { tenantId, id: { startsWith: "hf" } }, select: { id: true } })).map((x) => x.id));
+
+  // telefones por hóspede: distintos por dígitos (sem zeros à esquerda); principal primeiro
+  type Ph = { number: string; description: string | null; isPrimary: boolean; whatsappId: string | null; photo: string | null; legacyId: string };
+  const guestIds = new Set(T("HospedeNet").map((h) => String(h.Hos_ID)));
+  const phonesBy = new Map<string, Ph[]>();
+  let orphanPh = 0;
+  const tels = [...T("TelefonesHospede")].sort((a, b) => Number(b.TelHos_TelPrincipal) - Number(a.TelHos_TelPrincipal) || Number(a.TelHos_ID) - Number(b.TelHos_ID));
+  for (const t of tels) {
+    const gid = String(t.TelHos_IDHospede);
+    if (!guestIds.has(gid)) { orphanPh++; continue; }
+    const number = (digits(t.TelHos_Telefone) || "").replace(/^0+/, "");
+    if (number.length < 8) continue;
+    const list = phonesBy.get(gid) || [];
+    const jid = str(t.TelHos_Wpp);
+    const ex = list.find((p) => p.number === number);
+    if (ex) { ex.whatsappId ||= jid; ex.photo ||= str(t.TelHos_FotoPerfil); continue; }
+    list.push({ number, description: str(t.TelHos_Descricao), isPrimary: list.length === 0, whatsappId: jid, photo: str(t.TelHos_FotoPerfil), legacyId: String(t.TelHos_ID) });
+    phonesBy.set(gid, list);
+  }
+  const emailsBy = new Map<string, { email: string; isPrimary: boolean; legacyId: string }[]>();
+  let orphanEm = 0;
+  const mails = [...T("EmailHospedeNet")].sort((a, b) => Number(b.EmailHos_Principal) - Number(a.EmailHos_Principal) || Number(a.EmailHos_ID) - Number(b.EmailHos_ID));
+  for (const m of mails) {
+    const gid = String(m.EmailHos_IDHospede);
+    if (!guestIds.has(gid)) { orphanEm++; continue; }
+    const email = (str(m.EmailHos_Email) || "").toLowerCase();
+    if (!email.includes("@")) continue;
+    const list = emailsBy.get(gid) || [];
+    if (list.some((e) => e.email === email)) continue;
+    list.push({ email, isPrimary: list.length === 0, legacyId: String(m.EmailHos_ID) });
+    emailsBy.set(gid, list);
+  }
+
+  const genderOf = (g: any) => (/^m/i.test(String(g)) ? "M" : /^f/i.test(String(g)) ? "F" : "O");
+  const guests: Prisma.GuestCreateManyInput[] = T("HospedeNet").map((h) => {
+    const id = String(h.Hos_ID);
+    const phones = phonesBy.get(id) || [];
+    const primary = phones[0];
+    const jidPhone = phones.find((p) => p.whatsappId);
+    const wpp = jidPhone ? digits(jidPhone.whatsappId!.split("@")[0]) : null;
+    const country = cty.get(`hf-country-${h.Hos_IDPais}`);
+    const isBR = !country || country.isoCode === "BR";
+    const compl = str(h.Hos_ComplEndereco);
+    const complement = compl && compl !== "0" ? compl : null;
+    const emp = h.Hos_IDEmpresa && !["0", "-1"].includes(String(h.Hos_IDEmpresa)) ? c.id("emp", h.Hos_IDEmpresa) : null;
+    const cidade = str(h.Hos_Cidade);
+    return {
+      id: c.id("hosp", id), tenantId, fullName: String(h.Hos_Nome).trim(), cpf: digits(h.Hos_CPF), passport: str(h.Hos_Passaporte),
+      birthDate: dateOnly(h.Hos_DtNascimento), gender: genderOf(h.Hos_Sexo),
+      email: emailsBy.get(id)?.[0]?.email || null, phone: primary?.number || null, whatsappPhone: wpp || primary?.number || null, hasWhatsapp: !!wpp,
+      zipCode: digits(h.Hos_CEP), street: str(h.Hos_Logradouro), number: str(h.Hos_Numero), neighborhood: str(h.Hos_Bairro),
+      city: cidade, state: str(h.Hos_UF), country: isBR ? "Brasil" : titleCase(country!.name), nationality: country?.isoCode || "BR",
+      motherName: str(h.Hos_Mae), fatherName: str(h.Hos_Pai), occupation: str(h.Hos_Profissao),
+      rgNumber: str(h.Hos_Documento), rgIssuer: str(h.Hos_OrgaoExped),
+      fullAddress: complement ? [str(h.Hos_Logradouro), str(h.Hos_Numero), complement, str(h.Hos_Bairro), cidade && `${cidade}/${str(h.Hos_UF) || ""}`].filter(Boolean).join(", ") : null,
+      companyId: emp && companies.has(emp) ? emp : null,
+    };
+  });
+  let gN = 0;
+  await chunked(guests, 500, async (p) => { gN += (await tx.guest.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`Hóspedes: ${gN} novos (de ${guests.length})`);
+  const cpfCount = new Map<string, number>();
+  for (const g of guests) if (g.cpf) cpfCount.set(g.cpf, (cpfCount.get(g.cpf) || 0) + 1);
+  say(`  ℹ ${[...cpfCount.values()].filter((n) => n > 1).length} CPFs aparecem em mais de um cadastro (mantidos como no legado, pois hospedagens apontam para cada um); ${guests.filter((g) => !g.cpf).length} sem CPF.`);
+
+  const phRows: Prisma.GuestPhoneCreateManyInput[] = [];
+  for (const [gid, list] of phonesBy) for (const p of list) phRows.push({ id: c.id("telh", p.legacyId), tenantId, guestId: c.id("hosp", gid), number: p.number, description: p.description, isPrimary: p.isPrimary, whatsappId: p.whatsappId, profilePhotoUrl: p.photo });
+  let pN = 0;
+  await chunked(phRows, 1000, async (p) => { pN += (await tx.guestPhone.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`Telefones: ${pN} novos (legado ${T("TelefonesHospede").length}; duplicados/vazios agrupados; ${orphanPh} de hóspede inexistente descartados)`);
+
+  const emRows: Prisma.GuestEmailCreateManyInput[] = [];
+  for (const [gid, list] of emailsBy) for (const e of list) emRows.push({ id: c.id("emailh", e.legacyId), tenantId, guestId: c.id("hosp", gid), email: e.email, isPrimary: e.isPrimary });
+  let eN = 0;
+  await chunked(emRows, 1000, async (p) => { eN += (await tx.guestEmail.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`E-mails: ${eN} novos (legado ${T("EmailHospedeNet").length}; duplicados agrupados; ${orphanEm} de hóspede inexistente descartados)`);
+
+  const veh = T("Veiculos").filter((v) => str(v.Vei_Placa) && guestIds.has(String(v.Vei_IDHospede))).map((v) => ({
+    id: c.id("vei", v.Vei_ID), tenantId, guestId: c.id("hosp", v.Vei_IDHospede), placa: String(v.Vei_Placa).trim().toUpperCase(), caracteristica: str(v.Vei_CaractVei),
+  }));
+  let vN = 0;
+  await chunked(veh, 1000, async (p) => { vN += (await tx.vehicle.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`Veículos: ${vN} novos (de ${T("Veiculos").length})`);
+}
+
+// =====================================================================================
+// FASE 4 — hospedagens: StayCheckin + diárias, hóspedes acompanhantes, consumo, transferência de débito
+//
+// O backup do legado é um retrato de 08/02/2026. As hospedagens "abertas" nele (sem Hpd_DtFecham)
+// NÃO são importadas como ativas: a virada automática de diárias do SaaS cobraria meses de diárias
+// em cima delas e os quartos apareceriam ocupados. Entram ENCERRADAS na saída prevista, com os
+// valores exatamente como estavam (saldo a pagar preservado) e listadas no relatório para conferência.
+// =====================================================================================
+const dayKey = (s: any) => String(s).slice(0, 10);
+const refDate = (day: string) => new Date(`${day}T03:00:00.000Z`); // meia-noite de Brasília — mesma convenção de lib/dailyRollover.ts
+
+/** id estável do operador do legado (usuários não são importados; só o nome e um id rastreável). */
+function operatorFor(acessoById: Map<string, string>, idOrName: any): { id: string | null; name: string | null } {
+  const raw = str(idOrName);
+  if (!raw || raw === "0" || raw === "-1") return { id: null, name: null };
+  if (acessoById.has(raw)) return { id: `hf-usuario-${raw}`, name: acessoById.get(raw)! };
+  return { id: null, name: null };
+}
+
+async function phase4(c: Ctx) {
+  say("\n=== FASE 4 — hospedagens ===");
+  const { tx, tenantId } = c;
+
+  const acesso = new Map(T("Acesso").map((a) => [String(a.Ace_ID), String(a.Ace_NomeUsuario).trim()]));
+  const roomIds = new Map(T("Apartamentos").map((a) => [String(a.Ap_ID), String(a.Ap_NoAp).trim()]));
+  const guestName = new Map(T("HospedeNet").map((g) => [String(g.Hos_ID), String(g.Hos_Nome).trim()]));
+  const tariffName = new Map(T("TarifasNet").map((t) => [String(t.Tar_ID), String(t.Tar_Descricao).trim()]));
+  const products = new Map(T("Produtos").map((p) => [String(p.Prod_ID), String(p.Prod_Descricao).trim()]));
+
+  const stays: Prisma.StayCheckinCreateManyInput[] = [];
+  const stayIds = new Set<string>();
+  const openStays: string[] = [];
+  let skippedNoRoom = 0, skippedNoGuest = 0;
+  for (const h of T("HospedagemNet")) {
+    const id = String(h.Hpd_ID);
+    if (!roomIds.has(String(h.Hpd_IDQuarto))) { skippedNoRoom++; continue; }
+    if (!guestName.has(String(h.Hpd_IDHospPrinc))) { skippedNoGuest++; continue; }
+    const wasOpen = !h.Hpd_DtFecham;
+    const checkIn = dt(h.Hpd_DtChegada)!;
+    const expected = dt(h.Hpd_DtSaida) || checkIn;
+    const closedAt = dt(h.Hpd_DtFecham) || expected;
+    if (wasOpen) openStays.push(`${roomIds.get(String(h.Hpd_IDQuarto))}#${id} (${dayKey(h.Hpd_DtChegada)}→${dayKey(h.Hpd_DtSaida)}, saldo R$ ${num(h.hpd_SaldoPagar).toFixed(2)})`);
+    const inBy = operatorFor(acesso, h.Hpd_IdUsuChecking);
+    const outBy = operatorFor(acesso, h.Hpd_IdUsuCheckout !== "0" ? h.Hpd_IdUsuCheckout : h.Hpd_OperadorFechou);
+    const closer = operatorFor(acesso, h.Hpd_OperadorFechou);
+    stays.push({
+      id: c.id("hpd", id), tenantId, roomId: c.id("apto", h.Hpd_IDQuarto), primaryGuestId: c.id("hosp", h.Hpd_IDHospPrinc),
+      checkInDate: checkIn, expectedCheckOut: expected, actualCheckOut: closedAt, isClosed: true,
+      totalDaily: new Prisma.Decimal(num(h.Hpd_TotalBrtDiarias)), totalConsumption: new Prisma.Decimal(num(h.Hpd_TotalConsumo)), discount: new Prisma.Decimal(num(h.Hpd_TotalDesc)),
+      adults: Math.max(0, Number(h.Hpd_QtdAdulto) || 0), children: Math.max(0, Number(h.Hpd_QtdCrianca) || 0),
+      dailiesCount: Math.max(0, Number(h.Hpd_QtdDiarias) || 0), extraDailiesCount: Math.max(0, Number(h.Hpd_QtdDiariasExtras) || 0), lastRolloverDate: closedAt,
+      checkedInByUserId: inBy.id, checkedInByUserName: inBy.name, checkedOutByUserId: outBy.id, checkedOutByUserName: outBy.name,
+      closingOperatorId: closer.id, closingOperatorName: closer.name,
+      totalAdvance: new Prisma.Decimal(num(h.Hpd_TotalAdiant)), balanceDue: new Prisma.Decimal(num(h.hpd_SaldoPagar)), otherDebits: new Prisma.Decimal(num(h.Hpd_OutrosDeb)),
+    });
+    stayIds.add(id);
+  }
+  let sN = 0;
+  await chunked(stays, 500, async (p) => { sN += (await tx.stayCheckin.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`Hospedagens: ${sN} novas (de ${T("HospedagemNet").length}); sem quarto válido: ${skippedNoRoom}; sem hóspede válido: ${skippedNoGuest}`);
+  say(`  ⚠ ${openStays.length} hospedagens estavam ABERTAS no backup (08/02/2026) e entraram ENCERRADAS na saída prevista, com os valores do legado (nenhuma diária nova é gerada):`);
+  say(`    ${openStays.join("; ")}`);
+
+  // --- Diárias (HospedagemTarifa → StayCharge), uma por dia; unique (stay, referenceDate)
+  const charges: Prisma.StayChargeCreateManyInput[] = [];
+  const seen = new Set<string>();
+  const perStay = new Map<string, number>();
+  for (const t of T("HospedagemTarifa")) {
+    const sid = String(t.HTa_idHospedagem);
+    if (!stayIds.has(sid) || !t.HTa_DataIni) continue;
+    const start = new Date(`${dayKey(t.HTa_DataIni)}T00:00:00Z`);
+    let end = t.HTa_DataFim ? new Date(`${dayKey(t.HTa_DataFim)}T00:00:00Z`) : new Date(start.getTime() + 86400000);
+    if (end <= start) end = new Date(start.getTime() + 86400000);
+    for (let d = start; d < end; d = new Date(d.getTime() + 86400000)) {
+      const dk = d.toISOString().slice(0, 10);
+      const key = `${sid}|${dk}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const amount = num(t.HTa_VlrTarifa);
+      perStay.set(sid, (perStay.get(sid) || 0) + amount);
+      charges.push({ id: c.id("chg", `${t.HTa_ID}-${dk}`), stayCheckinId: c.id("hpd", sid), referenceDate: refDate(dk), description: tariffName.get(String(t.HTa_idTarifa)) || "Diária", chargeType: "DAILY", amount: new Prisma.Decimal(amount) });
+    }
+  }
+  let cN = 0;
+  await chunked(charges, 2000, async (p) => { cN += (await tx.stayCharge.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`Diárias lançadas: ${cN} novas (de ${charges.length} dias)`);
+  const noCharge = stays.filter((s) => !perStay.has(String(s.id).split("-").pop()!)).length;
+  const divergent = T("HospedagemNet").filter((h) => stayIds.has(String(h.Hpd_ID)) && perStay.has(String(h.Hpd_ID)) && Math.abs((perStay.get(String(h.Hpd_ID)) || 0) - num(h.Hpd_TotalBrtDiarias)) > 0.01).length;
+  say(`  ℹ ${noCharge} hospedagens sem diárias detalhadas no legado (mantêm só o total); ${divergent} com soma das diárias ≠ total bruto do legado (total do legado preservado).`);
+
+  // --- Demais hóspedes (HospedagemDmsHosp → StayGuest)
+  const sg = T("HospedagemDmsHosp").filter((d) => stayIds.has(String(d.HD_IDHosped)) && str(d.HD_NomeHosp)).map((d) => ({ id: c.id("dms", d.HD_ID), stayCheckinId: c.id("hpd", d.HD_IDHosped), name: String(d.HD_NomeHosp).trim() }));
+  say(`Hóspedes acompanhantes: ${(await tx.stayGuest.createMany({ data: sg, skipDuplicates: true })).count} novos (de ${T("HospedagemDmsHosp").length})`);
+
+  // --- Consumo (ConsumoNetItens → StayConsumption). Itens de venda de balcão (sem hospedagem) ficam só no caixa.
+  const header = new Map(T("ConsumoNet").map((h) => [String(h.Con_ID), h]));
+  const cons: Prisma.StayConsumptionCreateManyInput[] = [];
+  let noStay = 0;
+  const consBy = new Map<string, number>();
+  for (const i of T("ConsumoNetItens")) {
+    const hid = i.ConI_IDHospedagem && i.ConI_IDHospedagem !== "0" ? String(i.ConI_IDHospedagem) : String(header.get(String(i.ConI_ConID))?.Con_IDHospedagem || "0");
+    if (!stayIds.has(hid)) { noStay++; continue; }
+    const op = operatorFor(acesso, i.ConI_IDUsuario);
+    consBy.set(hid, (consBy.get(hid) || 0) + num(i.ConI_Total));
+    cons.push({
+      id: c.id("coni", i.ConI_ID), stayCheckinId: c.id("hpd", hid), productId: products.has(String(i.ConI_ProdID)) ? c.id("prod", i.ConI_ProdID) : null,
+      productName: products.get(String(i.ConI_ProdID)) || `Produto ${i.ConI_ProdID}`, quantity: new Prisma.Decimal(num(i.ConI_Quant)),
+      unitPrice: new Prisma.Decimal(num(i.ConI_VlrUnit)), totalPrice: new Prisma.Decimal(num(i.ConI_Total)),
+      operatorId: op.id, operatorName: op.name, createdAt: dt(i.ConI_DtLancto) || undefined,
+    });
+  }
+  let coN = 0;
+  await chunked(cons, 1000, async (p) => { coN += (await tx.stayConsumption.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`Consumo lançado: ${coN} itens novos (de ${T("ConsumoNetItens").length}); ${noStay} itens sem hospedagem (vendas de balcão) não entram aqui`);
+  const cdiv = T("HospedagemNet").filter((h) => stayIds.has(String(h.Hpd_ID)) && Math.abs((consBy.get(String(h.Hpd_ID)) || 0) - num(h.Hpd_TotalConsumo)) > 0.01).length;
+  say(`  ℹ ${cdiv} hospedagens com soma dos itens ≠ total de consumo do legado (total do legado preservado).`);
+
+  // --- Transferência de débito entre quartos (HospedagemOutDeb)
+  const tr = T("HospedagemOutDeb").filter((t) => stayIds.has(String(t.HOD_idHosp_Ori)) && stayIds.has(String(t.HOD_idHosp_Des))).map((t) => {
+    const op = operatorFor(acesso, t.HOD_idUsuario);
+    return { id: c.id("hod", t.HOD_ID), tenantId, fromStayCheckinId: c.id("hpd", t.HOD_idHosp_Ori), toStayCheckinId: c.id("hpd", t.HOD_idHosp_Des), amount: new Prisma.Decimal(num(t.HOD_Valor)), operatorId: op.id, operatorName: op.name, createdAt: dt(t.HOD_Data) || undefined };
+  });
+  say(`Transferências de débito: ${(await tx.stayDebitTransfer.createMany({ data: tr, skipDuplicates: true })).count} novas (de ${T("HospedagemOutDeb").length})`);
+
+  const obs = T("HospedagemObs").length;
+  if (obs) say(`  ℹ ${obs} observações de hospedagem (HospedagemObs) não têm campo equivalente no SaaS e não foram importadas.`);
+  say(`  ℹ ReservasDatas (${T("ReservasDatas").length}) é a grade de ocupação do mapa legado — o SaaS calcula isso a partir das hospedagens; ReservaNet está vazia. Nenhuma reserva a importar.`);
+  say(`  ℹ HospedeNetMov (${T("HospedeNetMov").length}) é o extrato do hóspede por hospedagem, não saldo credor — não importado (evita saldos falsos; histórico já está nas hospedagens e pagamentos).`);
+
+  // Quartos: a ocupação vem SOMENTE das hospedagens ativas (nenhuma foi importada como ativa),
+  // então nenhum quarto importado pode ficar OCUPADO.
+  const fixed = await tx.room.updateMany({ where: { tenantId, id: { startsWith: `hf${c.tenantId.replace(/-/g, "").slice(0, 8)}-apto-` }, status: "OCCUPIED" }, data: { status: "VACANT_CLEAN" } });
+  say(`Quartos: ${fixed.count} que o legado marcava como ocupados voltaram para vago/limpo (sem hospedagem ativa importada).`);
+}
+
+// =====================================================================================
+// FASE 5 — financeiro: caixas, lançamentos de caixa, contas a receber
+// =====================================================================================
+async function phase5(c: Ctx) {
+  say("\n=== FASE 5 — financeiro ===");
+  const { tx, tenantId } = c;
+  const acesso = new Map(T("Acesso").map((a) => [String(a.Ace_ID), String(a.Ace_NomeUsuario).trim()]));
+  const acessoByName = new Map(T("Acesso").map((a) => [norm(String(a.Ace_NomeUsuario)), String(a.Ace_ID)]));
+  const formas = new Map(T("FormaPagt").map((f) => [String(f.ForPag_ID), String(f.ForPag_Nome).trim()]));
+  const plcs = new Set(T("PLContas").map((p) => String(p.PLC_ID)));
+  const stayRows = new Map(T("HospedagemNet").map((h) => [String(h.Hpd_ID), h]));
+  const roomNo = new Map(T("Apartamentos").map((a) => [String(a.Ap_ID), String(a.Ap_NoAp).trim()]));
+  const gName = new Map(T("HospedeNet").map((g) => [String(g.Hos_ID), String(g.Hos_Nome).trim()]));
+  const stayOk = (id: string) => stayRows.has(id) && roomNo.has(String(stayRows.get(id)!.Hpd_IDQuarto)) && gName.has(String(stayRows.get(id)!.Hpd_IDHospPrinc));
+
+  // reserva → hospedagem (só quando única; adiantamento de reserva sem hospedagem fica solto no caixa)
+  const stayByRes = new Map<string, string[]>();
+  for (const h of T("HospedagemNet")) if (h.Hpd_IDReserva && h.Hpd_IDReserva !== "0") stayByRes.set(String(h.Hpd_IDReserva), [...(stayByRes.get(String(h.Hpd_IDReserva)) || []), String(h.Hpd_ID)]);
+
+  // --- Caixas (todos entram FECHADOS: o backup tem 6 "abertos" de fevereiro/2026)
+  const registers = T("Caixa");
+  const items = T("Caixa_Itens");
+  const byChave = new Map(registers.map((r) => [String(r.ChaveCX), String(r.ID)]));
+  const regIds = new Set(registers.map((r) => String(r.ID)));
+  const sortedRegs = [...registers].sort((a, b) => String(a.DtHrAbe).localeCompare(String(b.DtHrAbe)));
+  const resolveReg = (it: Row): string | null => {
+    if (regIds.has(String(it.Cai_IDCaixa))) return String(it.Cai_IDCaixa);
+    if (byChave.has(String(it.Cai_ChaveCx))) return byChave.get(String(it.Cai_ChaveCx))!;
+    let best: string | null = null;
+    for (const r of sortedRegs) if (String(r.DtHrAbe) <= String(it.Cai_Data)) best = String(r.ID);
+    return best;
+  };
+
+  // lançamentos
+  type Tx = Prisma.CashTransactionCreateManyInput & { _reg: string };
+  const txs: Tx[] = [];
+  let openingRows = 0, unlinkedStay = 0;
+  const methodFromText = (it: Row) => {
+    const t = `${it.Cai_Historico || ""} ${it.Cai_Descricao || ""}`.toUpperCase();
+    for (const m of ["DINHEIRO", "PIX", "CARTAO", "CARTÃO", "FATURA", "TRANSF.DEBITO"]) if (t.includes(m)) return m.replace("Ã", "A");
+    return null;
+  };
+  for (const it of items) {
+    const valor = num(it.Cai_Valor);
+    if (it.Cai_Descricao === "Abertura do caixa" && valor === 0) { openingRows++; continue; } // fundo de troco 0 = sem lançamento (convenção do SaaS)
+    const reg = resolveReg(it);
+    if (!reg) continue;
+    const isFundo = it.Cai_Origem === "FUNDO DE CAIXA";
+    let stay: string | null = null;
+    if (it.Cai_Origem === "Hospedagem" && stayOk(String(it.Cai_IDOrigem))) stay = String(it.Cai_IDOrigem);
+    else if (it.Cai_Origem === "Reserva") {
+      const l = stayByRes.get(String(it.Cai_IDOrigem));
+      if (l && l.length === 1 && stayOk(l[0])) stay = l[0];
+    }
+    if ((it.Cai_Origem === "Hospedagem" || it.Cai_Origem === "Reserva") && !stay) unlinkedStay++;
+    const forma = String(it.Cai_idFormaPag);
+    const methodName = isFundo ? "DINHEIRO" : formas.get(forma) || methodFromText(it) || (valor === 0 ? "SEM MOVIMENTO" : "NÃO INFORMADA");
+    const sh = stay ? stayRows.get(stay)! : null;
+    txs.push({
+      _reg: reg, id: c.id("cai", it.Cai_ID), cashRegisterId: c.id("caixa", reg), type: isFundo ? "SUPRIMENTO" : "ENTRADA", amount: new Prisma.Decimal(valor),
+      description: String(it.Cai_Descricao || it.Cai_Historico || "Lançamento importado do sistema legado").trim(), paymentMethod: methodName,
+      countsInCashTotal: !!it.Cai_SomaCaixa, hiddenFromCashLog: forma === "6",
+      stayCheckinId: stay ? c.id("hpd", stay) : null, roomNumber: sh ? roomNo.get(String(sh.Hpd_IDQuarto)) || null : null, guestName: sh ? gName.get(String(sh.Hpd_IDHospPrinc)) || null : null,
+      accountPlanId: plcs.has(String(it.Cai_idPLC)) ? c.id("plc", it.Cai_idPLC) : null, createdAt: dt(it.Cai_Data) || undefined,
+    });
+  }
+
+  const totals = new Map<string, number>();
+  const lastAt = new Map<string, string>();
+  for (const t of txs) {
+    if (t.countsInCashTotal) totals.set(t._reg, (totals.get(t._reg) || 0) + Number(t.amount));
+  }
+  for (const it of items) { const r = resolveReg(it); if (r && String(it.Cai_Data) > (lastAt.get(r) || "")) lastAt.set(r, String(it.Cai_Data)); }
+  const regRows: Prisma.CashRegisterCreateManyInput[] = registers.map((r) => {
+    const name = String(r.NomeUsuario || "").trim() || "LEGADO";
+    const aid = acessoByName.get(norm(name));
+    return {
+      id: c.id("caixa", r.ID), tenantId, operatorId: aid ? `hf-usuario-${aid}` : `hf-operador-${norm(name).replace(/ /g, "-")}`, operatorName: name,
+      openingBalance: new Prisma.Decimal(0), closingBalance: new Prisma.Decimal(Math.round((totals.get(String(r.ID)) || 0) * 100) / 100),
+      openedAt: dt(r.DtHrAbe)!, closedAt: dt(r.DtHrFec) || dt(lastAt.get(String(r.ID))) || dt(r.DtHrAbe)!, isOpen: false,
+    };
+  });
+  say(`Caixas: ${(await tx.cashRegister.createMany({ data: regRows, skipDuplicates: true })).count} novos (de ${registers.length}); os ${registers.filter((r) => r.Aberto).length} que estavam abertos no backup entram FECHADOS`);
+
+  const data = txs.map(({ _reg, ...rest }) => rest);
+  let tN = 0;
+  await chunked(data, 1000, async (p) => { tN += (await tx.cashTransaction.createMany({ data: p, skipDuplicates: true })).count; });
+  say(`Lançamentos de caixa: ${tN} novos (de ${items.length}; ${openingRows} "Abertura do caixa" de valor zero não viram lançamento); ${unlinkedStay} de hospedagem/reserva sem hospedagem correspondente ficam soltos no caixa`);
+  const sumLegacy = items.reduce((s, i) => s + (i.Cai_SomaCaixa ? num(i.Cai_Valor) : 0), 0);
+  const sumNew = txs.reduce((s, t) => s + (t.countsInCashTotal ? Number(t.amount) : 0), 0);
+  say(`  ✔ conciliação: total que soma no caixa — legado R$ ${sumLegacy.toFixed(2)} | importado R$ ${sumNew.toFixed(2)}`);
+
+  // --- Contas a receber (ReceberNet). Exige hospedagem (FK obrigatória).
+  const compByName = new Map(T("Empresas").map((e) => [norm(String(e.Emp_Razao)), String(e.Emp_ID)]));
+  const recs: Prisma.AccountsReceivableCreateManyInput[] = [];
+  let recNoStay = 0;
+  for (const r of T("ReceberNet")) {
+    const sid = String(r.Rec_DocOrigem);
+    if (!stayOk(sid)) { recNoStay++; continue; }
+    const cli = String(r.Rec_CodCliente);
+    const nm = norm(String(r.Rec_NomCliente || ""));
+    const guestMatch = gName.has(cli) && norm(gName.get(cli)!) === nm ? c.id("hosp", cli) : null;
+    const comp = compByName.get(nm);
+    recs.push({
+      id: c.id("rec", r.Rec_ID), tenantId, stayCheckinId: c.id("hpd", sid), companyId: comp ? c.id("emp", comp) : null, guestId: guestMatch,
+      billedToName: String(r.Rec_NomCliente || "").trim() || "—", documentNumber: String(r.Rec_NoDocumento || r.Rec_ID).trim(),
+      issueDate: dt(r.Rec_Emissao) || new Date(), dueDate: dt(r.Rec_Vencimento) || dt(r.Rec_Emissao) || new Date(),
+      amount: new Prisma.Decimal(num(r.Rec_Valor)), amountPaid: new Prisma.Decimal(num(r.Rec_ValorPago)), isPaid: !!r.Rec_Pago, paidAt: dt(r.Rec_DtPagto),
+      paymentMethodDescription: "FATURA", notes: str(r.Rec_Obs),
+    });
+  }
+  say(`Contas a receber: ${(await tx.accountsReceivable.createMany({ data: recs, skipDuplicates: true })).count} novas (de ${T("ReceberNet").length}); ${recNoStay} sem hospedagem correspondente não importadas; ${T("ReceberNet").filter((r) => !r.Rec_Pago).length} estavam em aberto no legado`);
+}
+
+// =====================================================================================
+const PHASE_FNS: Record<string, (c: Ctx) => Promise<void>> = { "1": phase1, "2": phase2, "3": phase3, "4": phase4, "5": phase5 };
 
 async function main() {
   const hotel = T("Hotel")[0];
