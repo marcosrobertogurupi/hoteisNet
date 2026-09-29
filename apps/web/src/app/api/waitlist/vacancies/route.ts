@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
-import { findWaitlistVacancy } from "@/lib/waitlistMatch";
+import { findWaitlistVacancy, getTenantStandardTimes } from "@/lib/waitlistMatch";
 
 // GET /api/waitlist/vacancies — para cada entrada WAITING do tenant, verifica (determinístico, sem
 // IA) se já existe um quarto da categoria livre no período. Devolve só os ids das entradas com
@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
       take: 100,
     });
 
+    const times = await getTenantStandardTimes(prisma, session.tenantId);
     const entryIds: string[] = [];
     for (const e of waiting) {
       const vacancy = await findWaitlistVacancy(prisma, {
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest) {
         checkIn: e.checkInDate,
         checkOut: e.checkOutDate,
         excludeWaitlistId: e.id,
+        times,
       });
       if (vacancy) entryIds.push(e.id);
     }

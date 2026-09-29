@@ -1,27 +1,64 @@
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { busyRoomIdsForPeriod } from "@/lib/reservationHelpers";
-import { dateOnlyBrasilia } from "@/lib/brasiliaDate";
+import { dateOnlyBrasilia, brDateKey } from "@/lib/brasiliaDate";
 
 type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
-// Horário padrão de check-in/out do hotel — mesma constante assumida em todo o sistema quando não
-// há horário definido (ver apps/web/src/lib/aiAgent/tools.ts, CheckinHospedagemModal.tsx).
+// Horários padrão de check-in/out do hotel. Fonte única: Tenant.standardCheckInTime/OutTime
+// (Configurações → "Horários Padrão de Check-in e Check-out") — os mesmos que POST /api/reservations
+// usa para ancorar a reserva. Sem isso a checagem de vaga da fila comparava um período ancorado em
+// 14:00/12:00 com reservas ancoradas no horário real do hotel (regra: fonte única de ocupação).
+export type TenantStandardTimes = { checkIn: string; checkOut: string };
+
+// Fallback só quando o tenant não tem horário válido gravado (o schema já tem esses defaults).
 const DEFAULT_CHECK_IN_TIME = "14:00";
 const DEFAULT_CHECK_OUT_TIME = "12:00";
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-// Ancora só a data (AAAA-MM-DD) no horário padrão do hotel, no fuso de Brasília (UTC-3 o ano todo —
-// o Brasil não tem horário de verão desde 2019). Igual ao fluxo manual e ao do agente de IA — sem
+export async function getTenantStandardTimes(tx: PrismaClientOrTx, tenantId: string): Promise<TenantStandardTimes> {
+  const t = await tx.tenant.findUnique({
+    where: { id: tenantId },
+    select: { standardCheckInTime: true, standardCheckOutTime: true },
+  });
+  return {
+    checkIn: t?.standardCheckInTime && HHMM.test(t.standardCheckInTime) ? t.standardCheckInTime : DEFAULT_CHECK_IN_TIME,
+    checkOut: t?.standardCheckOutTime && HHMM.test(t.standardCheckOutTime) ? t.standardCheckOutTime : DEFAULT_CHECK_OUT_TIME,
+  };
+}
+
+// Ancora só a data (AAAA-MM-DD) no horário do hotel, no fuso de Brasília (UTC-3 o ano todo — o
+// Brasil não tem horário de verão desde 2019). Igual ao fluxo manual e ao do agente de IA — sem
 // isso a comparação de período nasce à meia-noite UTC, que é 21h do dia anterior em BRT.
 export function atBrasiliaTime(dateYmd: string, hhmm: string): Date {
   return new Date(`${dateYmd}T${hhmm}:00-03:00`);
 }
 
-export function waitlistCheckInAt(date: Date): Date {
-  return atBrasiliaTime(date.toISOString().slice(0, 10), DEFAULT_CHECK_IN_TIME);
+// Data de calendário (AAAA-MM-DD) de uma data da fila:
+//  • string do cliente (<input type="date">, "AAAA-MM-DD[...]") → o próprio prefixo — é a data que
+//    o operador escolheu; nunca passar por `new Date()`, que a leria como meia-noite UTC;
+//  • Date (valor já gravado, ancorado no horário do hotel) → a data em BRASÍLIA. `toISOString()`
+//    daria a data em UTC: com check-in configurado a partir das 21h a entrada "pulava" um dia a
+//    cada reancoragem.
+// Valor inválido → "" (o atBrasiliaTime devolve Date inválida e as rotas respondem 400).
+function waitlistDateKey(value: Date | string): string {
+  if (typeof value === "string") return value.trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
+  if (isNaN(value.getTime())) return "";
+  return brDateKey(value);
 }
-export function waitlistCheckOutAt(date: Date): Date {
-  return atBrasiliaTime(date.toISOString().slice(0, 10), DEFAULT_CHECK_OUT_TIME);
+
+export function waitlistCheckInAt(date: Date | string, times: TenantStandardTimes): Date {
+  return atBrasiliaTime(waitlistDateKey(date), times.checkIn);
+}
+export function waitlistCheckOutAt(date: Date | string, times: TenantStandardTimes): Date {
+  return atBrasiliaTime(waitlistDateKey(date), times.checkOut);
+}
+
+// Nº de diárias pela diferença de DATAS (Brasília), nunca pela diferença de horas: com horários
+// configuráveis (ex.: check-in 23:00, check-out 08:00) `round(ms / 24h)` perde uma diária.
+export function waitlistNights(checkIn: Date, checkOut: Date): number {
+  const [a, b] = [brDateKey(checkIn), brDateKey(checkOut)].map((k) => Date.parse(`${k}T00:00:00Z`));
+  return Math.max(1, Math.round((b - a) / (24 * 60 * 60 * 1000)));
 }
 
 // Normaliza adults/children vindos do cliente: inteiros, adults >= 1, children >= 0. Sem isso um
@@ -50,6 +87,7 @@ export async function findActiveDuplicateEntry(
     guestCpf?: string | null;
     guestPhone?: string | null;
     guestEmail?: string | null;
+    times: TenantStandardTimes;
   }
 ): Promise<{ id: string; guestName: string; createdAt: Date } | null> {
   const cpf = params.guestCpf?.replace(/\D/g, "") || null;
@@ -57,8 +95,8 @@ export async function findActiveDuplicateEntry(
   const email = params.guestEmail?.trim().toLowerCase() || null;
   if (!cpf && !(phone && phone.length >= 10) && !email) return null;
 
-  const checkIn = waitlistCheckInAt(params.checkIn);
-  const checkOut = waitlistCheckOutAt(params.checkOut);
+  const checkIn = waitlistCheckInAt(params.checkIn, params.times);
+  const checkOut = waitlistCheckOutAt(params.checkOut, params.times);
   const candidates = await tx.waitlistEntry.findMany({
     where: {
       tenantId: params.tenantId,
@@ -134,10 +172,11 @@ export async function findWaitlistVacancy(
     checkIn: Date;
     checkOut: Date;
     excludeWaitlistId?: string;
+    times: TenantStandardTimes;
   }
 ): Promise<{ roomId: string } | null> {
-  const checkIn = waitlistCheckInAt(params.checkIn);
-  const checkOut = waitlistCheckOutAt(params.checkOut);
+  const checkIn = waitlistCheckInAt(params.checkIn, params.times);
+  const checkOut = waitlistCheckOutAt(params.checkOut, params.times);
   if (checkOut <= checkIn) return null;
 
   const rooms = await tx.room.findMany({
@@ -155,6 +194,7 @@ export async function findWaitlistVacancy(
       checkIn: params.checkIn,
       checkOut: params.checkOut,
       excludeWaitlistId: params.excludeWaitlistId,
+      times: params.times,
     }),
   ]);
 
@@ -175,11 +215,12 @@ export async function roomIdsHeldByOtherWaitlist(
     checkIn: Date;
     checkOut: Date;
     excludeWaitlistId?: string;
+    times: TenantStandardTimes;
   }
 ): Promise<Set<string>> {
   if (params.roomIds.length === 0) return new Set();
-  const checkIn = waitlistCheckInAt(params.checkIn);
-  const checkOut = waitlistCheckOutAt(params.checkOut);
+  const checkIn = waitlistCheckInAt(params.checkIn, params.times);
+  const checkOut = waitlistCheckOutAt(params.checkOut, params.times);
   const heldEntries = await tx.waitlistEntry.findMany({
     where: {
       tenantId: params.tenantId,

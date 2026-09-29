@@ -5,6 +5,7 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import {
   waitlistCheckInAt,
   waitlistCheckOutAt,
+  getTenantStandardTimes,
   findWaitlistVacancy,
   findActiveDuplicateEntry,
   sanitizeParty,
@@ -124,10 +125,12 @@ export async function POST(req: NextRequest) {
       realGuestId = guest?.id || null;
     }
 
-    // Datas ancoradas no horário padrão do hotel em Brasília — igual ao fluxo de reserva, para o
-    // match de período (lib/waitlistMatch.ts) nunca divergir por causa de meia-noite UTC.
-    const checkIn = waitlistCheckInAt(new Date(checkInDate));
-    const checkOut = waitlistCheckOutAt(new Date(checkOutDate));
+    // Datas ancoradas no horário padrão do hotel (Tenant.standardCheckInTime/OutTime) em Brasília —
+    // igual ao POST /api/reservations, para o match de período (lib/waitlistMatch.ts) nunca divergir
+    // das reservas. A data vai como string ("AAAA-MM-DD"), nunca via `new Date()` (meia-noite UTC).
+    const times = await getTenantStandardTimes(prisma, session.tenantId);
+    const checkIn = waitlistCheckInAt(String(checkInDate), times);
+    const checkOut = waitlistCheckOutAt(String(checkOutDate), times);
     if (isNaN(checkIn.getTime()) || isNaN(checkOut.getTime()) || checkOut <= checkIn) {
       return NextResponse.json({ success: false, error: "A data de saída precisa ser depois da chegada." }, { status: 400 });
     }
@@ -156,6 +159,7 @@ export async function POST(req: NextRequest) {
         guestCpf,
         guestPhone,
         guestEmail,
+        times,
       });
       if (dup) {
         return NextResponse.json({
@@ -175,6 +179,7 @@ export async function POST(req: NextRequest) {
         roomCategoryId: category.id,
         checkIn,
         checkOut,
+        times,
       });
       if (vacancy) {
         return NextResponse.json({
