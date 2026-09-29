@@ -9,7 +9,7 @@ import { processPaymentLine } from "@/lib/paymentProcessing";
 import { nextReservationNumber, findConflictingReservation } from "@/lib/reservationHelpers";
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia, parseBrasiliaDateTime, brDateKey, brTimeHHMM } from "@/lib/brasiliaDate";
-import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { gateCriticalEvent, releaseCriticalAuthorization, formatBRL } from "@/lib/criticalAuth";
 import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
 import { resolveOperator } from "@/lib/operator";
 import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
@@ -227,11 +227,14 @@ const RESERVATION_STATUSES_NOT_MATCHABLE = ["CANCELLED", "CHECKED_IN", "CHECKED_
 // Reservas nunca fiquem dessincronizados por uma falha parcial entre as duas escritas.
 export async function POST(req: NextRequest) {
   let authToRelease: DiscountAuthResult | null = null;
+  let earlyAuthToRelease: { id: string; channel: string } | null = null;
+  let releaseTenantId: string | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
       return NextResponse.json({ success: false, error: "Sessão inválida ou expirada." }, { status: 401 });
     }
+    releaseTenantId = session.tenantId;
 
     const body = await req.json();
     const {
@@ -289,7 +292,7 @@ export async function POST(req: NextRequest) {
     // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
     // administrador — checagem AUTORITATIVA no servidor, antes de abrir a transação (nunca confiar
     // só no que a tela de check-in já validou, que pode ter sido burlada). Mesmo padrão de
-    // /api/caixa/pagamento-lote e /api/pdv/atendimentos/[id] (verifyAdminStepUp). A base do
+    // /api/caixa/pagamento-lote e /api/pdv/atendimentos/[id] (authorizeDiscount). A base do
     // percentual replica o totalDiariasBruto calculado no CheckinHospedagemModal (nights * diária +
     // chegada antecipada), usando só dados do próprio body — a hospedagem ainda não existe.
     const discountValue = Math.max(0, Number(discount) || 0);
@@ -329,9 +332,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Cortesia de chegada antecipada / taxa fixa abaixo da meia diária = isenção ou desconto
-    // informal — exige autorização de administrador VERIFICADA AQUI (e-mail + senha reenviados
-    // pela tela), nunca só um nome digitado em `authorizedBy`, que qualquer operador preencheria.
-    // O nome gravado na descrição passa a ser o do administrador autenticado pelo servidor.
+    // informal — exige autorização de um autorizador VERIFICADA AQUI (evento crítico, nunca só um
+    // nome digitado em `authorizedBy`, que qualquer operador preencheria). O nome gravado na
+    // descrição é o do autorizador aprovado no servidor.
     let earlyArrivalAdminName: string | null = null;
     {
       const eaChoiceReq: string | null = earlyArrival?.choice || null;
@@ -340,14 +343,40 @@ export async function POST(req: NextRequest) {
         eaChoiceReq === "COURTESY" ||
         (eaChoiceReq === "FIXED_FEE" && Number.isFinite(feeReq) && feeReq < (Number(dailyRate) || 0) / 2);
       if (needsEarlyAuth) {
-        const auth = await verifyAdminStepUp(req, earlyArrival?.adminEmail, earlyArrival?.adminPassword, session.tenantId);
+        // Evento crítico CORTESIA_CHEGADA_ANTECIPADA (lib/criticalAuth.ts). Se o desconto acima
+        // do limite já tinha sido autorizado e consumido acima, ele é devolvido quando este
+        // evento ainda pede autorização — a tela reenvia o check-in com os dois ids aprovados.
+        const dailyRateEa = Number(dailyRate) || 0;
+        const auth = await gateCriticalEvent(req, session, {
+          eventType: "CORTESIA_CHEGADA_ANTECIPADA",
+          fingerprint: {
+            roomId: String(roomId || roomNumber || ""),
+            reservationId: reservationId ? String(reservationId) : null,
+            checkIn: String(checkInDate),
+            choice: eaChoiceReq,
+            fee: eaChoiceReq === "FIXED_FEE" ? feeReq : 0,
+            dailyRate: dailyRateEa,
+          },
+          summary:
+            eaChoiceReq === "COURTESY"
+              ? `Check-in: cortesia (sem cobrança) da ${earlyArrival?.kind === "OVERNIGHT" ? "noite anterior à chegada de madrugada" : "chegada antecipada"}.`
+              : `Check-in: taxa de chegada antecipada de ${formatBRL(feeReq)}, abaixo da meia diária (${formatBRL(dailyRateEa / 2)}).`,
+          details: {
+            Quarto: String(roomNumber || "-"),
+            Hóspede: String(guestName || "-"),
+            Chegada: String(checkInDate).replace("T", " ").slice(0, 16),
+            "Diária": formatBRL(dailyRateEa),
+            "Tratamento pedido": eaChoiceReq === "COURTESY" ? "Cortesia (sem cobrança)" : `Taxa fixa de ${formatBRL(feeReq)}`,
+          },
+          authorizationId: body.authorizationId,
+        });
         if (!auth.ok) {
-          return NextResponse.json(
-            { success: false, error: auth.error, precisaAutorizacao: true },
-            { status: auth.status }
-          );
+          await releaseDiscountAuthorization(authToRelease);
+          authToRelease = null;
+          return NextResponse.json(auth.body, { status: auth.status });
         }
-        earlyArrivalAdminName = auth.admin.name;
+        earlyAuthToRelease = { id: auth.authorizationId, channel: auth.channel };
+        earlyArrivalAdminName = auth.authorizedBy.name;
       }
     }
 
@@ -470,8 +499,8 @@ export async function POST(req: NextRequest) {
         tenantSettings?.earlyCheckinToleranceMinutes ?? 60
       );
       const eaChoice: string | null = earlyArrival?.choice || null;
-      // Só o administrador autenticado no servidor (verifyAdminStepUp acima) conta como
-      // autorização — o `authorizedBy` do body é ignorado.
+      // Só o autorizador aprovado no servidor (gateCriticalEvent acima) conta como autorização —
+      // o `authorizedBy` do body é ignorado.
       const eaAuthorizedBy: string | null = earlyArrivalAdminName;
 
       if (serverArrivalKind && !eaChoice) {
@@ -499,13 +528,13 @@ export async function POST(req: NextRequest) {
           }
           // Taxa abaixo da meia diária = desconto informal — exige autorização de admin (igual à cortesia).
           if (fee < dailyRateNum / 2 && !eaAuthorizedBy) {
-            throw new Error("Taxa de chegada antecipada abaixo da meia diária exige autorização de administrador.");
+            throw new Error("Taxa de chegada antecipada abaixo da meia diária exige autorização.");
           }
           earlyArrivalChargeAmount = fee;
           earlyArrivalDescription = `Taxa de ${ctx}${fee < dailyRateNum / 2 ? ` (autorizado por ${eaAuthorizedBy})` : ""}`;
         } else if (eaChoice === "COURTESY") {
           if (!eaAuthorizedBy) {
-            throw new Error("Cortesia de chegada antecipada exige autorização de administrador.");
+            throw new Error("Cortesia de chegada antecipada exige autorização.");
           }
           earlyArrivalChargeAmount = 0;
           earlyArrivalDescription = `Cortesia — ${ctx} (autorizado por ${eaAuthorizedBy})`;
@@ -929,6 +958,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, ...result });
   } catch (error: any) {
     await releaseDiscountAuthorization(authToRelease);
+    if (earlyAuthToRelease && releaseTenantId) {
+      await releaseCriticalAuthorization(releaseTenantId, earlyAuthToRelease.id, earlyAuthToRelease.channel);
+    }
     console.error("[POST /api/stay/checkin] Erro:", error);
     return NextResponse.json({ success: false, error: error.message || "Erro ao registrar hospedagem." }, { status: 500 });
   }

@@ -20,11 +20,21 @@ import { getClientIp, getTerminalName, type SessionPayload } from "@/lib/auth";
 //
 // A senha do autorizador nunca volta para a tela nem é reenviada na requisição da ação.
 
-export type CriticalEventType = "DESCONTO_ACIMA_LIMITE" | "ANULAR_LANCAMENTO_CAIXA";
+export type CriticalEventType =
+  | "DESCONTO_ACIMA_LIMITE"
+  | "ANULAR_LANCAMENTO_CAIXA"
+  | "CORTESIA_CHEGADA_ANTECIPADA"
+  | "CANCELAR_COMANDA"
+  | "REABRIR_COMANDA"
+  | "TRANSFERIR_COMANDA";
 
 export const CRITICAL_EVENT_LABELS: Record<CriticalEventType, string> = {
   DESCONTO_ACIMA_LIMITE: "Desconto acima do limite",
   ANULAR_LANCAMENTO_CAIXA: "Anulação de lançamento no caixa",
+  CORTESIA_CHEGADA_ANTECIPADA: "Cortesia ou taxa reduzida na chegada antecipada",
+  CANCELAR_COMANDA: "Cancelamento de comanda",
+  REABRIR_COMANDA: "Reabertura de comanda fechada",
+  TRANSFERIR_COMANDA: "Transferência de débito entre comandas",
 };
 
 /** Validade de uma solicitação (e do link enviado ao autorizador). */
@@ -40,8 +50,17 @@ export interface CriticalEventInput {
   summary: string;
   /** Dados exibidos ao autorizador: rótulo -> valor já formatado. */
   details: Record<string, string>;
-  /** Id devolvido pela tela depois da aprovação. */
-  authorizationId?: string | null;
+  /**
+   * Id(s) aprovado(s) devolvido(s) pela tela. Uma mesma gravação pode exigir mais de um evento
+   * (ex.: check-in com desconto acima do limite E cortesia de chegada antecipada): a tela reenvia
+   * todos os ids aprovados, e cada evento consome só o seu (eventType + impressão digital).
+   */
+  authorizationId?: string | string[] | null;
+}
+
+function authorizationIds(value: unknown): string[] {
+  const list = Array.isArray(value) ? value : value ? [value] : [];
+  return list.map(String).filter(Boolean).slice(0, 5);
 }
 
 export interface AuthorizationPayload {
@@ -147,10 +166,11 @@ export async function gateCriticalEvent(
   }
 
   // 2. Reenvio com autorização aprovada: consome uma única vez, só se a ação for a mesma.
-  if (input.authorizationId) {
+  const ids = authorizationIds(input.authorizationId);
+  for (const id of ids) {
     const consumed = await prisma.criticalAuthorization.updateMany({
       where: {
-        id: String(input.authorizationId),
+        id,
         tenantId,
         eventType: input.eventType,
         requestedById: session.userId,
@@ -162,7 +182,7 @@ export async function gateCriticalEvent(
     });
     if (consumed.count === 1) {
       const row = await prisma.criticalAuthorization.findFirst({
-        where: { id: String(input.authorizationId), tenantId },
+        where: { id, tenantId },
         select: { id: true, decidedById: true, decidedByName: true, decisionChannel: true, justification: true },
       });
       return {
@@ -173,11 +193,13 @@ export async function gateCriticalEvent(
         justification: row!.justification,
       };
     }
+  }
+  if (ids.length > 0) {
     const prev = await prisma.criticalAuthorization.findFirst({
-      where: { id: String(input.authorizationId), tenantId, requestedById: session.userId },
-      select: { status: true, decidedByName: true, decisionNote: true, fingerprintHash: true },
+      where: { id: { in: ids }, tenantId, requestedById: session.userId, eventType: input.eventType, fingerprintHash: hash, status: "RECUSADA" },
+      select: { status: true, decidedByName: true, decisionNote: true },
     });
-    if (prev?.status === "RECUSADA") {
+    if (prev) {
       return {
         ok: false,
         status: 403,

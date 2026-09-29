@@ -95,7 +95,7 @@ Se a rota existe para usar as credenciais **do próprio tenant** (ex: enviar e-m
 
 ### 8. Força bruta: login sempre com rate limiting + comparação timing-safe
 
-Todo endpoint de autenticação (login, verify-admin, login de qualquer app satélite futuro) precisa usar os helpers já existentes em `lib/auth.ts`: `verifyPasswordTimingSafe` (evita enumeração de e-mail por tempo de resposta), `isAccountLocked`/`nextFailedLoginState` (bloqueio após tentativas repetidas, campos `failedLoginAttempts`/`lockedUntil` no modelo). Nunca reimplementar isso do zero por endpoint.
+Todo endpoint de autenticação (login, "Autorizar aqui" da autorização de eventos críticos, login de qualquer app satélite futuro) precisa usar os helpers já existentes em `lib/auth.ts`: `verifyPasswordTimingSafe` (evita enumeração de e-mail por tempo de resposta), `isAccountLocked`/`nextFailedLoginState` (bloqueio após tentativas repetidas, campos `failedLoginAttempts`/`lockedUntil` no modelo). Nunca reimplementar isso do zero por endpoint.
 
 ### 9. Desativar/rebaixar um usuário precisa invalidar sessões já emitidas
 
@@ -113,7 +113,7 @@ A disciplina de segurança **não para na rota de API** — vale para o schema d
 
 ### 12. Eventos críticos passam pelo motor de autorização — e lançamento de caixa NUNCA é excluído
 
-Ações que exigem aprovação de um superior (desconto acima de `Tenant.maxDiscountPercent`, anulação de lançamento no caixa e as próximas que entrarem no catálogo) usam `gateCriticalEvent` (`apps/web/src/lib/criticalAuth.ts`) — para desconto, `authorizeDiscount` (`lib/discountAuth.ts`). Nunca reimplementar "pede e-mail + senha de admin e reenvia no body": a senha do autorizador não volta para a tela, a aprovação fica presa à impressão digital da ação exata e é consumida uma única vez, e tudo fica em `critical_authorizations` para auditoria. Quem autoriza é a lista de usuários com `User.isAuthorizer`; o operador que já é autorizador passa direto (registrado como `PROPRIO`). Na tela, use `useCriticalAuthorization` + `withCriticalAuthorization` (`components/CriticalAuthorizationModal.tsx`).
+Ações que exigem aprovação de um superior (desconto acima de `Tenant.maxDiscountPercent`, anulação de lançamento no caixa, cortesia/taxa reduzida de chegada antecipada, cancelar/reabrir/transferir comanda do PDV e as próximas que entrarem no catálogo `CRITICAL_EVENT_LABELS`) usam `gateCriticalEvent` (`apps/web/src/lib/criticalAuth.ts`) — para desconto, `authorizeDiscount` (`lib/discountAuth.ts`). Nunca reimplementar "pede e-mail + senha de admin e reenvia no body" (o antigo `verify-admin`/`AdminAuthorizationModal` foi removido em 29/09/2026): a senha do autorizador não volta para a tela, a aprovação fica presa à impressão digital da ação exata e é consumida uma única vez, e tudo fica em `critical_authorizations` para auditoria. Quem autoriza é a lista de usuários com `User.isAuthorizer`; o operador que já é autorizador passa direto (registrado como `PROPRIO`). Na tela, use `useCriticalAuthorization` + `withCriticalAuthorization` (`components/CriticalAuthorizationModal.tsx`).
 
 **`CashTransaction` nunca é apagado** (nem por rota autorizada): a única operação permitida é **anular** (`/api/caixa/anular-lancamento`) — a linha fica no caixa para consulta com `annulledAt`, `countsInCashTotal=false` e descrição `[ANULADO]`. Todo somatório de pagamentos da hospedagem filtra `annulledAt: null`, e todo total de caixa exclui anulados.
 

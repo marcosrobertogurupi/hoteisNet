@@ -3,17 +3,30 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
-import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { gateCriticalEvent, releaseCriticalAuthorization, formatBRL } from "@/lib/criticalAuth";
 import { loadSession, serializeSession, recalcSessionTotals } from "@/lib/pdvSession";
 
 // POST /api/pdv/atendimentos/[id]/reabrir — desfaz o fechamento de uma comanda (correção).
-// Exige senha de administrador. Só antes de qualquer NFC-e autorizada.
+// Evento crítico REABRIR_COMANDA (lib/criticalAuth.ts). Só antes de qualquer NFC-e autorizada.
 //  - Hóspede: estorna os lançamentos na conta do quarto (StayConsumption marcados com o id
 //    da comanda) e devolve o total ao `totalConsumption`.
 //  - O dinheiro já recebido (adiantamentos + acerto) NÃO é estornado do caixa — os pagamentos
 //    de fechamento viram "adiantamento" e o `paidAmount` é mantido; ao fechar de novo, o
 //    operador só acerta o novo saldo.
+// Onde está a comanda (mesa / hóspede / local), para o autorizador saber do que se trata.
+function comandaDetails(s: NonNullable<Awaited<ReturnType<typeof loadSession>>>): Record<string, string> {
+  const d: Record<string, string> = { Comanda: String(s.comanda.number) };
+  if (s.posLocation?.name) d["Local"] = s.posLocation.name;
+  if (s.table?.number) d["Mesa"] = String(s.table.number);
+  if (s.stayCheckin) d["Hóspede"] = `${s.stayCheckin.primaryGuest?.fullName || "-"} (quarto ${s.stayCheckin.room?.number || "-"})`;
+  d["Itens"] = String(s.items.length);
+  d["Total"] = formatBRL(Number(s.total));
+  if (Number(s.paidAmount) > 0) d["Já pago"] = formatBRL(Number(s.paidAmount));
+  return d;
+}
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let gateToRelease: { tenantId: string; id: string; channel: string } | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -36,8 +49,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ success: false, error: "A NFC-e já foi autorizada — cancele o cupom em vez de reabrir." }, { status: 409 });
     }
 
-    const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
-    if (!auth.ok) return NextResponse.json({ success: false, error: auth.error, precisaAutorizacao: true }, { status: auth.status });
+    const auth = await gateCriticalEvent(req, session, {
+      eventType: "REABRIR_COMANDA",
+      fingerprint: { atendimentoId: id },
+      summary: `Reabrir a comanda ${current.comanda.number}, já fechada (total ${formatBRL(Number(current.total))}).`,
+      details: comandaDetails(current),
+      authorizationId: body.authorizationId,
+    });
+    if (!auth.ok) return NextResponse.json(auth.body, { status: auth.status });
+    gateToRelease = { tenantId: session.tenantId, id: auth.authorizationId, channel: auth.channel };
+    const motivo = auth.justification || (body.motivo ? String(body.motivo).trim() : "");
 
     await txWithRetry(async (tx) => {
       const fresh = await tx.comandaSession.findUniqueOrThrow({
@@ -106,7 +127,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       userId: session.userId,
       userName: session.name,
       action: "PDV_COMANDA_REABRIR",
-      description: `${session.name} reabriu a comanda ${current.comanda.number} (autorizou: ${auth.admin.name})${body.motivo ? ` — ${String(body.motivo).trim()}` : ""}.`,
+      description: `${session.name} reabriu a comanda ${current.comanda.number} (autorizou: ${auth.authorizedBy.name})${motivo ? ` — ${motivo}` : ""}.`,
       entityType: "COMANDA_SESSION",
       entityId: id,
       terminal: getTerminalName(req),
@@ -116,6 +137,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const updated = await loadSession(id, session.tenantId);
     return NextResponse.json({ success: true, atendimento: updated ? serializeSession(updated) : null });
   } catch (error: any) {
+    if (gateToRelease) await releaseCriticalAuthorization(gateToRelease.tenantId, gateToRelease.id, gateToRelease.channel);
     console.error("[POST /api/pdv/atendimentos/[id]/reabrir] Erro:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
