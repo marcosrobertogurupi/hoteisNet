@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { getTenantHeaderInfo } from "@/lib/tenantHeader";
+import { countDailies, getTenantDailyRules } from "@/lib/dailyCount";
 
 // Converte uma data "YYYY-MM-DD" escolhida pelo usuário no intervalo [00:00, 24:00) de Brasília
 // (UTC-3 fixo), independente do fuso horário do processo Node — mesma lógica de
@@ -39,15 +40,23 @@ export async function GET(req: NextRequest) {
         checkInDate: { gte: start, lt: end },
         status: { notIn: ["CANCELLED", "NO_SHOW"] },
       },
-      include: { room: true },
+      select: {
+        id: true,
+        guestName: true,
+        guestPhone: true,
+        checkInDate: true,
+        checkOutDate: true,
+        adults: true,
+        status: true,
+        room: { select: { number: true } },
+      },
     });
 
+    const dailyRules = await getTenantDailyRules(prisma, session.tenantId);
     const rows = reservations
       .map((r) => {
-        const nights = Math.max(
-          1,
-          Math.round((r.checkOutDate.getTime() - r.checkInDate.getTime()) / 86400000)
-        );
+        // Diárias previstas pelas horas e viradas do hotel (lib/dailyCountCore.ts).
+        const nights = countDailies(r.checkInDate, r.checkOutDate, dailyRules);
         return {
           id: r.id,
           roomNumber: r.room?.number || "-",

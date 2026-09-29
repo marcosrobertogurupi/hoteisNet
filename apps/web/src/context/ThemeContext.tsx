@@ -1,6 +1,7 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
+import { normalizeDailyRules, type DailyCountRules } from "@/lib/dailyCountCore";
 
 export type ThemeId = "dark" | "light-white" | "light-blue";
 
@@ -114,6 +115,9 @@ export interface ThemeContextType {
   setDefaultCheckOutTime: (time: string) => void;
   // Tolerância (minutos antes do horário padrão de check-in) sem cobrança de chegada antecipada.
   earlyCheckinToleranceMinutes: number;
+  // Regras de contagem de diárias do hotel (horário de check-in, tolerância e virada de diária) —
+  // passe para countDailies (lib/dailyCountCore.ts); nunca conte diárias por diferença de datas.
+  dailyCountRules: DailyCountRules;
   // Cobrança padrão pré-selecionada no painel de decisão de chegada (EXTRA_NIGHT | HALF_NIGHT | FIXED_FEE).
   earlyArrivalDefaultCharge: string;
   overnightArrivalDefaultCharge: string;
@@ -138,6 +142,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [defaultCheckInTime, setDefaultCheckInTimeState] = useState<string>("14:00");
   const [defaultCheckOutTime, setDefaultCheckOutTimeState] = useState<string>("12:00");
   const [earlyCheckinToleranceMinutes, setEarlyCheckinToleranceMinutesState] = useState<number>(60);
+  const [dailyRolloverTime, setDailyRolloverTimeState] = useState<string>("14:30");
   const [earlyArrivalDefaultCharge, setEarlyArrivalDefaultChargeState] = useState<string>("EXTRA_NIGHT");
   const [overnightArrivalDefaultCharge, setOvernightArrivalDefaultChargeState] = useState<string>("EXTRA_NIGHT");
   const [earlyCheckinFixedFeeAmount, setEarlyCheckinFixedFeeAmountState] = useState<number>(0);
@@ -233,6 +238,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         if (typeof s.earlyCheckinToleranceMinutes === "number") {
           setEarlyCheckinToleranceMinutesState(s.earlyCheckinToleranceMinutes);
         }
+        if (s.dailyRolloverTime) setDailyRolloverTimeState(s.dailyRolloverTime);
         if (s.earlyArrivalDefaultCharge) setEarlyArrivalDefaultChargeState(s.earlyArrivalDefaultCharge);
         if (s.overnightArrivalDefaultCharge) setOvernightArrivalDefaultChargeState(s.overnightArrivalDefaultCharge);
         if (typeof s.earlyCheckinFixedFeeAmount === "number") setEarlyCheckinFixedFeeAmountState(s.earlyCheckinFixedFeeAmount);
@@ -240,6 +246,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  const dailyCountRules = useMemo(
+    () =>
+      normalizeDailyRules({
+        standardCheckInTime: defaultCheckInTime,
+        earlyCheckinToleranceMinutes,
+        dailyRolloverTime,
+      }),
+    [defaultCheckInTime, earlyCheckinToleranceMinutes, dailyRolloverTime]
+  );
 
   const setTheme = (themeId: ThemeId, persist = true) => {
     if (!THEMES[themeId]) return;
@@ -329,6 +345,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         defaultCheckOutTime,
         setDefaultCheckOutTime,
         earlyCheckinToleranceMinutes,
+        dailyCountRules,
         earlyArrivalDefaultCharge,
         overnightArrivalDefaultCharge,
         earlyCheckinFixedFeeAmount,

@@ -13,6 +13,7 @@ import { sendPreCheckinLink } from "@/lib/preCheckinSender";
 import { logActivity } from "@/lib/audit";
 import { reverseReservationDeposits } from "@/lib/paymentProcessing";
 import { brDateKey } from "@/lib/brasiliaDate";
+import { countDailies, getTenantDailyRules } from "@/lib/dailyCount";
 
 function startOfToday(): Date {
   const now = new Date();
@@ -541,7 +542,8 @@ async function createReservationForAgent(
       return { sucesso: false as const, erro: "Hotel ainda não tem tarifa cadastrada — encaminhe para a recepção fechar a reserva manualmente." };
     }
 
-    const nights = Math.max(1, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / (24 * 60 * 60 * 1000)));
+    // Diárias pelas horas e viradas do hotel (lib/dailyCountCore.ts), nunca round(horas / 24).
+    const nights = countDailies(checkInAt, checkOutAt, await getTenantDailyRules(tx, tenantId));
     const totalAmount = Number(tariff.price) * nights;
     const status = agentSetting?.autoConfirmReservations ? "CONFIRMED" : "PRE_RESERVATION";
     const reservationNumber = await nextReservationNumber(tx);

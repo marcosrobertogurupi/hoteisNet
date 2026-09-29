@@ -19,6 +19,7 @@ import CustomDatePicker from "@/components/CustomDatePicker";
 import { useToast } from "@/context/ToastContext";
 import { useTheme } from "@/context/ThemeContext";
 import { brDateKey } from "@/lib/brasiliaDate";
+import { countStayDailies } from "@/lib/dailyCountCore";
 
 export interface TariffOption {
   id: string;
@@ -90,7 +91,7 @@ export default function AlterarPeriodoModal({
   onSave,
 }: AlterarPeriodoModalProps) {
   const toast = useToast();
-  const { theme } = useTheme();
+  const { theme, dailyCountRules } = useTheme();
 
   // Parsing date utilities
   const parseDateTime = (dtStr: string): Date => {
@@ -226,14 +227,21 @@ export default function AlterarPeriodoModal({
     }
   }, [isOpen, stayData, minCheckOutDate]);
 
-  // Calculation of Nights
+  // Diárias do período pelas horas e viradas de diária do hotel (countDailies, lib/dailyCountCore.ts)
+  // — nunca pela diferença de datas: a hora de saída conta (passar da virada é +1 diária). Sem a
+  // diária da chegada antecipada, que a hospedagem já cobra à parte (countStayDailies) — mesma
+  // conta do PATCH /api/stay/period.
   const calculatedNights = useMemo(() => {
-    const cinTime = new Date(initialCheckin.getFullYear(), initialCheckin.getMonth(), initialCheckin.getDate()).getTime();
-    const coutTime = new Date(checkOutDate.getFullYear(), checkOutDate.getMonth(), checkOutDate.getDate()).getTime();
-    const diffMs = coutTime - cinTime;
-    const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-    return Math.max(1, days);
-  }, [initialCheckin, checkOutDate]);
+    const [h, m] = checkOutTimeString.split(":");
+    const cout = new Date(
+      checkOutDate.getFullYear(),
+      checkOutDate.getMonth(),
+      checkOutDate.getDate(),
+      parseInt(h || "12"),
+      parseInt(m || "0")
+    );
+    return countStayDailies(initialCheckin, cout, dailyCountRules);
+  }, [initialCheckin, checkOutDate, checkOutTimeString, dailyCountRules]);
 
   // Financial Totals
   const valorTotalBruto = useMemo(() => {

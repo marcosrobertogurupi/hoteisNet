@@ -29,6 +29,13 @@ function nextDayKey(key: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Instante da virada de diária de um dia (Brasília, UTC-3 fixo) — espelho de rolloverInstant em
+// apps/web/src/lib/dailyCountCore.ts (o worker não importa apps/web). Horário inválido cai no padrão.
+function rolloverInstant(dayKey: string, dailyRolloverTime: string | null | undefined): Date {
+  const hhmm = dailyRolloverTime && /^([01]\d|2[0-3]):[0-5]\d$/.test(dailyRolloverTime) ? dailyRolloverTime : "14:30";
+  return new Date(`${dayKey}T${hhmm}:00-03:00`);
+}
+
 /**
  * Roda a cada minuto. Lança +1 diária em cada apartamento ainda ocupado cujo hotel já passou do
  * horário de virada (Tenant.dailyRolloverTime) hoje e cuja virada de hoje ainda não foi feita.
@@ -67,7 +74,7 @@ export async function runDailyRollover(): Promise<void> {
       lastRolloverDate: true,
       expectedCheckOut: true,
       totalDaily: true,
-      tenant: { select: { name: true } },
+      tenant: { select: { name: true, dailyRolloverTime: true } },
     },
   });
 
@@ -113,9 +120,12 @@ export async function runDailyRollover(): Promise<void> {
           const rate = Number(lastCharge?.amount ?? stay.totalDaily ?? 0);
           const description = lastCharge?.description || "Diária";
 
-          // Diária lançada em data igual/posterior à previsão original de saída = estadia
-          // ultrapassou o combinado no check-in (equivalente a hpd_qtddiariasextras do legado).
-          const isExtra = referenceDate >= stay.expectedCheckOut;
+          // Diária cuja virada acontece na previsão de saída ou depois dela = estadia ultrapassou o
+          // combinado (equivalente a hpd_qtddiariasextras do legado). Mesma régua da contagem
+          // canônica (countDailies, apps/web/src/lib/dailyCountCore.ts), que define as diárias
+          // previstas debitadas no check-in. Comparar a meia-noite do dia deixava a diária do próprio
+          // dia da saída (hóspede que passou da virada) fora das previstas E das extras — nunca debitada.
+          const isExtra = rolloverInstant(dayKey, stay.tenant.dailyRolloverTime) >= stay.expectedCheckOut;
 
           await tx.stayCharge.create({
             data: {

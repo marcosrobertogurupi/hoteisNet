@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
+import { normalizeDailyRules, rolloverInstant } from "@/lib/dailyCountCore";
 
 // Virada de diária do lado web — espelho de apps/worker/src/rollover.ts (o worker é CJS puro e não
 // importa apps/web, então a lógica é duplicada de propósito; ao mudar uma, mude a outra).
@@ -69,6 +70,7 @@ export async function runDailyRolloverCatchUp(opts: { tenantId?: string } = {}):
       lastRolloverDate: true,
       expectedCheckOut: true,
       room: { select: { number: true } },
+      tenant: { select: { dailyRolloverTime: true } },
     },
   });
 
@@ -109,7 +111,11 @@ export async function runDailyRolloverCatchUp(opts: { tenantId?: string } = {}):
           });
           const value = Number(lastCharge?.amount ?? 0);
           const description = lastCharge?.description || "Diária";
-          const isExtra = referenceDate >= stay.expectedCheckOut;
+          // Extra = diária que NÃO faz parte do período previsto pela contagem canônica
+          // (countDailies, lib/dailyCountCore.ts): a virada deste dia acontece na previsão de saída
+          // ou depois dela. Comparar a meia-noite do dia deixava a diária do próprio dia da saída
+          // (hóspede que passou da virada) fora das previstas E fora das extras — nunca debitada.
+          const isExtra = rolloverInstant(dayKey, normalizeDailyRules(stay.tenant)) >= stay.expectedCheckOut;
 
           await tx.stayCharge.create({
             data: { stayCheckinId: stay.id, referenceDate, description, chargeType: "DAILY", amount: value },

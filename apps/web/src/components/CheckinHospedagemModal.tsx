@@ -32,6 +32,8 @@ import { useOperator } from "@/context/OperatorContext";
 import DateRangeCalendarPicker from "@/components/DateRangeCalendarPicker";
 import { validateCPF, validateCNPJ, formatCPF, formatCNPJ } from "@/lib/documentValidation";
 import WhatsAppIcon from "@/components/icons/WhatsAppIcon";
+import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
+import { countDailies, countStayDailies } from "@/lib/dailyCountCore";
 
 export interface VerifiedPhone {
   id: string;
@@ -270,6 +272,7 @@ export default function CheckinHospedagemModal({
     defaultCheckInTime,
     defaultCheckOutTime,
     earlyCheckinToleranceMinutes,
+    dailyCountRules,
     earlyArrivalDefaultCharge,
     overnightArrivalDefaultCharge,
     earlyCheckinFixedFeeAmount,
@@ -421,10 +424,8 @@ export default function CheckinHospedagemModal({
           const inLocal = reservationData.checkInDate ? brDateTimeToLocal(reservationData.checkInDate) : "";
           const outLocal = reservationData.checkOutDate ? brDateTimeToLocal(reservationData.checkOutDate) : "";
           if (!inLocal || !outLocal) return 1;
-          const [y1, m1, d1] = localToDateOnly(inLocal).split("-").map(Number);
-          const [y2, m2, d2] = localToDateOnly(outLocal).split("-").map(Number);
-          const diffMs = new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime();
-          return Math.max(1, Math.round(diffMs / (1000 * 3600 * 24)));
+          // Mesma contagem com que a tela de reserva chegou ao total (countDailies).
+          return countDailies(parseBrasiliaDateTime(inLocal), parseBrasiliaDateTime(outLocal), dailyCountRules);
         } catch {
           return 1;
         }
@@ -1142,19 +1143,19 @@ export default function CheckinHospedagemModal({
     setManualForm({ name: "", doc: "", docType: "CPF", phone: "", birthDate: "", gender: "", motherName: "", fatherName: "", identity: "", address: "", email: "" });
   };
 
-  // Calculate nights: diferença em dias de calendário entre chegada e saída
-  // (o horário de chegada/saída não deve influenciar a contagem de diárias).
+  // Diárias do período pelas horas e viradas de diária do hotel (countDailies, lib/dailyCountCore.ts)
+  // — nunca pela diferença de datas. A diária da chegada antecipada/madrugada fica fora desta conta
+  // (countStayDailies): ela é decidida no painel próprio (earlyArrivalCharge) e contá-la aqui
+  // cobraria em dobro. Mesma conta do servidor (nightsBackend em POST /api/stay/checkin).
   useEffect(() => {
     try {
-      const [y1, m1, d1] = localToDateOnly(dtChegadaLocal).split("-").map(Number);
-      const [y2, m2, d2] = localToDateOnly(dtSaidaLocal).split("-").map(Number);
-      const diffMs = new Date(y2, m2 - 1, d2).getTime() - new Date(y1, m1 - 1, d1).getTime();
-      const diffDays = Math.max(1, Math.round(diffMs / (1000 * 3600 * 24)));
-      setNights(diffDays);
+      setNights(
+        countStayDailies(parseBrasiliaDateTime(dtChegadaLocal), parseBrasiliaDateTime(dtSaidaLocal), dailyCountRules)
+      );
     } catch {
       setNights(1);
     }
-  }, [dtChegadaLocal, dtSaidaLocal]);
+  }, [dtChegadaLocal, dtSaidaLocal, dailyCountRules]);
 
   // Classificação da chegada em relação ao horário padrão de check-in:
   // - "OVERNIGHT": chegada de madrugada (antes do corte MADRUGADA_CUTOFF_TIME) — o hóspede

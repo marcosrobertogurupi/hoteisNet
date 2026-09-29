@@ -27,6 +27,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
 import { ImprimirExtratoHospedagemModal, ExtratoRoomData } from "@/components/ImprimirExtratoHospedagemModal";
 import { ImprimirResumoHospedagemModal, ResumoRoomData } from "@/components/ImprimirResumoHospedagemModal";
+import { countStayDailies } from "@/lib/dailyCountCore";
 
 // Converte um ISO/timestamp do banco para "DD/MM/YYYY HH:MM:SS", formato usado nos modais de Extrato/Resumo.
 function formatBrDateTime(iso: string | null | undefined): string {
@@ -113,7 +114,7 @@ export default function CadastroHospedeModal({
   readOnly = false,
 }: CadastroHospedeModalProps) {
   const toast = useToast();
-  const { theme } = useTheme();
+  const { theme, dailyCountRules } = useTheme();
   const isDark = theme.isDark;
 
   const [activeTab, setActiveTab] = useState<"dados" | "contatos" | "veiculos" | "empresa" | "obs" | "historico">(initialTab || "dados");
@@ -202,7 +203,9 @@ export default function CadastroHospedeModal({
           ...baseGuest,
           number: stay.roomNumber,
           actualCheckOutDate: stay.actualCheckOut ? formatBrDateTime(stay.actualCheckOut) : formatBrDateTime(new Date().toISOString()),
-          extrasAmount: Math.max(0, nights - Math.max(1, Math.round((new Date(stay.expectedCheckOut).getTime() - checkIn.getTime()) / msPerNight))),
+          // Extras = diárias lançadas além das previstas pela contagem canônica (countStayDailies,
+          // horas e viradas do hotel) — a mesma régua do rollover para "diária extra".
+          extrasAmount: Math.max(0, nights - countStayDailies(checkIn, new Date(stay.expectedCheckOut), dailyCountRules)),
           adiantamento: totalAdiantamento,
           desconto: discount,
           allGuests: [

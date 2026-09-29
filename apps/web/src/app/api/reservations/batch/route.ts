@@ -69,7 +69,15 @@ export async function POST(req: NextRequest) {
       discountItems.push({
         label: `Reserva ${i + 1} (${r.guestName || "sem nome"})`,
         discountAmount: Number(r.discountAmount) || 0,
-        baseAmount: await reservationDiscountBase(session.tenantId, r.tariffId, r.dailyRate, r.checkInDate, r.checkOutDate),
+        // Mesmas datas que serão gravadas (abaixo): uma data sem hora não pode virar 00:00 e contar
+        // como chegada de madrugada na base do desconto.
+        baseAmount: await reservationDiscountBase(
+          session.tenantId,
+          r.tariffId,
+          r.dailyRate,
+          parseBrasiliaDateTime(r.checkInDate, "14:00"),
+          parseBrasiliaDateTime(r.checkOutDate, "12:00")
+        ),
       });
     }
 
