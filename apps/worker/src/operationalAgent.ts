@@ -695,7 +695,9 @@ async function buildKnowledgeFacts(tenantId: string): Promise<KnowledgeFact[]> {
       where: { id: tenantId },
       select: {
         phone: true,
-        address: true,
+        street: true,
+        number: true,
+        address: true, // legado — fallback enquanto houver tenants sem endereço estruturado
         breakfastHours: true,
         breakfastHoursHoliday: true,
         standardCheckInTime: true,
@@ -716,7 +718,8 @@ async function buildKnowledgeFacts(tenantId: string): Promise<KnowledgeFact[]> {
   push("checkin", "Horário padrão de check-in", tenant?.standardCheckInTime || KB_DEFAULT_CHECK_IN_TIME);
   push("checkout", "Horário padrão de check-out", tenant?.standardCheckOutTime || KB_DEFAULT_CHECK_OUT_TIME);
   push("telefone", "Telefone do hotel", tenant?.phone);
-  push("endereco", "Endereço do hotel", tenant?.address);
+  const street = [tenant?.street?.trim(), tenant?.number?.trim()].filter(Boolean).join(", ");
+  push("endereco", "Endereço do hotel (rua e número)", tenant?.street?.trim() ? street : tenant?.address);
   if (cheapestTariff) push("diaria_minima", "Diária a partir de", brl(Number(cheapestTariff.price)));
   services.forEach((s, i) => push(`servico_${i}`, `Preço do serviço "${s.description}"`, brl(Number(s.price))));
 

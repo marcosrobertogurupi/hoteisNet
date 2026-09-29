@@ -772,15 +772,34 @@ async function getHotelInfo(tenantId: string) {
       breakfastHoursHoliday: true,
       standardCheckInTime: true,
       standardCheckOutTime: true,
+      street: true,
+      address: true, // legado — fallback enquanto houver tenants sem endereço estruturado (igual a tenantHeader.ts)
+      number: true,
+      neighborhood: true,
+      city: true,
+      state: true,
+      zipCode: true,
     },
   });
-  // Deliberadamente sem endereço/cidade/estado: o cadastro do Tenant só tem esses campos parciais
-  // (às vezes só a cidade, às vezes errados) e o agente respondia "o hotel fica em <cidade>", que é
-  // inútil para quem quer chegar. Localização, endereço, mapa, estacionamento e transfer vêm do
-  // tópico "Localização" da base de conhecimento (search_knowledge_base).
+  // Endereço: fonte única é o cadastro do hotel. Só é devolvido quando tem a rua — cadastro parcial
+  // (só cidade/estado) levava o agente a responder "o hotel fica em <cidade>", inútil para quem quer
+  // chegar; nesse caso vem null e o agente usa o link do mapa do tópico "Localização". Mapa, pontos de
+  // referência, estacionamento e transfer continuam no tópico "Localização" (search_knowledge_base).
+  const street = tenant?.street?.trim() || tenant?.address?.trim();
+  const endereco = street
+    ? [
+        [street, tenant?.number?.trim()].filter(Boolean).join(", "),
+        tenant?.neighborhood?.trim(),
+        [tenant?.city?.trim(), tenant?.state?.trim()].filter(Boolean).join("/"),
+        tenant?.zipCode?.trim() ? `CEP ${tenant.zipCode.trim()}` : null,
+      ]
+        .filter(Boolean)
+        .join(" — ")
+    : null;
   return {
     nome: tenant?.tradeName || tenant?.name,
     telefone: tenant?.phone,
+    endereco,
     // Horário padrão do café da manhã (segunda a sábado).
     horarioCafeDaManha: tenant?.breakfastHours || null,
     // Horário do café da manhã aos domingos e feriados. Se null, vale o horário padrão todos os dias.
@@ -899,7 +918,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     get_hotel_info: tool({
       description:
-        "Retorna nome, telefone, horário do café da manhã do hotel (de segunda a sábado e, quando houver, o horário diferente para domingos e feriados) e os horários padrão de check-in e check-out. NÃO tem endereço, localização, estacionamento nem transfer — para isso use search_knowledge_base (tópico 'Localização').",
+        "Retorna nome, telefone, horário do café da manhã do hotel (de segunda a sábado e, quando houver, o horário diferente para domingos e feriados) , os horários padrão de check-in e check-out e o endereço do cadastro (endereco; null quando o cadastro não tem a rua). Link do mapa, pontos de referência, como chegar, estacionamento e transfer ficam em search_knowledge_base (tópico 'Localização').",
       inputSchema: z.object({}),
       execute: async () => await getHotelInfo(tenantId),
     }),
