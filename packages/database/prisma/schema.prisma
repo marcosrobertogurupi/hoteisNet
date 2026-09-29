@@ -216,6 +216,7 @@ model Tenant {
   aiAgentSettings            AIAgentSetting?
   aiUsageLogs                AIUsageLog[]
   jevDecisionLogs            JevDecisionLog[]
+  criticalAuthorizations     CriticalAuthorization[]
   aiModelOverrides           TenantAiModelOverride[]
   cashRegisters              CashRegister[]          @relation("TenantCashRegisters")
   companies                  Company[]
@@ -429,6 +430,9 @@ model User {
   // o segredo base32; mfaEnabled só vira true depois que a pessoa confirma um código válido.
   mfaSecret           String?
   mfaEnabled          Boolean         @default(false)
+  // "Autorizador" de eventos críticos (desconto acima do limite, anulação de lançamento no caixa…)
+  // — ver lib/criticalAuth.ts. Um hotel pode ter vários; o operador escolhe qual deles autoriza.
+  isAuthorizer        Boolean         @default(false)
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
   sentTickets         SupportTicket[] @relation("TicketAuthor")
@@ -565,6 +569,50 @@ model JevDecisionLog {
   @@index([tenantId, createdAt])
   @@index([feature, createdAt])
   @@map("jev_decision_logs")
+}
+
+// Autorização de evento crítico (desconto acima do limite, anulação de lançamento no caixa…).
+// Quando uma rota precisa de autorização ela NÃO executa: cria esta solicitação PENDENTE com a
+// impressão digital (fingerprintHash) dos parâmetros exatos da ação. Um autorizador aprova (senha
+// no terminal ou, na Fase 2, link único pelo WhatsApp) e a tela reenvia a ação com o id da
+// autorização — a rota só aceita se a impressão digital bater e consome a autorização uma única
+// vez (APROVADA -> EXECUTADA). Trilha de auditoria: nenhuma rota apaga linhas nem reescreve uma
+// decisão já gravada. Ver lib/criticalAuth.ts.
+model CriticalAuthorization {
+  id                String    @id @default(uuid())
+  tenantId          String
+  // DESCONTO_ACIMA_LIMITE | ANULAR_LANCAMENTO_CAIXA (ver CRITICAL_EVENT_LABELS)
+  eventType         String
+  // PENDENTE | APROVADA | RECUSADA | CANCELADA | EXPIRADA | EXECUTADA | NAO_EXECUTADA
+  status            String    @default("PENDENTE")
+  fingerprintHash   String
+  // Texto curto e dados exibidos ao autorizador (valores, limite, hóspede, quarto…).
+  summary           String
+  details           Json?
+  justification     String?
+  requestedById     String
+  requestedByName   String
+  requestedTerminal String?
+  requestedIp       String?
+  // Autorizador escolhido pelo operador para o envio remoto (Fase 2).
+  targetApproverId  String?
+  decidedById       String?
+  decidedByName     String?
+  // LOCAL (senha no terminal) | LINK (WhatsApp) | PROPRIO (operador já é autorizador)
+  decisionChannel   String?
+  decisionNote      String?
+  decidedAt         DateTime?
+  decidedIp         String?
+  linkTokenHash     String?   @unique
+  linkSentAt        DateTime?
+  expiresAt         DateTime
+  executedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@map("critical_authorizations")
 }
 
 // Volume de dados (egress) que cada assinante puxa do banco por dia — instrumentado no cliente
@@ -1950,6 +1998,14 @@ model CashTransaction {
   roomNumber        String?
   guestName         String?
   accountPlanId     String?
+  // Anulação: lançamento de caixa NUNCA é excluído. Anulado, continua visível no caixa para
+  // consulta, mas sai de todos os totais (countsInCashTotal=false) e de todo somatório de
+  // pagamentos da hospedagem (filtro annulledAt: null). Exige autorização (CriticalAuthorization).
+  annulledAt           DateTime?
+  annulledById         String?
+  annulledByName       String?
+  annulReason          String?
+  annulAuthorizationId String?
   createdAt         DateTime     @default(now())
   cashRegister      CashRegister @relation(fields: [cashRegisterId], references: [id], onDelete: Cascade)
   stay              StayCheckin? @relation(fields: [stayCheckinId], references: [id])

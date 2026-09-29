@@ -20,7 +20,7 @@ import {
 } from "@/utils/pdfGenerator";
 import CustomDatePicker from "@/components/CustomDatePicker";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
-import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
+import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -268,21 +268,14 @@ export default function LancarReservaModal({
   const [discount, setDiscount] = useState(0);
   const [discountPct, setDiscountPct] = useState(0);
 
-  // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
-  // administrador — mesmo padrão usado no check-in (CheckinHospedagemModal) e no check-out
-  // (LancarPagamentoHospedagemModal). 20 é só o valor inicial até a busca responder.
+  // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de um
+  // autorizador. Quem decide é o servidor: ao salvar, se ele pedir autorização, a janela de
+  // autorização abre e a reserva é reenviada com o id aprovado (lib/criticalAuth.ts). O limite aqui
+  // serve só para avisar o operador. 20 é só o valor inicial até a busca responder.
   const [maxDiscountPercent, setMaxDiscountPercent] = useState<number>(20);
-  const [discountAuthorized, setDiscountAuthorized] = useState<boolean>(false);
-  const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
-  const [discountAuthEmail, setDiscountAuthEmail] = useState<string | null>(null);
-  const [discountAuthPassword, setDiscountAuthPassword] = useState<string | null>(null);
-  const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
+  const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
   useEffect(() => {
     if (!isOpen) return;
-    setDiscountAuthorized(false);
-    setDiscountAuthorizedBy(null);
-    setDiscountAuthEmail(null);
-    setDiscountAuthPassword(null);
     fetch("/api/tenant/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -301,7 +294,7 @@ export default function LancarReservaModal({
   const totalAdiantamento = payments.reduce((s, p) => s + p.amount, 0);
   const totalLiquido = Math.max(0, totalDiarias - discount - totalAdiantamento);
   const discountPercent = totalDiarias > 0 ? (discount / totalDiarias) * 100 : discount > 0 ? 100 : 0;
-  const discountNeedsAuth = discount > 0 && discountPercent > maxDiscountPercent && !discountAuthorized;
+  const discountNeedsAuth = discount > 0 && discountPercent > maxDiscountPercent;
 
   // ─── Occupied Dates Detection ──────────────────────────────────────────────
   const [allReservations, setAllReservations] = useState<any[]>([]);
@@ -821,13 +814,6 @@ export default function LancarReservaModal({
     if (!selectedTariff) { toast.error("Selecione uma tarifa."); return; }
     if (!guestName.trim()) { toast.error("Informe o nome do hóspede."); return; }
     if (!dtChegadaLocal || !dtSaidaLocal) { toast.error("Informe o período da reserva."); return; }
-    if (discountNeedsAuth) {
-      toast.error(
-        `O desconto informado (${discountPercent.toFixed(1)}%) é maior que o limite de ${maxDiscountPercent}% permitido sem autorização, definido em Configurações.\n\nPeça a um administrador para autorizar.`
-      );
-      return;
-    }
-
     setSaving(true);
     try {
       // 1. Create reservation in Supabase
@@ -845,10 +831,6 @@ export default function LancarReservaModal({
         dailyRate: selectedTariff.price,
         totalDiarias,
         discountAmount: discount,
-        // Reenviadas para o servidor revalidar a autorização (via verifyAdminStepUp) na própria
-        // rota que cria a reserva — nunca confiar só no booleano local desta tela.
-        adminEmail: discountAuthorized ? discountAuthEmail : undefined,
-        adminPassword: discountAuthorized ? discountAuthPassword : undefined,
         totalAmount: totalLiquido,
         depositPaid: totalAdiantamento,
         adults,
@@ -901,21 +883,21 @@ export default function LancarReservaModal({
         }
         toast.success(`Reserva ${reservationNumber} atualizada com sucesso!`);
       } else {
-        const res = await fetch("/api/reservations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        const rawText = await res.text();
-        try {
-          data = rawText ? JSON.parse(rawText) : {};
-        } catch {
-          data = { success: false, error: rawText || "Erro no servidor ao salvar reserva." };
-        }
+        data = await withCriticalAuthorization(async (authorizationId) => {
+          const res = await fetch("/api/reservations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...body, authorizationId }),
+          });
+          const rawText = await res.text();
+          try {
+            return rawText ? JSON.parse(rawText) : {};
+          } catch {
+            return { success: false, error: rawText || "Erro no servidor ao salvar reserva." };
+          }
+        }, requestAuthorization);
 
         if (!data.success) {
-          if (data.precisaAutorizacao) {
-            setDiscountAuthorized(false);
-            setDiscountAuthorizedBy(null);
-            setDiscountAuthEmail(null);
-            setDiscountAuthPassword(null);
-          }
           toast.error(data.error || "Erro ao salvar reserva.");
           setSaving(false);
           return;
@@ -1392,19 +1374,17 @@ export default function LancarReservaModal({
                     className={`${inp} w-24 font-mono text-center ${discountNeedsAuth ? "border-red-500" : ""}`}
                   />
                   {discountNeedsAuth && (
-                    <button
-                      type="button"
-                      title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — exige autorização`}
-                      onClick={() => setShowAdminAuthModal(true)}
-                      className="shrink-0 p-1 rounded bg-red-500/15 border border-red-500/40 text-red-500 hover:bg-red-500/25 transition-colors"
+                    <span
+                      title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — será pedida autorização ao salvar`}
+                      className="shrink-0 p-1 rounded bg-amber-500/15 border border-amber-500/40 text-amber-500"
                     >
                       <ShieldCheck className="w-3.5 h-3.5" />
-                    </button>
+                    </span>
                   )}
                 </div>
-                {discountAuthorized && discountAuthorizedBy && (
-                  <span className={`text-[9px] flex items-center gap-1 mt-0.5 justify-center ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>
-                    <ShieldCheck className="w-2.5 h-2.5" /> Autorizado por {discountAuthorizedBy}
+                {discountNeedsAuth && (
+                  <span className={`text-[9px] mt-0.5 block ${isDark ? "text-amber-400" : "text-amber-600"}`}>
+                    Acima do limite — pede autorização ao salvar
                   </span>
                 )}
               </div>
@@ -1482,20 +1462,8 @@ export default function LancarReservaModal({
         </div>
       )}
 
-      {/* AUTORIZAÇÃO ADMIN: DESCONTO ACIMA DO LIMITE */}
-      <AdminAuthorizationModal
-        isOpen={showAdminAuthModal}
-        onClose={() => setShowAdminAuthModal(false)}
-        reason={`aplicar um desconto de ${discountPercent.toFixed(1)}%, acima do limite de ${maxDiscountPercent}% sem autorização`}
-        onAuthorized={(admin, credentials) => {
-          setDiscountAuthorized(true);
-          setDiscountAuthorizedBy(admin.name);
-          setDiscountAuthEmail(credentials.email);
-          setDiscountAuthPassword(credentials.password);
-          setShowAdminAuthModal(false);
-          toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
-        }}
-      />
+      {/* AUTORIZAÇÃO DE EVENTO CRÍTICO: DESCONTO ACIMA DO LIMITE */}
+      {authorizationModal}
     </div>
   );
 }

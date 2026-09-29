@@ -10,6 +10,7 @@ import { nextReservationNumber, findConflictingReservation } from "@/lib/reserva
 import { validateCPF, validateCNPJ, cpfMatchVariants } from "@/lib/documentValidation";
 import { dateOnlyBrasilia, parseBrasiliaDateTime, brDateKey, brTimeHHMM } from "@/lib/brasiliaDate";
 import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
 import { resolveOperator } from "@/lib/operator";
 import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
 
@@ -225,6 +226,7 @@ const RESERVATION_STATUSES_NOT_MATCHABLE = ["CANCELLED", "CHECKED_IN", "CHECKED_
 // de origem (status CHECKED_IN) na MESMA transação, para que o Mapa Operacional e a Grid de
 // Reservas nunca fiquem dessincronizados por uma falha parcial entre as duas escritas.
 export async function POST(req: NextRequest) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -309,23 +311,21 @@ export async function POST(req: NextRequest) {
       // do body: inflá-lo fazia qualquer desconto "caber" no limite sem autorização (o desconto
       // gravado na hospedagem é abatido das diárias reais no check-out).
       const subtotalPre = nightsPre * dailyRateNumPre + earlyChargePre;
-      const discountPercent = subtotalPre > 0 ? (discountValue / subtotalPre) * 100 : 100;
-
-      const tenantForDiscount = await prisma.tenant.findUnique({
-        where: { id: session.tenantId },
-        select: { maxDiscountPercent: true },
+      const auth = await authorizeDiscount(req, session, {
+        context: "Check-in",
+        items: [{ discountAmount: discountValue, baseAmount: subtotalPre }],
+        fingerprint: {
+          roomId: String(roomId || roomNumber || ""),
+          reservationId: reservationId ? String(reservationId) : null,
+          checkIn: String(checkInDate),
+          checkOut: String(checkOutDate),
+          dailyRate: dailyRateNumPre,
+        },
+        details: { Hóspede: String(guestName || "-"), Quarto: String(roomNumber || "-") },
+        authorizationId: body.authorizationId,
       });
-      const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
-
-      if (discountPercent > limite + 0.001) {
-        const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
-        if (!auth.ok) {
-          return NextResponse.json(
-            { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
-            { status: auth.status }
-          );
-        }
-      }
+      if (auth.failure) return NextResponse.json(auth.failure.body, { status: auth.failure.status });
+      authToRelease = auth;
     }
 
     // Cortesia de chegada antecipada / taxa fixa abaixo da meia diária = isenção ou desconto
@@ -928,6 +928,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, ...result });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[POST /api/stay/checkin] Erro:", error);
     return NextResponse.json({ success: false, error: error.message || "Erro ao registrar hospedagem." }, { status: 500 });
   }
@@ -1022,8 +1023,8 @@ export async function PATCH(req: NextRequest) {
 
       const [chargesAgg, paymentsAgg, paymentsCount] = await Promise.all([
         tx.stayCharge.aggregate({ where: { stayCheckinId }, _sum: { amount: true } }),
-        tx.cashTransaction.aggregate({ where: { stayCheckinId, type: "ENTRADA" }, _sum: { amount: true } }),
-        tx.cashTransaction.count({ where: { stayCheckinId, type: "ENTRADA" } }),
+        tx.cashTransaction.aggregate({ where: { stayCheckinId, type: "ENTRADA", annulledAt: null }, _sum: { amount: true } }),
+        tx.cashTransaction.count({ where: { stayCheckinId, type: "ENTRADA", annulledAt: null } }),
       ]);
       const totalDiarias = Number(chargesAgg._sum.amount || 0);
       const totalConsumo = Number(stayBeforeClose.totalConsumption);
@@ -1042,7 +1043,7 @@ export async function PATCH(req: NextRequest) {
       // financeiramente (equivalente a hpd_operadorfechou), que pode ser diferente do usuário
       // logado que está clicando em "Check-out" agora (hpd_idusucheckout).
       const lastPayment = await tx.cashTransaction.findFirst({
-        where: { stayCheckinId, type: "ENTRADA" },
+        where: { stayCheckinId, type: "ENTRADA", annulledAt: null },
         orderBy: { createdAt: "desc" },
         include: { cashRegister: true },
       });

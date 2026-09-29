@@ -603,14 +603,10 @@ export default function CheckinHospedagemModal({
     };
   }, [isOpen, reservationData?.id]);
 
-  // Busca o percentual máximo de desconto sem autorização de admin (Configurações do assinante)
-  // sempre que o modal abre, e reseta a autorização de desconto de uma sessão de check-in anterior.
+  // Busca o percentual máximo de desconto sem autorização (Configurações do assinante) sempre
+  // que o modal abre.
   useEffect(() => {
     if (!isOpen) return;
-    setDiscountAuthorized(false);
-    setDiscountAuthorizedBy(null);
-    setDiscountAuthEmail(null);
-    setDiscountAuthPassword(null);
     fetch("/api/tenant/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -934,17 +930,13 @@ export default function CheckinHospedagemModal({
   // reenviadas no payload para o backend revalidar (verifyAdminStepUp); o nome sozinho não vale.
   const [earlyArrivalAuthCredentials, setEarlyArrivalAuthCredentials] = useState<{ email: string; password: string } | null>(null);
   const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
-  const [adminAuthPurpose, setAdminAuthPurpose] = useState<"COURTESY" | "LOW_FIXED_FEE" | "HIGH_DISCOUNT" | null>(null);
+  const [adminAuthPurpose, setAdminAuthPurpose] = useState<"COURTESY" | "LOW_FIXED_FEE" | null>(null);
 
-  // Desconto máximo (%) sem autorização de administrador — parametrizado por assinante em
-  // Configurações (Tenant.maxDiscountPercent). 20 é só o valor inicial até a busca responder.
+  // Desconto máximo (%) sem autorização — parametrizado por assinante em Configurações
+  // (Tenant.maxDiscountPercent). Só serve para avisar o operador: quem decide é o servidor, e a
+  // janela de autorização de evento crítico abre ao gravar o check-in (app/principal/page.tsx,
+  // lib/criticalAuth.ts). 20 é só o valor inicial até a busca responder.
   const [maxDiscountPercent, setMaxDiscountPercent] = useState<number>(20);
-  const [discountAuthorized, setDiscountAuthorized] = useState<boolean>(false);
-  const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
-  // Credenciais usadas na autorização, repassadas no payload para o backend revalidar (via
-  // verifyAdminStepUp) dentro de POST /api/stay/checkin — nunca confiar só no booleano acima.
-  const [discountAuthEmail, setDiscountAuthEmail] = useState<string | null>(null);
-  const [discountAuthPassword, setDiscountAuthPassword] = useState<string | null>(null);
 
   const [adults, setAdults] = useState<number>(reservationData?.adults || 1);
   const [children, setChildren] = useState<number>(reservationData?.children || 0);
@@ -1243,7 +1235,7 @@ export default function CheckinHospedagemModal({
   // Desconto acima do percentual configurado em Configurações exige autorização de admin —
   // mesmo padrão já usado para cortesia/taxa reduzida na chegada de madrugada.
   const discountPercent = totalDiariasBruto > 0 ? (discount / totalDiariasBruto) * 100 : 0;
-  const discountNeedsAuth = discount > 0 && discountPercent > maxDiscountPercent && !discountAuthorized;
+  const discountNeedsAuth = discount > 0 && discountPercent > maxDiscountPercent;
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -1480,14 +1472,6 @@ export default function CheckinHospedagemModal({
       return;
     }
 
-    if (discountNeedsAuth) {
-      toast.error(
-        `O desconto informado (${discountPercent.toFixed(1)}%) é maior que o limite de ${maxDiscountPercent}% permitido sem autorização, definido em Configurações.\n\nPeça a um administrador para autorizar (ícone de escudo ao lado do campo de desconto).`,
-        "Desconto Acima do Limite"
-      );
-      return;
-    }
-
     if (!guestName.trim()) {
       toast.warning("O Nome do Hóspede Principal é obrigatório.", "Campo Obrigatório");
       return;
@@ -1594,10 +1578,6 @@ export default function CheckinHospedagemModal({
           }
         : null,
       discount,
-      // Reenviadas para o servidor revalidar a autorização (via verifyAdminStepUp) na própria
-      // rota que cria a hospedagem — nunca confiar só no booleano local desta tela.
-      adminEmail: discountAuthorized ? discountAuthEmail : undefined,
-      adminPassword: discountAuthorized ? discountAuthPassword : undefined,
       totalAdvance: totalAdiantamento,
       balance: saldoAPagar,
       operatorId: activeOperatorId,
@@ -2976,19 +2956,17 @@ export default function CheckinHospedagemModal({
                     }`}
                   />
                   {discountNeedsAuth && (
-                    <button
-                      type="button"
-                      title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — exige autorização`}
-                      onClick={() => { setAdminAuthPurpose("HIGH_DISCOUNT"); setShowAdminAuthModal(true); }}
-                      className="p-1 rounded bg-red-500/15 border border-red-500/40 text-red-500 hover:bg-red-500/25 transition-colors"
+                    <span
+                      title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — será pedida autorização ao confirmar`}
+                      className="p-1 rounded bg-amber-500/15 border border-amber-500/40 text-amber-500"
                     >
                       <ShieldCheck className="w-3.5 h-3.5" />
-                    </button>
+                    </span>
                   )}
                 </div>
-                {discountAuthorized && discountAuthorizedBy && (
-                  <span className={`text-[9px] flex items-center gap-1 mt-0.5 ${isDark ? "text-emerald-400" : "text-emerald-600"}`}>
-                    <ShieldCheck className="w-2.5 h-2.5" /> Autorizado por {discountAuthorizedBy}
+                {discountNeedsAuth && (
+                  <span className={`text-[9px] mt-0.5 block ${isDark ? "text-amber-400" : "text-amber-600"}`}>
+                    Acima do limite — pede autorização ao confirmar
                   </span>
                 )}
               </div>
@@ -3317,15 +3295,13 @@ export default function CheckinHospedagemModal({
           </div>
         )}
 
-        {/* ===== AUTORIZAÇÃO ADMIN: CORTESIA, TAXA FIXA ABAIXO DA META DIÁRIA OU DESCONTO ACIMA DO LIMITE ===== */}
+        {/* ===== AUTORIZAÇÃO ADMIN: CORTESIA OU TAXA FIXA ABAIXO DA MEIA DIÁRIA ===== */}
         <AdminAuthorizationModal
           isOpen={showAdminAuthModal}
           onClose={() => { setShowAdminAuthModal(false); setAdminAuthPurpose(null); }}
           reason={
             adminAuthPurpose === "LOW_FIXED_FEE"
               ? "aplicar uma taxa de chegada antecipada abaixo da meia diária"
-              : adminAuthPurpose === "HIGH_DISCOUNT"
-              ? `aplicar um desconto de ${discountPercent.toFixed(1)}%, acima do limite de ${maxDiscountPercent}% sem autorização`
               : "conceder cortesia (isenção de cobrança) na noite anterior a uma chegada de madrugada"
           }
           onAuthorized={(admin, credentials) => {
@@ -3334,12 +3310,6 @@ export default function CheckinHospedagemModal({
               setEarlyArrivalAuthCredentials({ email: credentials.email, password: credentials.password });
               setEarlyArrivalFixedFeeAuthorized(true);
               toast.success(`Taxa reduzida autorizada por ${admin.name}.`);
-            } else if (adminAuthPurpose === "HIGH_DISCOUNT") {
-              setDiscountAuthorized(true);
-              setDiscountAuthorizedBy(admin.name);
-              setDiscountAuthEmail(credentials.email);
-              setDiscountAuthPassword(credentials.password);
-              toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
             } else {
               setEarlyArrivalAuthorizedBy(admin.name);
               setEarlyArrivalAuthCredentials({ email: credentials.email, password: credentials.password });

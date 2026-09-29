@@ -31,19 +31,23 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       where: { tenantId: caixa.tenantId, openedAt: { lte: caixa.openedAt } },
     });
 
-    const totalDinheiro = caixa.transactions
+    // Mesma regra de /api/caixa/sessao: lançamentos que não representam dinheiro no caixa
+    // (countsInCashTotal=false) e lançamentos ANULADOS continuam na lista, mas fora dos totais.
+    const cashTransactions = caixa.transactions.filter((t) => !t.annulledAt && (t.type === "SANGRIA" || t.countsInCashTotal));
+
+    const totalDinheiro = cashTransactions
       .filter((t) => t.type !== "SANGRIA" && t.paymentMethod === "DINHEIRO")
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalPix = caixa.transactions
+    const totalPix = cashTransactions
       .filter((t) => t.type === "ENTRADA" && t.paymentMethod === "PIX")
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalCartao = caixa.transactions
+    const totalCartao = cashTransactions
       .filter((t) => t.type === "ENTRADA" && ["CARTAO", "CARTAO_CREDITO", "CARTAO_DEBITO"].includes(t.paymentMethod))
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalSangrias = caixa.transactions
+    const totalSangrias = cashTransactions
       .filter((t) => t.type === "SANGRIA")
       .reduce((s, t) => s + Number(t.amount), 0);
-    const totalEntradas = caixa.transactions
+    const totalEntradas = cashTransactions
       .filter((t) => t.type === "ENTRADA" || t.type === "SUPRIMENTO")
       .reduce((s, t) => s + Number(t.amount), 0);
 
@@ -71,6 +75,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
           description: t.description,
           paymentMethod: t.paymentMethod,
           countsInCashTotal: t.countsInCashTotal,
+          annulled: !!t.annulledAt,
+          annulledByName: t.annulledByName,
+          annulReason: t.annulReason,
           guestName: t.guestName,
           roomNumber: t.roomNumber,
           createdAt: t.createdAt,

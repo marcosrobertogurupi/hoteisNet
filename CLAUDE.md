@@ -111,6 +111,12 @@ A disciplina de segurança **não para na rota de API** — vale para o schema d
 
 **Ao adicionar qualquer `model` novo em `packages/database/prisma/schema.prisma`, crie no mesmo passo uma migration em `supabase/migrations/` com `ALTER TABLE public.<nome_do_@@map> ENABLE ROW LEVEL SECURITY;` — sem nenhuma policy (RLS ligado + zero policies = negação total para anon/authenticated; o Prisma usa o papel dono e não é afetado).** Modelo a seguir: `20260823220000_enable_rls_all_tables.sql`. Ao revisar um PR que mexe no schema, sinalize toda tabela nova que não ganhou RLS na mesma leva.
 
+### 12. Eventos críticos passam pelo motor de autorização — e lançamento de caixa NUNCA é excluído
+
+Ações que exigem aprovação de um superior (desconto acima de `Tenant.maxDiscountPercent`, anulação de lançamento no caixa e as próximas que entrarem no catálogo) usam `gateCriticalEvent` (`apps/web/src/lib/criticalAuth.ts`) — para desconto, `authorizeDiscount` (`lib/discountAuth.ts`). Nunca reimplementar "pede e-mail + senha de admin e reenvia no body": a senha do autorizador não volta para a tela, a aprovação fica presa à impressão digital da ação exata e é consumida uma única vez, e tudo fica em `critical_authorizations` para auditoria. Quem autoriza é a lista de usuários com `User.isAuthorizer`; o operador que já é autorizador passa direto (registrado como `PROPRIO`). Na tela, use `useCriticalAuthorization` + `withCriticalAuthorization` (`components/CriticalAuthorizationModal.tsx`).
+
+**`CashTransaction` nunca é apagado** (nem por rota autorizada): a única operação permitida é **anular** (`/api/caixa/anular-lancamento`) — a linha fica no caixa para consulta com `annulledAt`, `countsInCashTotal=false` e descrição `[ANULADO]`. Todo somatório de pagamentos da hospedagem filtra `annulledAt: null`, e todo total de caixa exclui anulados.
+
 ---
 
 ## ⚡ Performance — regras obrigatórias para toda busca de dados
@@ -179,6 +185,7 @@ Endpoint consultado em loop (mapas, telas que atualizam sozinhas) **nunca** baix
 - [ ] Toda leitura usa `select` explícito (sem `findMany()` pelado, sem `include`, sem spread do registro na resposta), traz só os campos usados e `_count` no lugar de arrays só para contar? (ver seção ⚡ Performance)
 - [ ] Se o endpoint é consultado em polling, filtra pela janela operacional e não baixa histórico/dataset completo?
 - [ ] Se o PR adiciona um `model` novo no schema Prisma, tem migration `ENABLE ROW LEVEL SECURITY` para a tabela nova (ver Segurança §11)?
+- [ ] Ação que exige aprovação de superior usa `gateCriticalEvent`/`authorizeDiscount`, e nenhum `CashTransaction` é apagado — só anulado (ver Segurança §12)?
 
 Se qualquer resposta for "não", a rota não está pronta.
 

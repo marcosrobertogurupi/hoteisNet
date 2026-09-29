@@ -63,6 +63,7 @@ import { usePolling } from "@/lib/usePolling";
 import { brDateKey } from "@/lib/brasiliaDate";
 import AbrirOsManutencaoModal from "@/components/manutencao/AbrirOsManutencaoModal";
 import OsManutencaoModal from "@/components/manutencao/OsManutencaoModal";
+import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
 import {
   MAINTENANCE_STAGE_LABEL,
   formatMaintenanceDateTime,
@@ -132,6 +133,9 @@ interface RoomItem {
 type FilterType = "ALL" | "VACANT_CLEAN" | "OCCUPIED" | "CLEANING" | "MAINTENANCE" | "CHECKOUT_TODAY";
 
 export default function TenantDashboardPage() {
+  // Janela de autorização de evento crítico (desconto acima do limite no check-in e na alteração
+  // de período) — ver lib/criticalAuth.ts.
+  const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
   const { theme, hotelLogo, hotelName, showLogoInPrint, whatsappSoundEnabled } = useTheme();
   const toast = useToast();
   const { operatorId: activeOperatorId, operatorName: activeOperatorName } = useOperator();
@@ -2041,10 +2045,13 @@ export default function TenantDashboardPage() {
 
             let checkinSaved = false;
             try {
-              const stayRes = await fetch("/api/stay/checkin", {
+              // Desconto acima do limite é evento crítico: se o servidor pedir autorização, a
+              // janela abre e o MESMO check-in é reenviado com o id aprovado (lib/criticalAuth.ts).
+              const stayData: any = await withCriticalAuthorization((authorizationId) => fetch("/api/stay/checkin", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
+                  authorizationId,
                   tenantId: "tenant-hoteisnet-demo",
                   roomNumber: activeRoom.number,
                   guestName: checkinData.guestName,
@@ -2068,17 +2075,16 @@ export default function TenantDashboardPage() {
                   operatorName: checkinData.operatorName,
                   initialPayments: checkinData.initialPayments,
                   discount: checkinData.discount,
-                  adminEmail: checkinData.adminEmail,
-                  adminPassword: checkinData.adminPassword,
                   secondaryGuests: checkinData.secondaryGuests,
                   adults: checkinData.adults,
                   children: checkinData.children,
                   earlyArrival: checkinData.earlyArrival ?? null,
                 }),
-              });
-              const stayData = await stayRes.json();
+              }).then((r) => r.json()), requestAuthorization);
               checkinSaved = !!stayData.success;
-              if (!stayData.success) {
+              if (stayData.cancelado) {
+                toast.info(`Check-in do Quarto ${activeRoom.number} não realizado: o desconto não foi autorizado. Nada foi gravado.`, "Evento Cancelado");
+              } else if (!stayData.success) {
                 console.error("[Checkin] Falha ao registrar hospedagem:", stayData.error);
                 toast.error(
                   `⚠️ Check-in do Quarto ${activeRoom.number} NÃO foi salvo no banco de dados: ${stayData.error || "erro desconhecido"}. Tente novamente.`,
@@ -2540,25 +2546,25 @@ export default function TenantDashboardPage() {
           }}
           onSave={async (updatedData) => {
             try {
-              const res = await fetch("/api/stay/period", {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  stayCheckinId: activeStayDetail.id,
-                  expectedCheckOut: updatedData.checkOutDateISO,
-                  ratePerNight: updatedData.ratePerNight,
-                  tariffName: updatedData.tariffName,
-                  tariffId: updatedData.tariffId,
-                }),
-              });
-              const data = await res.json();
+              const data: any = await withCriticalAuthorization(
+                (authorizationId) =>
+                  fetch("/api/stay/period", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      stayCheckinId: activeStayDetail.id,
+                      expectedCheckOut: updatedData.checkOutDateISO,
+                      ratePerNight: updatedData.ratePerNight,
+                      tariffName: updatedData.tariffName,
+                      tariffId: updatedData.tariffId,
+                      authorizationId,
+                    }),
+                  }).then((r) => r.json()),
+                requestAuthorization
+              );
               if (!data.success) {
-                if (data.precisaAutorizacao) {
-                  toast.error(
-                    `A nova diária representa um desconto acima do limite de ${data.limitePercent ?? ""}% permitido para a recepção. ` +
-                      `Use a tela "Alterar Tarifa da Hospedagem" (que pede autorização de administrador) para reduzir a diária, ou mantenha o valor atual.`,
-                    "Autorização necessária"
-                  );
+                if (data.cancelado) {
+                  toast.info("Alteração não autorizada: nada foi gravado.", "Evento Cancelado");
                   return;
                 }
                 toast.error(data.error || "Não foi possível alterar o período da hospedagem.");
@@ -2894,6 +2900,8 @@ export default function TenantDashboardPage() {
           loading={selecaoReservaLoading}
         />
       )}
+
+      {authorizationModal}
     </div>
   );
 }

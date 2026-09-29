@@ -20,7 +20,7 @@ import { processReservationDeposit, reverseReservationDeposits } from "@/lib/pay
 import { jsonForTenant } from "@/lib/tenantResponse";
 import { resolveOperator } from "@/lib/operator";
 import { parseBrasiliaDateTime, brTimeHHMM } from "@/lib/brasiliaDate";
-import { checkDiscountAuthorization, reservationDiscountBase } from "@/lib/discountAuth";
+import { authorizeDiscount, releaseDiscountAuthorization, reservationDiscountBase, type DiscountAuthResult } from "@/lib/discountAuth";
 
 // Erro dedicado para conflito de overbooking (quarto já reservado no período) — permite ao catch
 // de cada handler devolver 409 especificamente para esse caso, distinto de um erro genérico (500).
@@ -71,6 +71,7 @@ export async function GET(req: NextRequest) {
 
 // POST /api/reservations — cria uma nova reserva
 export async function POST(req: NextRequest) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -131,17 +132,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Desconto acima do limite do assinante exige autorização de administrador — revalidada aqui,
+    // Desconto acima do limite do assinante exige autorização de um autorizador — revalidada aqui,
     // antes de abrir a transação. A base do percentual é o total de diárias recalculado com a
     // tarifa do CADASTRO (nunca o totalDiarias do corpo, que o chamador poderia inflar para o
-    // desconto caber no limite). Ver lib/discountAuth.ts.
-    const discountAuth = await checkDiscountAuthorization(req, {
-      tenantId: session.tenantId,
-      discountAmount,
-      baseAmount: await reservationDiscountBase(session.tenantId, tariffId, dailyRate, checkInAtReq, checkOutAtReq),
-      adminEmail: body.adminEmail,
-      adminPassword: body.adminPassword,
+    // desconto caber no limite). Ver lib/discountAuth.ts e lib/criticalAuth.ts.
+    const discountAuth = await authorizeDiscount(req, session, {
+      context: "Nova reserva",
+      items: [
+        {
+          discountAmount: Number(discountAmount) || 0,
+          baseAmount: await reservationDiscountBase(session.tenantId, tariffId, dailyRate, checkInAtReq, checkOutAtReq),
+        },
+      ],
+      fingerprint: { roomId: String(roomId), guestId: guestId || null, checkIn: checkInAtReq, checkOut: checkOutAtReq },
+      details: {
+        Hóspede: String(guestName || "-"),
+        Período: `${checkInAtReq.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })} a ${checkOutAtReq.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`,
+      },
+      authorizationId: body.authorizationId,
     });
+    authToRelease = discountAuth;
     if (discountAuth.failure) {
       return NextResponse.json(discountAuth.failure.body, { status: discountAuth.failure.status });
     }
@@ -316,6 +326,7 @@ export async function POST(req: NextRequest) {
       message: `Reserva ${result.reservationNumber} criada com sucesso!`,
     });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[POST /api/reservations] Erro:", error);
     const status = error instanceof ReservationConflictError ? 409 : undefined;
     return NextResponse.json(
@@ -327,6 +338,7 @@ export async function POST(req: NextRequest) {
 
 // PATCH /api/reservations — atualiza/move uma reserva existente
 export async function PATCH(req: NextRequest) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -370,28 +382,34 @@ export async function PATCH(req: NextRequest) {
     if (discountAmount !== undefined) {
       const atual = await prisma.reservation.findFirst({
         where: { id, room: { tenantId: session.tenantId } },
-        select: { tariffId: true, dailyRate: true, checkInDate: true, checkOutDate: true },
+        select: { tariffId: true, dailyRate: true, checkInDate: true, checkOutDate: true, guestName: true, reservationNumber: true },
       });
       if (!atual) {
         return NextResponse.json({ success: false, error: "Reserva não encontrada." }, { status: 404 });
       }
-      const auth = await checkDiscountAuthorization(req, {
-        tenantId: session.tenantId,
-        discountAmount,
-        baseAmount: await reservationDiscountBase(
-          session.tenantId,
-          atual.tariffId ?? undefined,
-          dailyRate ?? atual.dailyRate,
-          checkInDate ? parseBrasiliaDateTime(checkInDate, brTimeHHMM(atual.checkInDate)) : atual.checkInDate,
-          checkOutDate ? parseBrasiliaDateTime(checkOutDate, brTimeHHMM(atual.checkOutDate)) : atual.checkOutDate
-        ),
-        adminEmail: body.adminEmail,
-        adminPassword: body.adminPassword,
+      const auth = await authorizeDiscount(req, session, {
+        context: "Alteração de reserva",
+        items: [
+          {
+            discountAmount: Number(discountAmount) || 0,
+            baseAmount: await reservationDiscountBase(
+              session.tenantId,
+              atual.tariffId ?? undefined,
+              dailyRate ?? atual.dailyRate,
+              checkInDate ? parseBrasiliaDateTime(checkInDate, brTimeHHMM(atual.checkInDate)) : atual.checkInDate,
+              checkOutDate ? parseBrasiliaDateTime(checkOutDate, brTimeHHMM(atual.checkOutDate)) : atual.checkOutDate
+            ),
+          },
+        ],
+        fingerprint: { reservationId: String(id) },
+        details: { Hóspede: String(guestName || atual.guestName || "-"), Reserva: String(atual.reservationNumber || id) },
+        authorizationId: body.authorizationId,
       });
       if (auth.failure) {
         return NextResponse.json(auth.failure.body, { status: auth.failure.status });
       }
       discountAuthorizedBy = auth.authorizedBy;
+      authToRelease = auth;
     }
 
     await txWithRetry(async (tx) => {
@@ -604,6 +622,7 @@ export async function PATCH(req: NextRequest) {
       message: `Reserva ${id} atualizada e salva no banco de dados com sucesso!`,
     });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[PATCH /api/reservations] Erro:", error);
     const status =
       error instanceof ReservationConflictError

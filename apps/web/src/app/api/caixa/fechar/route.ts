@@ -31,15 +31,15 @@ export async function POST(req: NextRequest) {
       await tx.$queryRaw`SELECT id FROM cash_registers WHERE id = ${open.id} FOR UPDATE`;
       const fresh = await tx.cashRegister.findFirst({
         where: { id: open.id, isOpen: true },
-        select: { id: true, transactions: { select: { type: true, amount: true, countsInCashTotal: true } } },
+        select: { id: true, transactions: { select: { type: true, amount: true, countsInCashTotal: true, annulledAt: true } } },
       });
       if (!fresh) return null;
 
       const totalEntradas = fresh.transactions
-        .filter((t) => (t.type === "ENTRADA" || t.type === "SUPRIMENTO") && t.countsInCashTotal)
+        .filter((t) => (t.type === "ENTRADA" || t.type === "SUPRIMENTO") && t.countsInCashTotal && !t.annulledAt)
         .reduce((s, t) => s + Number(t.amount), 0);
       const totalSangrias = fresh.transactions
-        .filter((t) => t.type === "SANGRIA")
+        .filter((t) => t.type === "SANGRIA" && !t.annulledAt)
         .reduce((s, t) => s + Number(t.amount), 0);
       const saldoCalculado = totalEntradas - totalSangrias;
 

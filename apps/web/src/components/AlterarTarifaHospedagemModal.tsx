@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { X, Eye, Printer, Filter, Search, ChevronDown, Check } from "lucide-react";
 import { TariffItem } from "./CadastroTarifasModal";
 import { useToast } from "@/context/ToastContext";
-import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
+import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
 
 function parseBRDate(dateStr: string): Date | null {
   const [datePart] = dateStr.split(" ");
@@ -100,12 +100,10 @@ export default function AlterarTarifaHospedagemModal({
     };
   }, [isOpen, stayData.dailyRates, toast]);
 
-  // Autorização de administrador para redução de tarifa acima do limite (Tenant.maxDiscountPercent).
-  // O servidor (/api/stay/tariff) é a autoridade: se recusar com precisaAutorizacao, abrimos este
-  // modal e reenviamos a gravação com as credenciais para o servidor revalidar (verifyAdminStepUp).
-  const [adminAuth, setAdminAuth] = useState<{ email: string; password: string } | null>(null);
-  const [showAdminAuth, setShowAdminAuth] = useState(false);
-  const [adminAuthLimit, setAdminAuthLimit] = useState<number | null>(null);
+  // Redução de tarifa acima do limite (Tenant.maxDiscountPercent) é evento crítico. O servidor
+  // (/api/stay/tariff) é a autoridade: se pedir autorização, a janela de autorização abre e a
+  // mesma gravação é reenviada com o id aprovado (lib/criticalAuth.ts).
+  const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
 
   // Initialize daily rates table based on stay date range or provided dailyRates
   const [dailyRates, setDailyRates] = useState<DailyRateItem[]>(() => {
@@ -215,7 +213,7 @@ export default function AlterarTarifaHospedagemModal({
     );
   };
 
-  const handleSave = async (auth?: { email: string; password: string }) => {
+  const handleSave = async () => {
     if (isSaving) return;
 
     const missingReference = dailyRates.some((item) => !item.referenceDate);
@@ -224,33 +222,29 @@ export default function AlterarTarifaHospedagemModal({
       return;
     }
 
-    const credentials = auth ?? adminAuth;
-
     setIsSaving(true);
     try {
-      const res = await fetch("/api/stay/tariff", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          stayCheckinId: stayData.idHospedagem,
-          dailyRates: dailyRates.map((item) => ({
-            referenceDate: item.referenceDate,
-            tariffName: item.tariffName,
-            tariffId: item.tariffId ?? null,
-            rateValue: item.rateValue,
-          })),
-          adminEmail: credentials?.email,
-          adminPassword: credentials?.password,
-        }),
-      });
-      const data = await res.json();
+      const data: any = await withCriticalAuthorization(
+        (authorizationId) =>
+          fetch("/api/stay/tariff", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              stayCheckinId: stayData.idHospedagem,
+              dailyRates: dailyRates.map((item) => ({
+                referenceDate: item.referenceDate,
+                tariffName: item.tariffName,
+                tariffId: item.tariffId ?? null,
+                rateValue: item.rateValue,
+              })),
+              authorizationId,
+            }),
+          }).then((r) => r.json()),
+        requestAuthorization
+      );
       if (!data.success) {
-        if (data.precisaAutorizacao) {
-          // Redução acima do limite: pede autorização de admin e reenvia com as credenciais.
-          setAdminAuth(null);
-          setAdminAuthLimit(typeof data.limitePercent === "number" ? data.limitePercent : null);
-          setShowAdminAuth(true);
-          setIsSaving(false);
+        if (data.cancelado) {
+          toast.info("Redução de tarifa não autorizada: nada foi gravado.", "Evento Cancelado");
           return;
         }
         throw new Error(data.error || "Falha ao gravar a nova tarifa no banco de dados.");
@@ -671,20 +665,7 @@ export default function AlterarTarifaHospedagemModal({
         </div>
       </div>
 
-      <AdminAuthorizationModal
-        isOpen={showAdminAuth}
-        onClose={() => setShowAdminAuth(false)}
-        reason={
-          adminAuthLimit != null
-            ? `Redução de tarifa acima do limite de ${adminAuthLimit}% permitido para a recepção`
-            : "Redução de tarifa acima do limite permitido para a recepção"
-        }
-        onAuthorized={(_admin, credentials) => {
-          setAdminAuth(credentials);
-          setShowAdminAuth(false);
-          void handleSave(credentials);
-        }}
-      />
+      {authorizationModal}
     </div>
   );
 }
