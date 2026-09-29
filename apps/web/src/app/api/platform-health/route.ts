@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/prisma";
+import { auditOpenStayDailies } from "@/lib/dailyAudit";
 
 // GET /api/platform-health — ROTA SEM SESSÃO, autenticada por segredo próprio (CLAUDE.md §5).
 //
@@ -110,6 +111,9 @@ export async function GET(req: NextRequest) {
     }),
   ]);
 
+  // Consistência da contagem de diárias (detalhe por quarto em /api/platform-health/diarias).
+  const diariasComProblema = await auditOpenStayDailies();
+
   const tenantIds = new Set<string>([
     ...egressTopHoje.map((e) => e.tenantId),
     ...iaTop24h.map((i) => i.tenantId),
@@ -149,6 +153,11 @@ export async function GET(req: NextRequest) {
     alertasOperacionais24h: Object.fromEntries(alertas24h.map((a) => [a.issueType, a._count._all])),
     alertasSemEnvio: alertasPresos,
     reviewsSyncFalhas24h: reviewsFalhas24h,
+    diarias: {
+      ok: diariasComProblema.length === 0,
+      hospedagensComProblema: diariasComProblema.length,
+      hoteis: [...new Set(diariasComProblema.map((d) => d.hotel))].slice(0, TOP * 3),
+    },
     whatsappDesconectados: whatsappDesconectados.map((w) => nomeDe(w.tenantId)),
     pdvSemSinal: pdvSilenciosos.map((p) => ({
       hotel: nomeDe(p.tenantId),
