@@ -6,7 +6,8 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
 import { dateOnlyBrasilia, parseBrasiliaDateTime } from "@/lib/brasiliaDate";
-import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
+import { describeStay } from "@/lib/criticalAuth";
 
 function nightsBetween(from: Date, to: Date): number {
   return Math.max(
@@ -22,6 +23,7 @@ function nightsBetween(from: Date, to: Date): number {
 // mostrando a previsão antiga (StayCheckin é quem controla bloqueio de disponibilidade e cálculo
 // de diária extra por virada — ver /api/stay/rollover).
 export async function PATCH(req: NextRequest) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -92,20 +94,15 @@ export async function PATCH(req: NextRequest) {
       const antes = referencePrice ?? Number(currentCharge?.amount ?? 0);
       const reducaoPercent = antes > 0 ? ((antes - Number(ratePerNight)) / antes) * 100 : 0;
       if (reducaoPercent > 0.001) {
-        const tenantForDiscount = await prisma.tenant.findUnique({
-          where: { id: session.tenantId },
-          select: { maxDiscountPercent: true },
+        const auth = await authorizeDiscount(req, session, {
+          context: "Alteração de período — diária abaixo da tarifa",
+          items: [{ discountAmount: antes - Number(ratePerNight), baseAmount: antes }],
+          fingerprint: { stayCheckinId: String(stayCheckinId), ratePerNight: Number(ratePerNight) },
+          details: await describeStay(session.tenantId, String(stayCheckinId)),
+          authorizationId: body.authorizationId,
         });
-        const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
-        if (reducaoPercent > limite + 0.001) {
-          const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
-          if (!auth.ok) {
-            return NextResponse.json(
-              { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
-              { status: auth.status }
-            );
-          }
-        }
+        if (auth.failure) return NextResponse.json(auth.failure.body, { status: auth.failure.status });
+        authToRelease = auth;
       }
     }
 
@@ -234,6 +231,7 @@ export async function PATCH(req: NextRequest) {
       })),
     });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[PATCH /api/stay/period] Erro:", error);
     return NextResponse.json(
       { success: false, error: error.message || "Erro ao alterar o período da hospedagem." },

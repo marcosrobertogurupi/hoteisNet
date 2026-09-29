@@ -13,6 +13,8 @@ interface Usuario {
   email: string;
   role: string;
   active: boolean;
+  isAuthorizer?: boolean;
+  phone?: string | null;
   createdAt: string;
   tenantId?: string | null;
   tenant?: { id: string; name: string } | null;
@@ -54,7 +56,7 @@ export default function UsuariosPage() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Usuario | null>(null);
-  const [form, setForm] = useState({ name: "", email: "", password: "", role: "RECEPCIONIST", tenantId: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "RECEPCIONIST", tenantId: "", phone: "", isAuthorizer: false });
   const [saving, setSaving] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -118,13 +120,13 @@ export default function UsuariosPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: "", email: "", password: "", role: "RECEPCIONIST", tenantId: me?.tenantId || "" });
+    setForm({ name: "", email: "", password: "", role: "RECEPCIONIST", tenantId: me?.tenantId || "", phone: "", isAuthorizer: false });
     setShowModal(true);
   };
 
   const openEdit = (u: Usuario) => {
     setEditing(u);
-    setForm({ name: u.name, email: u.email, password: "", role: u.role, tenantId: u.tenantId || "" });
+    setForm({ name: u.name, email: u.email, password: "", role: u.role, tenantId: u.tenantId || "", phone: u.phone || "", isAuthorizer: !!u.isAuthorizer });
     setShowModal(true);
   };
 
@@ -148,6 +150,8 @@ export default function UsuariosPage() {
               id: editing.id,
               name: form.name,
               role: form.role,
+              phone: form.phone,
+              isAuthorizer: form.isAuthorizer,
               ...(form.password ? { password: form.password } : {}),
             }),
           })
@@ -294,6 +298,14 @@ export default function UsuariosPage() {
                     >
                       {roleLabel(u.role)}
                     </span>
+                    {u.isAuthorizer && (
+                      <span
+                        title="Pode autorizar eventos críticos (desconto acima do limite, anulação de lançamento no caixa)"
+                        className="ml-1.5 px-2 py-1 rounded font-mono text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
+                      >
+                        AUTORIZADOR
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-4">
                     <span
@@ -394,6 +406,32 @@ export default function UsuariosPage() {
                   Administrador tem controle total. Os demais papéis só incluem/alteram — nunca excluem — e não acessam Configurações, Usuários ou Módulo Fiscal.
                 </p>
               </div>
+
+              <div>
+                <label className={`block mb-1 ${ui.label}`}>WhatsApp (DDD + número)</label>
+                <input
+                  type="tel"
+                  value={form.phone}
+                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="(63) 99999-9999"
+                  className={uField}
+                />
+              </div>
+
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.isAuthorizer}
+                  onChange={(e) => setForm((f) => ({ ...f, isAuthorizer: e.target.checked }))}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className={`block text-xs font-semibold ${ui.strong}`}>Autorizador</span>
+                  <span className={`block text-[10px] ${ui.empty}`}>
+                    Pode autorizar eventos críticos, como desconto acima do limite e anulação de lançamento no caixa. Quando é ele quem opera, a ação passa direto e fica registrada.
+                  </span>
+                </span>
+              </label>
 
               {isSuperAdmin && !editing && (
                 <div>

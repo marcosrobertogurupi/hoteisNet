@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
         openingBalance: true,
         closingBalance: true,
         transactions: {
-          select: { type: true, amount: true, paymentMethod: true, countsInCashTotal: true },
+          select: { type: true, amount: true, paymentMethod: true, countsInCashTotal: true, annulledAt: true },
         },
       },
     });
@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
       // Mesmo critério de apps/web/src/app/api/caixa/sessao/route.ts: lançamentos que não são
       // dinheiro físico (countsInCashTotal=false) ficam fora de todos os totais, inclusive dos
       // detalhamentos por meio de pagamento.
-      const cashTransactions = caixa.transactions.filter((t) => t.type === "SANGRIA" || t.countsInCashTotal);
+      const cashTransactions = caixa.transactions.filter((t) => !t.annulledAt && (t.type === "SANGRIA" || t.countsInCashTotal));
 
       const totalDinheiro = cashTransactions
         .filter((t) => t.type !== "SANGRIA" && t.paymentMethod === "DINHEIRO")

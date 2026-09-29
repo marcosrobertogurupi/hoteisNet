@@ -40,7 +40,8 @@ export async function GET(req: NextRequest) {
     // Lançamentos com countsInCashTotal=false (Conta Corrente, parcelamento, débito de saldo do
     // hóspede) aparecem normalmente na lista acima, mas ficam fora dos totais somados — não
     // representam dinheiro físico entrando no caixa neste momento.
-    const cashTransactions = visibleTransactions.filter((t) => t.type === "SANGRIA" || t.countsInCashTotal);
+    // Lançamento ANULADO continua na lista (consulta), mas nunca soma — nem sangria.
+    const cashTransactions = visibleTransactions.filter((t) => !t.annulledAt && (t.type === "SANGRIA" || t.countsInCashTotal));
 
     const totalDinheiro = cashTransactions
       .filter((t) => t.type !== "SANGRIA" && t.paymentMethod === "DINHEIRO")
@@ -83,6 +84,9 @@ export async function GET(req: NextRequest) {
           description: t.description,
           paymentMethod: t.paymentMethod,
           countsInCashTotal: t.countsInCashTotal,
+          annulled: !!t.annulledAt,
+          annulledByName: t.annulledByName,
+          annulReason: t.annulReason,
           guestName: t.guestName,
           roomNumber: t.roomNumber,
           createdAt: t.createdAt,

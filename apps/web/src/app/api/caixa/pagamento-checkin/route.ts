@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
       // /api/caixa/pagamento-lote e do check-out — inclui outros débitos e desconto).
       const [charges, payments] = await Promise.all([
         tx.stayCharge.aggregate({ where: { stayCheckinId: stay!.id }, _sum: { amount: true } }),
-        tx.cashTransaction.aggregate({ where: { stayCheckinId: stay!.id, type: "ENTRADA" }, _sum: { amount: true } }),
+        tx.cashTransaction.aggregate({ where: { stayCheckinId: stay!.id, type: "ENTRADA", annulledAt: null }, _sum: { amount: true } }),
       ]);
       const totalPago = Number(payments._sum.amount || 0);
       const saldo = Math.max(

@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       // que pode estar desatualizado desde o último pagamento/consumo lançado).
       const [chargesAgg, paymentsAgg] = await Promise.all([
         tx.stayCharge.aggregate({ where: { stayCheckinId: fromStay.id }, _sum: { amount: true } }),
-        tx.cashTransaction.aggregate({ where: { stayCheckinId: fromStay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+        tx.cashTransaction.aggregate({ where: { stayCheckinId: fromStay.id, type: "ENTRADA", annulledAt: null }, _sum: { amount: true } }),
       ]);
       const totalDiariasOrigem = Number(chargesAgg._sum.amount || 0);
       const totalPagoOrigem = Number(paymentsAgg._sum.amount || 0);
@@ -159,7 +159,7 @@ export async function POST(req: NextRequest) {
       // Recalcula e persiste os totais consolidados de AMBAS as pontas após a movimentação —
       // mesmo padrão já usado em /api/caixa/pagamento-lote e no checkout.
       const [origemPagamentosAgg, destinoAgg, destinoStayAfter] = await Promise.all([
-        tx.cashTransaction.aggregate({ where: { stayCheckinId: fromStay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+        tx.cashTransaction.aggregate({ where: { stayCheckinId: fromStay.id, type: "ENTRADA", annulledAt: null }, _sum: { amount: true } }),
         tx.stayCharge.aggregate({ where: { stayCheckinId: toStay.id }, _sum: { amount: true } }),
         tx.stayCheckin.findUnique({ where: { id: toStay.id } }),
       ]);
@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
       );
 
       const [destinoPagamentosAgg] = await Promise.all([
-        tx.cashTransaction.aggregate({ where: { stayCheckinId: toStay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+        tx.cashTransaction.aggregate({ where: { stayCheckinId: toStay.id, type: "ENTRADA", annulledAt: null }, _sum: { amount: true } }),
       ]);
       const totalDiariasDestino = Number(destinoAgg._sum.amount || 0);
       const totalPagoDestino = Number(destinoPagamentosAgg._sum.amount || 0);

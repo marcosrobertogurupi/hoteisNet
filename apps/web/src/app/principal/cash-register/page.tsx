@@ -370,6 +370,8 @@ export default function TenantCashRegisterPage() {
                     // mas em cinza e sem sinal +/− nos totais.
                     const naoSoma = (trx as any).countsInCashTotal === false;
                     const isEstorno = trx.type === "ESTORNO";
+                    // Lançamento ANULADO (nunca é excluído): continua aqui para consulta, fora dos totais.
+                    const isAnulado = !!(trx as any).annulled;
                     return (
                       <tr key={trx.id} className={`transition-colors ${theme.isDark ? "hover:bg-slate-800/40" : "hover:bg-slate-50"} ${naoSoma ? "opacity-60" : ""}`}>
                         <td className="p-3.5 font-mono">
@@ -379,8 +381,11 @@ export default function TenantCashRegisterPage() {
                         <td className={`p-3.5 font-medium ${theme.textMain}`}>
                           {trx.description}
                           {naoSoma && (
-                            <span className={`ml-2 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${isEstorno ? "bg-red-500/15 text-red-400" : "bg-slate-500/15 text-slate-400"}`}>
-                              {isEstorno ? "Estorno" : "Não soma"}
+                            <span
+                              title={isAnulado ? [(trx as any).annulledByName && `Autorizado por ${(trx as any).annulledByName}`, (trx as any).annulReason].filter(Boolean).join(" — ") || undefined : undefined}
+                              className={`ml-2 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${isEstorno || isAnulado ? "bg-red-500/15 text-red-400" : "bg-slate-500/15 text-slate-400"}`}
+                            >
+                              {isAnulado ? "Anulado" : isEstorno ? "Estorno" : "Não soma"}
                             </span>
                           )}
                         </td>

@@ -4,7 +4,8 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
-import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
+import { describeStay } from "@/lib/criticalAuth";
 
 // PATCH /api/stay/tariff — grava no banco a tarifa escolhida pelo usuário no modal "Alterar Tarifa
 // da Hospedagem" (aplicar em toda hospedagem / hoje em diante / apenas nos selecionados). O front
@@ -12,6 +13,7 @@ import { verifyAdminStepUp } from "@/lib/adminAuth";
 // (uma linha por diária, com a referenceDate original de cada StayCharge) e sincronizamos 1:1 com
 // o banco, sem reinterpretar o modo no servidor.
 export async function PATCH(req: NextRequest) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -105,20 +107,18 @@ export async function PATCH(req: NextRequest) {
       }
       const reducaoPercent = somaAntes > 0 ? ((somaAntes - somaDepois) / somaAntes) * 100 : 0;
       if (reducaoPercent > 0.001) {
-        const tenantForDiscount = await prisma.tenant.findUnique({
-          where: { id: session.tenantId },
-          select: { maxDiscountPercent: true },
+        const auth = await authorizeDiscount(req, session, {
+          context: "Alteração de tarifa da hospedagem",
+          items: [{ discountAmount: somaAntes - somaDepois, baseAmount: somaAntes }],
+          fingerprint: {
+            stayCheckinId: String(stayCheckinId),
+            diarias: resolvedRates.map((d: any) => ({ ref: String(d.referenceDate), v: Number(d.rateValue) })),
+          },
+          details: await describeStay(session.tenantId, String(stayCheckinId)),
+          authorizationId: body.authorizationId,
         });
-        const limite = Number(tenantForDiscount?.maxDiscountPercent ?? 20);
-        if (reducaoPercent > limite + 0.001) {
-          const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
-          if (!auth.ok) {
-            return NextResponse.json(
-              { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
-              { status: auth.status }
-            );
-          }
-        }
+        if (auth.failure) return NextResponse.json(auth.failure.body, { status: auth.failure.status });
+        authToRelease = auth;
       }
     }
 
@@ -202,6 +202,7 @@ export async function PATCH(req: NextRequest) {
       })),
     });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[PATCH /api/stay/tariff] Erro:", error);
     return NextResponse.json(
       { success: false, error: error.message || "Erro ao alterar tarifa da hospedagem." },

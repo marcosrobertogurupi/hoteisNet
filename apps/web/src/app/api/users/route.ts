@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     where: { tenantId: session!.tenantId! },
     orderBy: { createdAt: "asc" },
     select: {
-      id: true, name: true, email: true, role: true, phone: true, active: true, createdAt: true, updatedAt: true,
+      id: true, name: true, email: true, role: true, phone: true, active: true, isAuthorizer: true, createdAt: true, updatedAt: true,
       tenantId: true,
       tenant: { select: { id: true, name: true } },
     },
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, email, password, role, phone } = body;
+    const { name, email, password, role, phone, isAuthorizer } = body;
 
     if (!name || !email || !password) {
       return NextResponse.json({ success: false, error: "Nome, e-mail e senha são obrigatórios." }, { status: 400 });
@@ -75,6 +75,8 @@ export async function POST(req: NextRequest) {
         passwordHash,
         role: finalRole,
         phone: phone ? String(phone).trim() : null,
+        // Autorizador de eventos críticos (desconto acima do limite, anulação no caixa…).
+        isAuthorizer: !!isAuthorizer,
       },
       select: { id: true, name: true, email: true, role: true, active: true, createdAt: true, tenantId: true, tenant: { select: { id: true, name: true } } },
     });
@@ -106,7 +108,7 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { id, name, role, active, password, phone } = body;
+    const { id, name, role, active, password, phone, isAuthorizer } = body;
 
     if (!id) {
       return NextResponse.json({ success: false, error: "ID do usuário é obrigatório." }, { status: 400 });
@@ -137,6 +139,9 @@ export async function PATCH(req: NextRequest) {
       if (validRoles.includes(role)) data.role = role;
     }
     if (active !== undefined) data.active = !!active;
+    // Autorizador de eventos críticos — lido do banco a cada autorização (lib/criticalAuth.ts),
+    // então retirar a marca vale na hora, sem precisar derrubar a sessão.
+    if (isAuthorizer !== undefined) data.isAuthorizer = !!isAuthorizer;
     if (password) {
       const senhaFraca = validatePasswordStrength(password);
       if (senhaFraca) {

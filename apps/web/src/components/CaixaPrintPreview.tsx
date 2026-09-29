@@ -11,6 +11,7 @@ export interface CashTransactionDTO {
   // false = não entra nos totais físicos do caixa (Conta Corrente, parcelamento, débito de saldo
   // do hóspede, ou um adiantamento de reserva estornado). Continua listado para conferência.
   countsInCashTotal?: boolean;
+  annulled?: boolean;
   guestName: string | null;
   roomNumber: string | null;
   createdAt: string;
@@ -65,7 +66,7 @@ export default function CaixaPrintPreview({ caixa, hotelName }: { caixa: CashReg
         dataHora: t.createdAt,
         descricao: t.description,
         credito: somaNoCaixa && t.type === "ENTRADA" ? t.amount : 0,
-        debito: t.type === "SANGRIA" ? t.amount : 0,
+        debito: t.type === "SANGRIA" && !t.annulled ? t.amount : 0,
         planoContas: t.accountPlanCode
           ? `${t.accountPlanCode} - ${t.accountPlanDescription}`
           : t.type === "SANGRIA"

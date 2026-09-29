@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
-import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
 import { loadSession, serializeSession, recalcSessionTotals } from "@/lib/pdvSession";
 import { round2 } from "@/lib/pdvSale";
 
@@ -22,6 +22,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -38,32 +39,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const data: Record<string, unknown> = {};
 
-    if (body.desconto !== undefined) {
+    // Desconto igual ao já gravado não muda nada (nem pede nova autorização, nem apaga quem liberou).
+    if (body.desconto !== undefined && round2(Math.max(0, Number(body.desconto) || 0)) !== round2(Number(current.discount) || 0)) {
       const desconto = round2(Math.max(0, Number(body.desconto) || 0));
       data.discount = desconto;
-      // Desconto acima do limite do operador (Tenant.maxDiscountPercent) exige senha de admin,
-      // mesmo padrão da cortesia de check-in.
+      // Desconto acima do limite do operador (Tenant.maxDiscountPercent) exige autorização de um
+      // autorizador (lib/discountAuth.ts e lib/criticalAuth.ts).
       if (desconto > 0) {
-        const [tenant] = await Promise.all([
-          prisma.tenant.findUnique({ where: { id: session.tenantId }, select: { maxDiscountPercent: true } }),
-        ]);
-        const subtotal = Number(current.subtotal) || 0;
-        const percent = subtotal > 0 ? (desconto / subtotal) * 100 : 100;
-        const limite = Number(tenant?.maxDiscountPercent ?? 20);
-        if (percent > limite + 0.001) {
-          const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
-          if (!auth.ok) {
-            return NextResponse.json(
-              { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
-              { status: auth.status }
-            );
-          }
-          data.discountAuthById = auth.admin.id;
-          data.discountAuthByName = auth.admin.name;
-        } else {
-          data.discountAuthById = null;
-          data.discountAuthByName = null;
-        }
+        const auth = await authorizeDiscount(req, session, {
+          context: "Atendimento do restaurante (PDV)",
+          items: [{ discountAmount: desconto, baseAmount: Number(current.subtotal) || 0 }],
+          fingerprint: { atendimentoId: id },
+          authorizationId: body.authorizationId,
+        });
+        if (auth.failure) return NextResponse.json(auth.failure.body, { status: auth.failure.status });
+        authToRelease = auth;
+        data.discountAuthById = auth.authorizedBy?.id ?? null;
+        data.discountAuthByName = auth.authorizedBy?.name ?? null;
       } else {
         data.discountAuthById = null;
         data.discountAuthByName = null;
@@ -93,6 +85,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const updated = await loadSession(id, session.tenantId);
     return NextResponse.json({ success: true, atendimento: updated ? serializeSession(updated) : null });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[PATCH /api/pdv/atendimentos/[id]] Erro:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
 import React, { useState, useEffect, useRef } from "react";
 import {
   X, Search, Plus, Trash2, Layers, DollarSign, Save,
@@ -145,6 +146,9 @@ export default function ReservasMultiplasModal({
   cashRegisterId,
   existingReservations = [],
 }: ReservasMultiplasModalProps) {
+  // Desconto acima do limite em qualquer reserva do lote é evento crítico (lib/criticalAuth.ts):
+  // uma única autorização cobre o lote inteiro.
+  const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
   const { theme, hotelName, defaultCheckInTime, defaultCheckOutTime } = useTheme();
   const toast = useToast();
   const { operatorId } = useOperator();
@@ -579,14 +583,15 @@ export default function ReservasMultiplasModal({
         })),
       };
 
-      const res = await fetch("/api/reservations/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const rawText = await res.text();
-      let data: any = {};
-      try { data = rawText ? JSON.parse(rawText) : {}; } catch { data = { success: false, error: rawText }; }
+      const data: any = await withCriticalAuthorization(async (authorizationId) => {
+        const res = await fetch("/api/reservations/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, authorizationId }),
+        });
+        const rawText = await res.text();
+        try { return rawText ? JSON.parse(rawText) : {}; } catch { return { success: false, error: rawText }; }
+      }, requestAuthorization);
 
       if (!data.success) {
         toast.error(data.error || "Erro ao salvar as reservas do lote.");
@@ -996,6 +1001,7 @@ export default function ReservasMultiplasModal({
           </div>
         </div>
       )}
+      {authorizationModal}
     </div>
   );
 }

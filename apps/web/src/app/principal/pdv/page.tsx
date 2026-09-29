@@ -1,5 +1,6 @@
 "use client";
 
+import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -34,6 +35,8 @@ interface CatItem {
 const TERMINAL_KEY = "pdv_terminal_id";
 
 export default function PdvPage() {
+  // Desconto acima do limite é evento crítico (lib/criticalAuth.ts).
+  const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
   const { theme } = useTheme();
   const isDark = theme.isDark;
   const toast = useToast();
@@ -301,26 +304,24 @@ export default function PdvPage() {
     upsert(data.atendimento);
   };
 
-  const setDesconto = async (valor: number, admin?: { adminEmail: string; adminPassword: string }) => {
+  const setDesconto = async (valor: number) => {
     if (!selected) return;
-    const res = await fetch(`/api/pdv/atendimentos/${selected.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ desconto: valor, ...admin }),
-    });
-    const data = await res.json();
+    const data: any = await withCriticalAuthorization(
+      (authorizationId) =>
+        fetch(`/api/pdv/atendimentos/${selected.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ desconto: valor, authorizationId }),
+        }).then((r) => r.json()),
+      requestAuthorization
+    );
     if (data.success) {
       upsert(data.atendimento);
       return;
     }
-    if (data.precisaAutorizacao && !admin) {
-      const adminEmail = window.prompt(
-        `Desconto acima de ${data.limitePercent ?? ""}% exige autorização.\nE-mail do administrador:`
-      );
-      if (!adminEmail) return;
-      const adminPassword = window.prompt("Senha do administrador:");
-      if (!adminPassword) return;
-      return setDesconto(valor, { adminEmail, adminPassword });
+    if (data.cancelado) {
+      toast.info("Desconto não autorizado: nada foi alterado.");
+      return;
     }
     toast.error(data.error || "Não foi possível aplicar o desconto.");
   };
@@ -875,6 +876,7 @@ export default function PdvPage() {
       )}
       {modal === "turno" && <TurnoModal onClose={() => setModal(null)} />}
       {modal === "caixa" && <CaixaMovimentoModal onClose={() => setModal(null)} />}
+      {authorizationModal}
     </div>
   );
 }

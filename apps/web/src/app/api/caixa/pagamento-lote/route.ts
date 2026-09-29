@@ -4,7 +4,8 @@ import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { processPaymentLine } from "@/lib/paymentProcessing";
-import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
+import { describeStay } from "@/lib/criticalAuth";
 import { resolveOperator } from "@/lib/operator";
 
 // POST /api/caixa/pagamento-lote — grava, em uma única transação, todos os lançamentos de
@@ -13,6 +14,7 @@ import { resolveOperator } from "@/lib/operator";
 // ficam apenas na grade local (não vão pro caixa) até o usuário clicar em "Salvar Crédito" —
 // só então tudo é persistido de uma vez, atomicamente (se um item falhar, nada é gravado).
 export async function POST(req: NextRequest) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -49,33 +51,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
-    // administrador — checagem AUTORITATIVA no servidor, nunca confiar no que a tela já validou
-    // (a UI pode ter sido burlada). Mesmo padrão de /api/pdv/atendimentos/[id] (verifyAdminStepUp).
+    // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de um
+    // autorizador — checagem AUTORITATIVA no servidor, nunca confiar no que a tela já validou
+    // (a UI pode ter sido burlada). Ver lib/discountAuth.ts e lib/criticalAuth.ts.
     const discountValue = hasDiscountUpdate ? Math.max(0, Number(discount) || 0) : 0;
-    if (hasDiscountUpdate && discountValue > 0 && stay) {
+    // Só pede autorização quando o desconto AUMENTA: manter ou reduzir um desconto já gravado
+    // (autorizado antes) não exige nova autorização a cada pagamento lançado.
+    if (hasDiscountUpdate && discountValue > 0 && stay && discountValue > Number(stay.discount) + 0.001) {
       const chargesAgg = await prisma.stayCharge.aggregate({
         where: { stayCheckinId: stay.id },
         _sum: { amount: true },
       });
       const subtotal = Number(chargesAgg._sum.amount || 0) + Number(stay.totalConsumption) + Number(stay.otherDebits);
-      const discountPercent = subtotal > 0 ? (discountValue / subtotal) * 100 : 100;
-
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: session.tenantId },
-        select: { maxDiscountPercent: true },
+      const auth = await authorizeDiscount(req, session, {
+        context: "Desconto na conta da hospedagem",
+        items: [{ discountAmount: discountValue, baseAmount: subtotal }],
+        fingerprint: { stayCheckinId: stay.id },
+        details: await describeStay(session.tenantId, stay.id),
+        authorizationId: body.authorizationId,
       });
-      const limite = Number(tenant?.maxDiscountPercent ?? 20);
-
-      if (discountPercent > limite + 0.001) {
-        const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
-        if (!auth.ok) {
-          return NextResponse.json(
-            { success: false, error: auth.error, precisaAutorizacao: true, limitePercent: limite },
-            { status: auth.status }
-          );
-        }
-      }
+      if (auth.failure) return NextResponse.json(auth.failure.body, { status: auth.failure.status });
+      authToRelease = auth;
     }
 
     const { movimentos, saldoContaQuarto } = await txWithRetry(async (tx) => {
@@ -158,7 +154,7 @@ export async function POST(req: NextRequest) {
       if (stay) {
         const [charges, paymentsAgg, stayAfter] = await Promise.all([
           tx.stayCharge.aggregate({ where: { stayCheckinId: stay.id }, _sum: { amount: true } }),
-          tx.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA" }, _sum: { amount: true } }),
+          tx.cashTransaction.aggregate({ where: { stayCheckinId: stay.id, type: "ENTRADA", annulledAt: null }, _sum: { amount: true } }),
           tx.stayCheckin.findUnique({ where: { id: stay.id }, select: { totalConsumption: true, discount: true, otherDebits: true } }),
         ]);
         const totalDiarias = Number(charges._sum.amount || 0);
@@ -200,6 +196,7 @@ export async function POST(req: NextRequest) {
       message: `${movimentos.length} lançamento(s) gravado(s) com sucesso no Caixa de ${opName}!`,
     });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[POST /api/caixa/pagamento-lote] Erro:", error);
     return NextResponse.json({ success: false, error: error.message || "Erro ao gravar lançamentos no caixa." }, { status: 500 });
   }

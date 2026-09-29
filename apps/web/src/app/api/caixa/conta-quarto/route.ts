@@ -24,9 +24,9 @@ export async function GET(req: NextRequest) {
     }
 
     const movimentos = await prisma.cashTransaction.findMany({
-      where: { stayCheckinId, type: "ENTRADA" },
+      where: { stayCheckinId, type: "ENTRADA", annulledAt: null },
       orderBy: { createdAt: "desc" },
-      include: { cashRegister: true },
+      select: { id: true, createdAt: true, amount: true, paymentMethod: true, cashRegister: { select: { operatorName: true } } },
     });
 
     const payments = movimentos.map((m) => ({

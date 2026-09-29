@@ -16,7 +16,7 @@ import {
 import { processReservationDeposit } from "@/lib/paymentProcessing";
 import { resolveOperator } from "@/lib/operator";
 import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
-import { checkDiscountAuthorization, reservationDiscountBase } from "@/lib/discountAuth";
+import { authorizeDiscount, releaseDiscountAuthorization, reservationDiscountBase, type DiscountAuthResult, type DiscountItem } from "@/lib/discountAuth";
 
 // POST /api/reservations/batch — cria várias reservas de uma só vez, dentro de uma única
 // transação Prisma (equivalente ao botão "Salvar Reservas" da tela de Reservas Múltiplas do
@@ -26,6 +26,7 @@ import { checkDiscountAuthorization, reservationDiscountBase } from "@/lib/disco
 // Reservation.tenantId é o tenant real da sessão (ver comentário em ../route.ts).
 
 export async function POST(req: NextRequest) {
+  let authToRelease: DiscountAuthResult | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -42,6 +43,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const discountItems: DiscountItem[] = [];
     for (let i = 0; i < reservations.length; i++) {
       const r = reservations[i];
       if (!r.roomId || !r.guestName || !r.checkInDate || !r.checkOutDate || !r.tariffId) {
@@ -64,31 +66,29 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Mesma trava de desconto de /api/reservations: acima do limite do assinante exige
-      // autorização de administrador, revalidada no servidor (ver lib/discountAuth.ts).
-      const discountAuth = await checkDiscountAuthorization(req, {
-        tenantId: session.tenantId,
-        discountAmount: r.discountAmount,
-        baseAmount: await reservationDiscountBase(
-          session.tenantId,
-          r.tariffId,
-          r.dailyRate,
-          r.checkInDate,
-          r.checkOutDate
-        ),
-        adminEmail: body.adminEmail,
-        adminPassword: body.adminPassword,
+      discountItems.push({
+        label: `Reserva ${i + 1} (${r.guestName || "sem nome"})`,
+        discountAmount: Number(r.discountAmount) || 0,
+        baseAmount: await reservationDiscountBase(session.tenantId, r.tariffId, r.dailyRate, r.checkInDate, r.checkOutDate),
       });
-      if (discountAuth.failure) {
-        return NextResponse.json(
-          {
-            ...discountAuth.failure.body,
-            error: `Reserva ${i + 1} (${r.guestName || "sem nome"}): ${discountAuth.failure.body.error}`,
-          },
-          { status: discountAuth.failure.status }
-        );
-      }
     }
+
+    // Mesma trava de desconto de /api/reservations: acima do limite do assinante exige autorização
+    // de um autorizador, revalidada no servidor. UMA autorização cobre o lote inteiro — os
+    // descontos acima do limite de todas as reservas vão juntos para o autorizador (ver
+    // lib/discountAuth.ts e lib/criticalAuth.ts).
+    const discountAuth = await authorizeDiscount(req, session, {
+      context: "Reservas múltiplas",
+      items: discountItems,
+      fingerprint: {
+        lote: reservations.map((r: any) => ({ roomId: String(r.roomId), checkIn: String(r.checkInDate), checkOut: String(r.checkOutDate) })),
+      },
+      authorizationId: body.authorizationId,
+    });
+    if (discountAuth.failure) {
+      return NextResponse.json(discountAuth.failure.body, { status: discountAuth.failure.status });
+    }
+    authToRelease = discountAuth;
 
     const results = await txWithRetry(async (tx) => {
       const created: { reservationId: string; reservationNumber: string; roomId: string; guestName: string }[] = [];
@@ -255,6 +255,7 @@ export async function POST(req: NextRequest) {
       message: `${results.length} reserva(s) salva(s) com sucesso!`,
     });
   } catch (error: any) {
+    await releaseDiscountAuthorization(authToRelease);
     console.error("[POST /api/reservations/batch] Erro:", error);
     return NextResponse.json({ success: false, error: error.message || "Erro interno ao salvar reservas em lote." });
   }

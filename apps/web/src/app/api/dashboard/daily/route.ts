@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
       // Receitas do dia — entradas de caixa (CashTransaction não tem tenantId: filtra pela relação).
       prisma.cashTransaction.aggregate({
         _sum: { amount: true },
-        where: { type: "ENTRADA", createdAt: { gte: start, lt: end }, cashRegister: { tenantId } },
+        where: { type: "ENTRADA", annulledAt: null, createdAt: { gte: start, lt: end }, cashRegister: { tenantId } },
       }),
 
       // Despesas do dia — baixas de contas a pagar (capta pagamentos parciais).

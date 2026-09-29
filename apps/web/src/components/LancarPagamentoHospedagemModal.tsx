@@ -28,7 +28,7 @@ import { useConfirm } from "@/context/ConfirmContext";
 import { usePrompt } from "@/context/PromptContext";
 import { generateReciboPdfBase64, generateConsumoPdfBase64 } from "@/utils/pdfGenerator";
 import CadastroHospedeModal, { HospedeFormData } from "@/components/CadastroHospedeModal";
-import AdminAuthorizationModal from "@/components/AdminAuthorizationModal";
+import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
 
 
 export interface PaymentCreditItem {
@@ -155,21 +155,15 @@ export default function LancarPagamentoHospedagemModal({
     setDesconto(stayData.desconto || 0.0);
   }, [stayData.desconto]);
 
-  // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) exige autorização de
-  // administrador — mesmo padrão usado no check-in (CheckinHospedagemModal) e no PDV. 20 é só o
-  // valor inicial até a busca em /api/tenant/settings responder.
+  // Desconto acima do limite (Tenant.maxDiscountPercent, Configurações) e anulação de lançamento
+  // no caixa são eventos críticos: quem decide é o servidor, e quando ele pede autorização a
+  // janela de autorização abre e a mesma gravação é reenviada com o id aprovado
+  // (lib/criticalAuth.ts). O limite aqui só serve para avisar o operador. 20 é só o valor inicial
+  // até a busca em /api/tenant/settings responder.
   const [maxDiscountPercent, setMaxDiscountPercent] = useState<number>(20);
-  const [discountAuthorized, setDiscountAuthorized] = useState<boolean>(false);
-  const [discountAuthorizedBy, setDiscountAuthorizedBy] = useState<string | null>(null);
-  const [discountAuthEmail, setDiscountAuthEmail] = useState<string | null>(null);
-  const [discountAuthPassword, setDiscountAuthPassword] = useState<string | null>(null);
-  const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
+  const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
   useEffect(() => {
     if (!isOpen) return;
-    setDiscountAuthorized(false);
-    setDiscountAuthorizedBy(null);
-    setDiscountAuthEmail(null);
-    setDiscountAuthPassword(null);
     fetch("/api/tenant/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -259,7 +253,9 @@ export default function LancarPagamentoHospedagemModal({
   // Lançamentos já persistidos (têm caixaMovimentoId) marcados para exclusão: só são apagados
   // do caixa de fato quando o usuário clicar em "Salvar Crédito" — se o modal for fechado sem
   // salvar, a exclusão é descartada e o lançamento reaparece normalmente na próxima abertura.
-  const [pendingDeletions, setPendingDeletions] = useState<string[]>([]);
+  // Lançamentos já gravados que o operador marcou para ANULAR (nunca excluir — lançamento de
+  // caixa não se apaga). Guarda o item para devolvê-lo à lista se a anulação for cancelada.
+  const [pendingDeletions, setPendingDeletions] = useState<PaymentCreditItem[]>([]);
   const [sendingEmailPayment, setSendingEmailPayment] = useState<boolean>(false);
   const [sendingWhatsappPayment, setSendingWhatsappPayment] = useState<boolean>(false);
 
@@ -580,7 +576,7 @@ export default function LancarPagamentoHospedagemModal({
   const saldoBruto = totalDespesas - totalPagamentos - desconto;
   const saldoAPagar = Math.max(0, saldoBruto);
   const discountPercent = totalDespesas > 0 ? (desconto / totalDespesas) * 100 : desconto > 0 ? 100 : 0;
-  const discountNeedsAuth = desconto > 0 && discountPercent > maxDiscountPercent && !discountAuthorized;
+  const discountNeedsAuth = desconto > 0 && discountPercent > maxDiscountPercent;
   // Pagamentos além do débito nunca são devolvidos ao hóspede no check-out — viram saldo de
   // crédito na ficha dele (Guest.balance, via processPaymentLine) para usar em hospedagens
   // futuras. Isso precisa ficar explícito para o operador, tanto na tela quanto no aviso final.
@@ -630,24 +626,28 @@ export default function LancarPagamentoHospedagemModal({
     toast.info(`Lançamento de ${fmtCurrency(valNum)} (${formaPagamento}) adicionado. Será gravado no caixa ao clicar em "Salvar Crédito".`, "Lançamento Pendente");
   };
 
-  // Remove Payment Handler — se o lançamento já estiver salvo no caixa (tem caixaMovimentoId),
-  // a exclusão fica apenas pendente: só é efetivada no banco quando o usuário clicar em
-  // "Salvar Crédito" (mesma filosofia "só confirma ao salvar" aplicada às inclusões).
+  // Remove Payment Handler — lançamento ainda não gravado sai da lista na hora. Lançamento já
+  // gravado no caixa (tem caixaMovimentoId) nunca é excluído: é ANULADO (continua visível no caixa,
+  // mas não soma no saldo), e a anulação só é efetivada ao clicar em "Salvar Crédito" (mesma
+  // filosofia "só confirma ao salvar" aplicada às inclusões). Pode exigir autorização.
   const handleRemovePayment = async (paymentId: string) => {
+    const item = payments.find(p => p.id === paymentId);
+    const persisted = !!item?.caixaMovimentoId;
     const ok = await confirmDialog({
-      title: "Excluir Lançamento",
-      message: "Deseja realmente excluir este lançamento de pagamento/crédito?",
-      confirmLabel: "Excluir",
+      title: persisted ? "Anular Lançamento" : "Remover Lançamento",
+      message: persisted
+        ? "Este lançamento já está no caixa. Ele será ANULADO: continua visível no caixa para consulta, mas deixa de somar no saldo. A anulação pode exigir autorização. Continuar?"
+        : "Deseja remover este lançamento ainda não gravado?",
+      confirmLabel: persisted ? "Anular" : "Remover",
       variant: "danger",
     });
     if (!ok) return;
 
-    const item = payments.find(p => p.id === paymentId);
     setPayments(prev => prev.filter(p => p.id !== paymentId));
 
-    if (item?.caixaMovimentoId) {
-      setPendingDeletions(prev => [...prev, item.caixaMovimentoId!]);
-      toast.info('Exclusão pendente — será efetivada no caixa ao clicar em "Salvar Crédito".', "Exclusão Pendente");
+    if (item && persisted) {
+      setPendingDeletions(prev => [...prev, item]);
+      toast.info('Anulação pendente — será efetivada no caixa ao clicar em "Salvar Crédito".', "Anulação Pendente");
     } else {
       toast.info("Lançamento pendente removido da lista.", "Lançamento Removido");
     }
@@ -802,14 +802,6 @@ export default function LancarPagamentoHospedagemModal({
       if (!balanceOk) return false;
     }
 
-    if (discountNeedsAuth) {
-      toast.error(
-        `O desconto informado (${discountPercent.toFixed(1)}%) é maior que o limite de ${maxDiscountPercent}% permitido sem autorização, definido em Configurações.\n\nPeça a um administrador para autorizar (ícone de escudo ao lado do campo de desconto).`,
-        "Desconto Acima do Limite"
-      );
-      return false;
-    }
-
     const pendingPayments = payments.filter((p) => !p.caixaMovimentoId);
     const discountChanged = desconto !== (stayData.desconto ?? 0.0);
 
@@ -834,56 +826,58 @@ export default function LancarPagamentoHospedagemModal({
     toast.info("Gravando lançamentos no caixa. Aguarde...", "Salvando Crédito");
 
     try {
-      // Efetiva primeiro as exclusões pendentes (lançamentos antigos removidos pelo usuário nesta sessão)
-      if (pendingDeletions.length > 0) {
-        const results = await Promise.all(
-          pendingDeletions.map((caixaMovimentoId) =>
-            fetch("/api/caixa/remover-pagamento", {
-              method: "DELETE",
+      // Efetiva primeiro as anulações pendentes, uma por vez: cada uma pode abrir a janela de
+      // autorização. Anulação cancelada devolve o lançamento à lista e interrompe a gravação.
+      for (const item of pendingDeletions) {
+        const data: any = await withCriticalAuthorization(
+          (authorizationId) =>
+            fetch("/api/caixa/anular-lancamento", {
+              method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ caixaMovimentoId, operatorId: activeOperatorId }),
-            }).then((r) => r.json())
-          )
+              body: JSON.stringify({ caixaMovimentoId: item.caixaMovimentoId, authorizationId }),
+            }).then((r) => r.json()),
+          requestAuthorization
         );
-        const failed = results.find((r) => !r.success);
-        if (failed) {
-          throw new Error(failed.error || "Falha ao excluir lançamento(s) do caixa.");
+        if (!data.success) {
+          if (data.cancelado) {
+            setPendingDeletions((prev) => prev.filter((d) => d.id !== item.id));
+            setPayments((prev) => [...prev, item]);
+            toast.info("Anulação cancelada. O lançamento voltou para a lista e nada foi gravado.", "Anulação Cancelada");
+            return false;
+          }
+          throw new Error(data.error || "Falha ao anular lançamento do caixa.");
         }
-        setPendingDeletions([]);
+        setPendingDeletions((prev) => prev.filter((d) => d.id !== item.id));
       }
 
       if (pendingPayments.length > 0 || discountChanged) {
-        const res = await fetch("/api/caixa/pagamento-lote", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            operatorId: activeOperatorId,
-            operatorName: activeOperatorName,
-            roomId: stayData.roomNumber,
-            stayCheckinId: stayData.idHospedagem,
-            guestName: stayData.primaryGuestName,
-            discount: desconto,
-            // Reenviadas para o servidor revalidar a autorização (via verifyAdminStepUp) na
-            // própria rota que grava o desconto — nunca confiar só no booleano local abaixo.
-            adminEmail: discountAuthorized ? discountAuthEmail : undefined,
-            adminPassword: discountAuthorized ? discountAuthPassword : undefined,
-            payments: pendingPayments.map((p) => ({
-              clientId: p.id,
-              valor: p.amount,
-              formaPagamento: p.methodDescription,
-              descricao: `Crédito de hospedagem (${p.methodDescription}) - Quarto ${stayData.roomNumber}`,
-            })),
-          }),
-        });
-        const data = await res.json();
+        const data: any = await withCriticalAuthorization(
+          (authorizationId) =>
+            fetch("/api/caixa/pagamento-lote", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                operatorId: activeOperatorId,
+                operatorName: activeOperatorName,
+                roomId: stayData.roomNumber,
+                stayCheckinId: stayData.idHospedagem,
+                guestName: stayData.primaryGuestName,
+                discount: desconto,
+                authorizationId,
+                payments: pendingPayments.map((p) => ({
+                  clientId: p.id,
+                  valor: p.amount,
+                  formaPagamento: p.methodDescription,
+                  descricao: `Crédito de hospedagem (${p.methodDescription}) - Quarto ${stayData.roomNumber}`,
+                })),
+              }),
+            }).then((r) => r.json()),
+          requestAuthorization
+        );
         if (!data.success) {
-          if (data.precisaAutorizacao) {
-            // Autorização recusada/expirada no servidor (credenciais erradas, admin desativado
-            // desde que autorizou nesta tela, etc.) — força pedir de novo antes de tentar salvar.
-            setDiscountAuthorized(false);
-            setDiscountAuthorizedBy(null);
-            setDiscountAuthEmail(null);
-            setDiscountAuthPassword(null);
+          if (data.cancelado) {
+            toast.info("Desconto não autorizado: nada foi gravado. Ajuste o desconto e salve novamente.", "Evento Cancelado");
+            return false;
           }
           throw new Error(data.error || "Falha ao gravar lançamentos no caixa.");
         }
@@ -1219,19 +1213,17 @@ export default function LancarPagamentoHospedagemModal({
                       }`}
                     />
                     {discountNeedsAuth && (
-                      <button
-                        type="button"
-                        title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — exige autorização`}
-                        onClick={() => setShowAdminAuthModal(true)}
-                        className="shrink-0 p-1 rounded bg-red-500/15 border border-red-500/40 text-red-500 hover:bg-red-500/25 transition-colors"
+                      <span
+                        title={`Desconto de ${discountPercent.toFixed(1)}% acima do limite de ${maxDiscountPercent}% — será pedida autorização ao salvar`}
+                        className="shrink-0 p-1 rounded bg-amber-500/15 border border-amber-500/40 text-amber-500"
                       >
                         <ShieldCheck className="w-3.5 h-3.5" />
-                      </button>
+                      </span>
                     )}
                   </div>
-                  {discountAuthorized && discountAuthorizedBy && (
-                    <span className={`text-[9px] flex items-center gap-1 mt-0.5 ${theme.isDark ? "text-emerald-400" : "text-emerald-600"}`}>
-                      <ShieldCheck className="w-2.5 h-2.5" /> Autorizado por {discountAuthorizedBy}
+                  {discountNeedsAuth && (
+                    <span className={`text-[9px] mt-0.5 block ${theme.isDark ? "text-amber-400" : "text-amber-600"}`}>
+                      Acima do limite — pede autorização ao salvar
                     </span>
                   )}
                 </div>
@@ -1380,7 +1372,7 @@ export default function LancarPagamentoHospedagemModal({
                                 handleRemovePayment(p.id);
                               }}
                               className="text-red-500 hover:text-red-700 p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-950/40"
-                              title="Excluir lançamento"
+                              title={p.caixaMovimentoId ? "Anular lançamento" : "Remover lançamento"}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -1729,20 +1721,8 @@ export default function LancarPagamentoHospedagemModal({
         readOnly={cadastroHospedeReadOnly}
       />
 
-      {/* AUTORIZAÇÃO ADMIN: DESCONTO ACIMA DO LIMITE */}
-      <AdminAuthorizationModal
-        isOpen={showAdminAuthModal}
-        onClose={() => setShowAdminAuthModal(false)}
-        reason={`aplicar um desconto de ${discountPercent.toFixed(1)}%, acima do limite de ${maxDiscountPercent}% sem autorização`}
-        onAuthorized={(admin, credentials) => {
-          setDiscountAuthorized(true);
-          setDiscountAuthorizedBy(admin.name);
-          setDiscountAuthEmail(credentials.email);
-          setDiscountAuthPassword(credentials.password);
-          setShowAdminAuthModal(false);
-          toast.success(`Desconto de ${discountPercent.toFixed(1)}% autorizado por ${admin.name}.`);
-        }}
-      />
+      {/* AUTORIZAÇÃO DE EVENTO CRÍTICO: DESCONTO ACIMA DO LIMITE / ANULAÇÃO DE LANÇAMENTO */}
+      {authorizationModal}
 
     </div>
   );
