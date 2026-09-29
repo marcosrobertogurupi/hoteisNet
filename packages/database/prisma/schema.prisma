@@ -55,6 +55,29 @@ model Municipality {
   @@map("municipalities")
 }
 
+// Países (Paises.fic do legado WinDev). Dado de referência global, sem tenantId. isoCode (alpha-2) não
+// existe no legado — é preenchido pelo nome na importação; nulo quando não houver correspondência.
+model Country {
+  id        String   @id @default(uuid())
+  name      String
+  isoCode   String?  @unique
+  dialCode  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([name])
+  @@map("countries")
+}
+
+// Tabela NCM (NCM.fic do legado). Referência pública global, igual para todos os assinantes.
+model Ncm {
+  code        String   @id
+  description String
+  createdAt   DateTime @default(now())
+
+  @@map("ncm_codes")
+}
+
 // Controle global de release do SaaS (linha única, id fixo "singleton") — não é isolado por
 // tenant porque diz respeito à versão do app inteiro. Usado pelo endpoint GET /api/version para
 // decidir se uma atualização já publicada deve ser tratada como CRÍTICA (tela bloqueante nos
@@ -1777,6 +1800,10 @@ model Product {
   minStock     Int               @default(5)
   maxStock     Int?
   imageUrl     String?
+  // NCM e CEST do produto (Prod_NCM / Prod_CEST no WinDev) — códigos fiscais; a lista de NCM válidos
+  // fica em ncm_codes.
+  ncm          String?
+  cest         String?
   // Perfil tributário para venda de industrializados (refrigerante, cerveja, água) no PDV do
   // restaurante — ver Dish.fiscalProfileId.
   fiscalProfileId String?
