@@ -23,6 +23,9 @@ const PUBLIC_API_PREFIXES = [
   // Saúde da plataforma para o assistente pessoal do dono — autenticada por segredo próprio
   // (PLATFORM_HEALTH_TOKEN, Bearer, timing-safe) na própria rota. Só agregados, sem dado de hóspede.
   "/api/platform-health",
+  // Vercel Cron da rede de segurança das diárias — autenticada por CRON_SECRET (Bearer,
+  // timing-safe) na própria rota. Não recebe nenhum dado do cliente.
+  "/api/cron/diarias",
   "/api/housekeeping/login",
   "/api/housekeeping/logout",
   "/api/stock-count/login",
