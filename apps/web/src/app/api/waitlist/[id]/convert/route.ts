@@ -7,12 +7,12 @@ import { findConflictingReservation, findBlockingOpenStay, maintenanceBlockedRoo
 import {
   waitlistCheckInAt,
   waitlistCheckOutAt,
-  waitlistNights,
   getTenantStandardTimes,
   countWaitlistAhead,
   roomIdsHeldByOtherWaitlist,
   pastCheckInError,
 } from "@/lib/waitlistMatch";
+import { countDailies, getTenantDailyRules } from "@/lib/dailyCount";
 
 
 // POST /api/waitlist/:id/convert — cria a reserva a partir de uma entrada da fila (WAITING ou
@@ -175,7 +175,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         realGuestId = g?.id || null;
       }
 
-      const nights = waitlistNights(checkIn, checkOut);
+      // Diárias pelas horas e viradas do hotel (lib/dailyCount.ts) — nunca só pela diferença de datas.
+      const nights = countDailies(checkIn, checkOut, await getTenantDailyRules(tx, tenantId));
       const totalAmount = Number(tariff.price) * nights;
       const reservationNumber = await nextReservationNumber(tx);
 

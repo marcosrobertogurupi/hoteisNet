@@ -54,13 +54,6 @@ export function waitlistCheckOutAt(date: Date | string, times: TenantStandardTim
   return atBrasiliaTime(waitlistDateKey(date), times.checkOut);
 }
 
-// Nº de diárias pela diferença de DATAS (Brasília), nunca pela diferença de horas: com horários
-// configuráveis (ex.: check-in 23:00, check-out 08:00) `round(ms / 24h)` perde uma diária.
-export function waitlistNights(checkIn: Date, checkOut: Date): number {
-  const [a, b] = [brDateKey(checkIn), brDateKey(checkOut)].map((k) => Date.parse(`${k}T00:00:00Z`));
-  return Math.max(1, Math.round((b - a) / (24 * 60 * 60 * 1000)));
-}
-
 // Normaliza adults/children vindos do cliente: inteiros, adults >= 1, children >= 0. Sem isso um
 // `children: -3` (truthy) ou `adults: 2.7` era gravado cru.
 export function sanitizeParty(adults: unknown, children: unknown): { adults: number; children: number } {
