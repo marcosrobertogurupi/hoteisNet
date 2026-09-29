@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
-import { findWaitlistVacancy, countWaitlistAhead } from "@/lib/waitlistMatch";
+import { findWaitlistVacancy, countWaitlistAhead, getTenantStandardTimes } from "@/lib/waitlistMatch";
 import { lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { sendUazapiText } from "@/lib/uazapi";
 import { sendTenantEmail } from "@/lib/tenantEmail";
@@ -114,6 +114,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         checkIn: entry.checkInDate,
         checkOut: entry.checkOutDate,
         excludeWaitlistId: entry.id,
+        times: await getTenantStandardTimes(tx, session.tenantId!),
       });
       if (!vacancy) {
         return { code: 409 as const, error: "Não há quarto livre dessa categoria no período no momento." };

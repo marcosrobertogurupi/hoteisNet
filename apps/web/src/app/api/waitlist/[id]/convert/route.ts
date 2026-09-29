@@ -7,10 +7,12 @@ import { findConflictingReservation, findBlockingOpenStay, maintenanceBlockedRoo
 import {
   waitlistCheckInAt,
   waitlistCheckOutAt,
+  getTenantStandardTimes,
   countWaitlistAhead,
   roomIdsHeldByOtherWaitlist,
   pastCheckInError,
 } from "@/lib/waitlistMatch";
+import { countDailies, getTenantDailyRules } from "@/lib/dailyCount";
 
 
 // POST /api/waitlist/:id/convert — cria a reserva a partir de uma entrada da fila (WAITING ou
@@ -95,8 +97,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }
       }
 
-      const checkIn = waitlistCheckInAt(entry.checkInDate);
-      const checkOut = waitlistCheckOutAt(entry.checkOutDate);
+      // A reserva nasce ancorada no horário padrão do hotel — o mesmo do POST /api/reservations.
+      const times = await getTenantStandardTimes(tx, tenantId);
+      const checkIn = waitlistCheckInAt(entry.checkInDate, times);
+      const checkOut = waitlistCheckOutAt(entry.checkOutDate, times);
 
       // Quartos candidatos: o quarto em "soft hold" desta entrada primeiro (se houver), senão
       // qualquer quarto ativo da categoria.
@@ -122,6 +126,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         checkIn: entry.checkInDate,
         checkOut: entry.checkOutDate,
         excludeWaitlistId: entry.id,
+        times,
       });
 
       // Quarto em manutenção para esta chegada não serve (mesma régua do match da fila).
@@ -151,6 +156,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       const tariff = await tx.tariff.findFirst({
         where: { tenantId, active: true, adults: { gte: occupants } },
         orderBy: [{ adults: "asc" }, { price: "asc" }],
+        select: { id: true, name: true, price: true },
       });
       if (!tariff) {
         const anyTariff = await tx.tariff.findFirst({ where: { tenantId, active: true }, select: { id: true } });
@@ -169,7 +175,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         realGuestId = g?.id || null;
       }
 
-      const nights = Math.max(1, Math.round((checkOut.getTime() - checkIn.getTime()) / (24 * 60 * 60 * 1000)));
+      // Diárias pelas horas e viradas do hotel (lib/dailyCount.ts) — nunca só pela diferença de datas.
+      const nights = countDailies(checkIn, checkOut, await getTenantDailyRules(tx, tenantId));
       const totalAmount = Number(tariff.price) * nights;
       const reservationNumber = await nextReservationNumber(tx);
 

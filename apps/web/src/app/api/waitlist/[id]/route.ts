@@ -5,6 +5,7 @@ import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import {
   waitlistCheckInAt,
   waitlistCheckOutAt,
+  getTenantStandardTimes,
   sanitizeParty,
   pastCheckInError,
   partyOverCapacityError,
@@ -34,8 +35,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const data: Record<string, unknown> = {};
 
-    const effectiveCheckIn = checkInDate ? waitlistCheckInAt(new Date(checkInDate)) : current.checkInDate;
-    const effectiveCheckOut = checkOutDate ? waitlistCheckOutAt(new Date(checkOutDate)) : current.checkOutDate;
+    // Mesma ancoragem do POST: horário padrão do hotel, data como string (nunca `new Date()`).
+    const times = checkInDate || checkOutDate ? await getTenantStandardTimes(prisma, session.tenantId) : null;
+    const effectiveCheckIn = checkInDate && times ? waitlistCheckInAt(String(checkInDate), times) : current.checkInDate;
+    const effectiveCheckOut = checkOutDate && times ? waitlistCheckOutAt(String(checkOutDate), times) : current.checkOutDate;
     if (isNaN(effectiveCheckIn.getTime()) || isNaN(effectiveCheckOut.getTime())) {
       return NextResponse.json({ success: false, error: "Datas inválidas." }, { status: 400 });
     }

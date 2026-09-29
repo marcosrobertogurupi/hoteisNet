@@ -47,7 +47,9 @@ interface Category {
 }
 
 function fmtDate(iso: string): string {
-  return iso ? new Date(iso).toLocaleDateString("pt-BR") : "";
+  // Data no calendário de Brasília (as datas da fila são ancoradas no horário do hotel em BRT) —
+  // o fuso do navegador mostraria outro dia num terminal fora de UTC-3.
+  return iso ? new Date(iso).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "";
 }
 
 function timeInQueue(iso: string): string {

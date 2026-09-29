@@ -4,20 +4,33 @@ import { stayOccupiedUntil, maintenanceBlockedRoomIds } from "./stayOccupancy";
 
 const prisma = new PrismaClient();
 
-// Horário padrão de check-in/out — mesma constante assumida em todo o sistema quando não há horário
-// definido (ver apps/web/src/lib/waitlistMatch.ts, aiAgent/tools.ts).
+// Horários padrão de check-in/out do hotel. Fonte única: Tenant.standardCheckInTime/OutTime (os
+// mesmos de POST /api/reservations e de apps/web/src/lib/waitlistMatch.ts). O fallback só vale
+// quando o tenant não tem horário válido gravado.
+type TenantStandardTimes = { checkIn: string; checkOut: string };
 const DEFAULT_CHECK_IN_TIME = "14:00";
 const DEFAULT_CHECK_OUT_TIME = "12:00";
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-// Ancora só a data (AAAA-MM-DD) no horário padrão do hotel, no fuso de Brasília (UTC-3 o ano todo).
-function atBrasiliaTime(dateYmd: string, hhmm: string): Date {
-  return new Date(`${dateYmd}T${hhmm}:00-03:00`);
+function tenantStandardTimes(t: { standardCheckInTime: string | null; standardCheckOutTime: string | null }): TenantStandardTimes {
+  return {
+    checkIn: t.standardCheckInTime && HHMM.test(t.standardCheckInTime) ? t.standardCheckInTime : DEFAULT_CHECK_IN_TIME,
+    checkOut: t.standardCheckOutTime && HHMM.test(t.standardCheckOutTime) ? t.standardCheckOutTime : DEFAULT_CHECK_OUT_TIME,
+  };
 }
-function checkInAt(d: Date): Date {
-  return atBrasiliaTime(d.toISOString().slice(0, 10), DEFAULT_CHECK_IN_TIME);
+
+// Ancora só a data no horário do hotel, no fuso de Brasília (UTC-3 o ano todo). A data de um valor
+// gravado é tirada em BRASÍLIA, nunca com `toISOString()` (UTC): com check-in a partir das 21h a
+// entrada "pulava" um dia a cada reancoragem.
+function atBrasiliaTime(d: Date, hhmm: string): Date {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(d);
+  return new Date(`${ymd}T${hhmm}:00-03:00`);
 }
-function checkOutAt(d: Date): Date {
-  return atBrasiliaTime(d.toISOString().slice(0, 10), DEFAULT_CHECK_OUT_TIME);
+function checkInAt(d: Date, times: TenantStandardTimes): Date {
+  return atBrasiliaTime(d, times.checkIn);
+}
+function checkOutAt(d: Date, times: TenantStandardTimes): Date {
+  return atBrasiliaTime(d, times.checkOut);
 }
 
 // Procura um quarto ativo da categoria genuinamente livre para todo o período pedido. A reserva tem
@@ -30,9 +43,10 @@ async function findVacancy(params: {
   checkIn: Date;
   checkOut: Date;
   excludeWaitlistId: string;
+  times: TenantStandardTimes;
 }): Promise<string | null> {
-  const checkIn = checkInAt(params.checkIn);
-  const checkOut = checkOutAt(params.checkOut);
+  const checkIn = checkInAt(params.checkIn, params.times);
+  const checkOut = checkOutAt(params.checkOut, params.times);
   if (checkOut <= checkIn) return null;
 
   const rooms = await prisma.room.findMany({
@@ -167,7 +181,10 @@ async function runWaitlistAgentInner(): Promise<void> {
   for (const { tenantId } of active) {
     try {
       const [tenant, aiSetting] = await Promise.all([
-        prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, tradeName: true } }),
+        prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { name: true, tradeName: true, standardCheckInTime: true, standardCheckOutTime: true },
+        }),
         prisma.aIAgentSetting.findUnique({
           where: { tenantId },
           select: { alertPhone: true, blocked: true, waitlistAutoOfferEnabled: true },
@@ -175,6 +192,7 @@ async function runWaitlistAgentInner(): Promise<void> {
       ]);
       if (!tenant) continue;
       const hotelName = tenant.tradeName || tenant.name;
+      const times = tenantStandardTimes(tenant);
 
       // ── 1. Entradas NOTIFIED cuja vaga sumiu (uma reserva pegou o quarto) → EXPIRED/SLOT_LOST ──
       const notified = await prisma.waitlistEntry.findMany({
@@ -188,12 +206,13 @@ async function runWaitlistAgentInner(): Promise<void> {
           checkIn: n.checkInDate,
           checkOut: n.checkOutDate,
           excludeWaitlistId: n.id,
+          times,
         });
         // A vaga "some" quando não há mais nenhum quarto livre da categoria E o quarto que estava
         // reservado para esta entrada também não está mais livre.
         const ownRoomStillFree =
           n.notifiedRoomId != null &&
-          (await roomFreeForPeriod(tenantId, n.notifiedRoomId, n.checkInDate, n.checkOutDate, n.id));
+          (await roomFreeForPeriod(tenantId, n.notifiedRoomId, n.checkInDate, n.checkOutDate, n.id, times));
         if (!stillFree && !ownRoomStillFree) {
           await prisma.waitlistEntry.updateMany({
             where: { id: n.id, tenantId, status: "NOTIFIED" },
@@ -230,6 +249,7 @@ async function runWaitlistAgentInner(): Promise<void> {
           checkIn: entry.checkInDate,
           checkOut: entry.checkOutDate,
           excludeWaitlistId: entry.id,
+          times,
         });
         if (!roomId) continue;
 
@@ -286,10 +306,11 @@ async function roomFreeForPeriod(
   roomId: string,
   checkInRaw: Date,
   checkOutRaw: Date,
-  selfWaitlistId: string
+  selfWaitlistId: string,
+  times: TenantStandardTimes
 ): Promise<boolean> {
-  const checkIn = checkInAt(checkInRaw);
-  const checkOut = checkOutAt(checkOutRaw);
+  const checkIn = checkInAt(checkInRaw, times);
+  const checkOut = checkOutAt(checkOutRaw, times);
   const [res, stays, held, inMaintenance] = await Promise.all([
     prisma.reservation.findFirst({
       where: {
