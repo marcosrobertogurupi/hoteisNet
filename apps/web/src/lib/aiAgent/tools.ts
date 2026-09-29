@@ -373,12 +373,22 @@ async function searchKnowledgeBase(tenantId: string, query: string) {
   return { topicos, perguntas };
 }
 
-// Horário padrão de check-in/check-out do hotel. A tela de Configurações ("Horários Padrão de
-// Check-in e Check-out") só persiste esse valor no localStorage do navegador — o agente roda no
-// servidor e não tem acesso a isso, então usa o mesmo padrão já assumido em todo o resto do
-// sistema quando o hóspede não define um horário (LancarReservaModal.tsx, CheckinHospedagemModal.tsx).
+// Horário padrão de check-in/check-out do hotel: fonte única é Tenant.standardCheckInTime/OutTime
+// (Configurações → "Horários Padrão de Check-in e Check-out"), a mesma que POST /api/reservations
+// usa. As constantes são só o fallback quando o campo vier vazio.
 const DEFAULT_CHECK_IN_TIME = "14:00";
 const DEFAULT_CHECK_OUT_TIME = "12:00";
+
+async function getTenantStandardTimes(tenantId: string): Promise<{ checkIn: string; checkOut: string }> {
+  const t = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { standardCheckInTime: true, standardCheckOutTime: true },
+  });
+  return {
+    checkIn: t?.standardCheckInTime || DEFAULT_CHECK_IN_TIME,
+    checkOut: t?.standardCheckOutTime || DEFAULT_CHECK_OUT_TIME,
+  };
+}
 
 // O modelo manda só a data (AAAA-MM-DD). Ancoramos no horário padrão de check-in/out do hotel no
 // fuso de Brasília (UTC-3 o ano todo — o Brasil não tem mais horário de verão desde 2019), igual
@@ -420,11 +430,12 @@ async function createReservationForAgent(
     return { sucesso: false, erro: `Não há um quarto com o número ${params.roomNumber} neste hotel.` };
   }
 
-  const [agentSetting, categoryByName] = await Promise.all([
+  const [agentSetting, categoryByName, standardTimes] = await Promise.all([
     prisma.aIAgentSetting.findUnique({ where: { tenantId }, select: { autoConfirmReservations: true } }),
     params.categoryName
       ? prisma.roomCategory.findFirst({ where: { tenantId, active: true, name: { equals: params.categoryName, mode: "insensitive" } } })
       : Promise.resolve(null),
+    getTenantStandardTimes(tenantId),
   ]);
   const category = requestedRoom?.category ?? categoryByName;
   if (!category) return { sucesso: false, erro: "Categoria de apartamento não encontrada." };
@@ -450,8 +461,8 @@ async function createReservationForAgent(
   // Datas ancoradas no horário padrão do hotel (BRT) — usadas em TODAS as checagens e na gravação,
   // para o agente nunca divergir do fluxo manual. params.checkIn/checkOut chegam à meia-noite UTC
   // (o modelo só informa a data), então extraímos só a parte AAAA-MM-DD.
-  const checkInAt = atBrasiliaTime(params.checkIn.toISOString().slice(0, 10), DEFAULT_CHECK_IN_TIME);
-  const checkOutAt = atBrasiliaTime(params.checkOut.toISOString().slice(0, 10), DEFAULT_CHECK_OUT_TIME);
+  const checkInAt = atBrasiliaTime(params.checkIn.toISOString().slice(0, 10), standardTimes.checkIn);
+  const checkOutAt = atBrasiliaTime(params.checkOut.toISOString().slice(0, 10), standardTimes.checkOut);
 
   const result = await prisma.$transaction(async (tx) => {
     let rooms = requestedRoom
@@ -574,8 +585,8 @@ async function createReservationForAgent(
       diarias: nights,
       valorTotal: totalAmount,
       confirmadaAutomaticamente: status === "CONFIRMED",
-      horarioCheckIn: DEFAULT_CHECK_IN_TIME,
-      horarioCheckOut: DEFAULT_CHECK_OUT_TIME,
+      horarioCheckIn: standardTimes.checkIn,
+      horarioCheckOut: standardTimes.checkOut,
     };
   });
 
@@ -753,7 +764,15 @@ async function sendRoomPhotos(tenantId: string, guestPhone: string, categoryName
 async function getHotelInfo(tenantId: string) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { name: true, tradeName: true, phone: true, breakfastHours: true, breakfastHoursHoliday: true },
+    select: {
+      name: true,
+      tradeName: true,
+      phone: true,
+      breakfastHours: true,
+      breakfastHoursHoliday: true,
+      standardCheckInTime: true,
+      standardCheckOutTime: true,
+    },
   });
   // Deliberadamente sem endereço/cidade/estado: o cadastro do Tenant só tem esses campos parciais
   // (às vezes só a cidade, às vezes errados) e o agente respondia "o hotel fica em <cidade>", que é
@@ -766,6 +785,9 @@ async function getHotelInfo(tenantId: string) {
     horarioCafeDaManha: tenant?.breakfastHours || null,
     // Horário do café da manhã aos domingos e feriados. Se null, vale o horário padrão todos os dias.
     horarioCafeDaManhaDomingosEFeriados: tenant?.breakfastHoursHoliday || null,
+    // Horários padrão de entrada/saída — mesma fonte da reserva criada (Configurações).
+    horarioCheckIn: tenant?.standardCheckInTime || DEFAULT_CHECK_IN_TIME,
+    horarioCheckOut: tenant?.standardCheckOutTime || DEFAULT_CHECK_OUT_TIME,
   };
 }
 
@@ -877,7 +899,7 @@ export function buildGuestSupportTools(tenantId: string, guestPhone: string, onE
 
     get_hotel_info: tool({
       description:
-        "Retorna nome, telefone e horário do café da manhã do hotel (de segunda a sábado e, quando houver, o horário diferente para domingos e feriados). NÃO tem endereço, localização, estacionamento nem transfer — para isso use search_knowledge_base (tópico 'Localização').",
+        "Retorna nome, telefone, horário do café da manhã do hotel (de segunda a sábado e, quando houver, o horário diferente para domingos e feriados) e os horários padrão de check-in e check-out. NÃO tem endereço, localização, estacionamento nem transfer — para isso use search_knowledge_base (tópico 'Localização').",
       inputSchema: z.object({}),
       execute: async () => await getHotelInfo(tenantId),
     }),
