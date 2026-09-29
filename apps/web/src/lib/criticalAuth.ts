@@ -259,6 +259,16 @@ export async function expireIfStale(tenantId: string, id: string) {
   });
 }
 
+/**
+ * Link enviado ao autorizador pelo WhatsApp (Fase 2): o token (randomBytes(32)) só existe na
+ * mensagem; o banco guarda apenas o hash — um vazamento da tabela não entrega links válidos.
+ * O link é de uso único: a decisão (aprovar/recusar) apaga o hash, e reenviar gera outro token,
+ * invalidando o anterior.
+ */
+export function hashLinkToken(token: string): string {
+  return createHash("sha256").update(String(token)).digest("hex");
+}
+
 /** Quarto + hóspede de uma hospedagem, para o autorizador saber do que se trata. */
 export async function describeStay(tenantId: string, stayCheckinId: string | null | undefined): Promise<Record<string, string>> {
   if (!stayCheckinId) return {};
