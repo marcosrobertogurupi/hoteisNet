@@ -2,15 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { txWithRetry } from "@/lib/dbTx";
 import { logActivity } from "@/lib/audit";
-import { verifyAdminStepUp } from "@/lib/adminAuth";
+import { gateCriticalEvent, releaseCriticalAuthorization, formatBRL } from "@/lib/criticalAuth";
 import { loadSession, serializeSession, recalcSessionTotals } from "@/lib/pdvSession";
 import { round2 } from "@/lib/pdvSale";
 
 // POST /api/pdv/atendimentos/[id]/transferir — move débito de uma comanda (origem = [id]) para
 // outra. modo "COMANDA" junta a comanda inteira (origem fica cancelada); modo "ITENS" move os
-// itens informados. Exige autorização de administrador, verificada no servidor (não só na UI),
+// itens informados. Evento crítico TRANSFERIR_COMANDA (lib/criticalAuth.ts), verificado no servidor,
 // e grava ComandaDebitTransfer para auditoria permanente — espelha a transferência entre quartos.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let gateToRelease: { tenantId: string; id: string; channel: string } | null = null;
   try {
     const session = await getSessionUser(req);
     if (!session?.tenantId) {
@@ -28,9 +29,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (modo === "ITENS" && itemIds.length === 0) {
       return NextResponse.json({ success: false, error: "Selecione os itens a transferir." }, { status: 400 });
     }
-
-    const auth = await verifyAdminStepUp(req, body.adminEmail, body.adminPassword, session.tenantId);
-    if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
 
     const [origem, destino] = await Promise.all([
       loadSession(id, session.tenantId),
@@ -50,6 +48,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const movedAmount = round2(
       origem.items.filter((i) => movingIds.includes(i.id)).reduce((a, i) => a + Number(i.total), 0)
     );
+
+    const auth = await gateCriticalEvent(req, session, {
+      eventType: "TRANSFERIR_COMANDA",
+      fingerprint: { origemId: id, destinoId, modo, itens: [...movingIds].sort() },
+      summary: `Transferir ${modo === "COMANDA" ? "a comanda inteira" : `${movingIds.length} item(ns)`} (${formatBRL(movedAmount)}) da comanda ${origem.comanda.number} para a ${destino.comanda.number}.`,
+      details: {
+        "Comanda de origem": String(origem.comanda.number),
+        "Comanda de destino": String(destino.comanda.number),
+        ...(destino.stayCheckin ? { "Destino — hóspede": `${destino.stayCheckin.primaryGuest?.fullName || "-"} (quarto ${destino.stayCheckin.room?.number || "-"})` } : {}),
+        Modo: modo === "COMANDA" ? "Comanda inteira" : "Itens selecionados",
+        Itens: String(movingIds.length),
+        Valor: formatBRL(movedAmount),
+      },
+      authorizationId: body.authorizationId,
+    });
+    if (!auth.ok) return NextResponse.json(auth.body, { status: auth.status });
+    gateToRelease = { tenantId: session.tenantId, id: auth.authorizationId, channel: auth.channel };
 
     await txWithRetry(async (tx) => {
       await tx.comandaItem.updateMany({
@@ -87,8 +102,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           itemsCount: movingIds.length,
           operatorId: session.userId,
           operatorName: session.name,
-          authorizedByUserId: auth.admin.id,
-          authorizedByUserName: auth.admin.name,
+          authorizedByUserId: auth.authorizedBy.id,
+          authorizedByUserName: auth.authorizedBy.name,
         },
       });
     });
@@ -98,7 +113,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       userId: session.userId,
       userName: session.name,
       action: "PDV_COMANDA_TRANSFERIR_DEBITO",
-      description: `${session.name} transferiu ${modo === "COMANDA" ? "a comanda inteira" : `${movingIds.length} item(ns)`} (R$ ${movedAmount.toFixed(2)}) da comanda ${origem.comanda.number} para a ${destino.comanda.number}. Autorizou: ${auth.admin.name}.`,
+      description: `${session.name} transferiu ${modo === "COMANDA" ? "a comanda inteira" : `${movingIds.length} item(ns)`} (R$ ${movedAmount.toFixed(2)}) da comanda ${origem.comanda.number} para a ${destino.comanda.number}. Autorizou: ${auth.authorizedBy.name}.`,
       entityType: "COMANDA_SESSION",
       entityId: id,
       terminal: getTerminalName(req),
@@ -112,6 +127,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       destino: d ? serializeSession(d) : null,
     });
   } catch (error: any) {
+    if (gateToRelease) await releaseCriticalAuthorization(gateToRelease.tenantId, gateToRelease.id, gateToRelease.channel);
     console.error("[POST /api/pdv/atendimentos/[id]/transferir] Erro:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

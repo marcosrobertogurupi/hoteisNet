@@ -71,7 +71,7 @@ export async function PATCH(req: NextRequest) {
     // operador zerava todas as diárias (R$ 0,01) e escapava do Tenant.maxDiscountPercent, que só
     // era checado no campo `discount` do check-in / pagamento-lote. Compara a soma das diárias
     // afetadas ANTES × DEPOIS; se a redução passar do limite do tenant, exige autorização de
-    // administrador (mesmo verifyAdminStepUp de /api/stay/checkin e /api/caixa/pagamento-lote).
+    // um autorizador (mesmo authorizeDiscount de /api/stay/checkin e /api/caixa/pagamento-lote).
     {
       const staySc = await prisma.stayCheckin.findFirst({
         where: { id: stayCheckinId, tenantId: session.tenantId },

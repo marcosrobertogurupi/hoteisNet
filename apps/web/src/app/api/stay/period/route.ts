@@ -74,7 +74,7 @@ export async function PATCH(req: NextRequest) {
     // ── Controle de desconto (autoritativo no servidor) ────────────────────────────────────
     // Baixar a tarifa da diária corrente é um desconto implícito — sem esta trava dava para
     // driblar o Tenant.maxDiscountPercent por aqui. Se a nova diária ficar mais barata que o
-    // limite do tenant permite, exige autorização de administrador (mesmo verifyAdminStepUp do
+    // limite do tenant permite, exige autorização de um autorizador (mesmo authorizeDiscount do
     // check-in / pagamento-lote / stay/tariff).
     if (ratePerNight !== undefined && Number.isFinite(Number(ratePerNight)) && Number(ratePerNight) >= 0) {
       const staySc = await prisma.stayCheckin.findFirst({

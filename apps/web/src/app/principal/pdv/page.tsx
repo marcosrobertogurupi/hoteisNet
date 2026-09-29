@@ -263,18 +263,20 @@ export default function PdvPage() {
     if (data.success) upsert(data.atendimento);
   };
 
+  // Reabrir e cancelar comanda são eventos críticos: o servidor abre a janela de autorização
+  // (lib/criticalAuth.ts) e a mesma chamada é repetida com o id aprovado.
   const reabrir = async () => {
     if (!selected) return;
-    const adminEmail = window.prompt("Reabrir a comanda exige autorização.\nE-mail do administrador:");
-    if (!adminEmail) return;
-    const adminPassword = window.prompt("Senha do administrador:");
-    if (!adminPassword) return;
-    const res = await fetch(`/api/pdv/atendimentos/${selected.id}/reabrir`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ adminEmail, adminPassword }),
-    });
-    const data = await res.json();
+    const data: any = await withCriticalAuthorization(
+      (authorizationId) =>
+        fetch(`/api/pdv/atendimentos/${selected.id}/reabrir`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ authorizationId }),
+        }).then((r) => r.json()),
+      requestAuthorization
+    );
+    if (data.cancelado) return toast.info("Reabertura não autorizada: nada foi alterado.");
     if (!data.success) return toast.error(data.error || "Não foi possível reabrir.");
     toast.success("Comanda reaberta.");
     upsert(data.atendimento);
@@ -289,16 +291,16 @@ export default function PdvPage() {
       variant: "danger",
     });
     if (!ok) return;
-    const adminEmail = window.prompt("Cancelar a comanda exige autorização.\nE-mail do administrador:");
-    if (!adminEmail) return;
-    const adminPassword = window.prompt("Senha do administrador:");
-    if (!adminPassword) return;
-    const res = await fetch(`/api/pdv/atendimentos/${selected.id}/cancelar`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ adminEmail, adminPassword }),
-    });
-    const data = await res.json();
+    const data: any = await withCriticalAuthorization(
+      (authorizationId) =>
+        fetch(`/api/pdv/atendimentos/${selected.id}/cancelar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ authorizationId }),
+        }).then((r) => r.json()),
+      requestAuthorization
+    );
+    if (data.cancelado) return toast.info("Cancelamento não autorizado: a comanda continua aberta.");
     if (!data.success) return toast.error(data.error || "Não foi possível cancelar.");
     toast.success("Comanda cancelada.");
     upsert(data.atendimento);

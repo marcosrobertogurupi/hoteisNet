@@ -390,15 +390,19 @@ export function useCriticalAuthorization() {
  * quando o operador cancela o evento.
  */
 export async function withCriticalAuthorization<T extends Record<string, any>>(
-  call: (authorizationId?: string) => Promise<T>,
+  call: (authorizationId?: string | string[]) => Promise<T>,
   requestAuthorization: (payload: AutorizacaoPendente) => Promise<string | null>
 ): Promise<T | { success: false; cancelado: true; error: string }> {
   let data = await call();
-  // Até 3 rodadas: se a ação mudou depois da aprovação, o servidor pede uma nova autorização.
-  for (let i = 0; i < 3 && data && !data.success && data.precisaAutorizacao && data.autorizacao; i++) {
+  // Uma mesma gravação pode exigir mais de um evento (ex.: check-in com desconto acima do limite
+  // E cortesia de chegada antecipada): acumula os ids aprovados e reenvia todos — cada evento
+  // consome só o seu no servidor. Até 4 rodadas (o servidor pede de novo se a ação mudou).
+  const approved: string[] = [];
+  for (let i = 0; i < 4 && data && !data.success && data.precisaAutorizacao && data.autorizacao; i++) {
     const id = await requestAuthorization(data.autorizacao as AutorizacaoPendente);
     if (!id) return { success: false, cancelado: true, error: "Operação cancelada: nada foi autorizado." };
-    data = await call(id);
+    approved.push(id);
+    data = await call(approved.length === 1 ? approved[0] : [...approved]);
   }
   return data;
 }

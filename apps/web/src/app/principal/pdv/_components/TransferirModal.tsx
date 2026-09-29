@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ShieldCheck, ArrowRightLeft } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
+import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
 import { Modal, inputCls, labelCls, primaryBtn, ghostBtn, money, type Atendimento } from "../_ui";
 
 export default function TransferirModal({
@@ -23,9 +24,10 @@ export default function TransferirModal({
   const [destinoId, setDestinoId] = useState("");
   const [modo, setModo] = useState<"COMANDA" | "ITENS">("COMANDA");
   const [itemIds, setItemIds] = useState<string[]>([]);
-  const [adminEmail, setAdminEmail] = useState("");
-  const [adminPassword, setAdminPassword] = useState("");
   const [saving, setSaving] = useState(false);
+  // Transferência de débito é evento crítico: a janela de autorização abre ao confirmar
+  // (lib/criticalAuth.ts) e a mesma transferência é repetida com o id aprovado.
+  const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
 
   useEffect(() => {
     fetch("/api/pdv/atendimentos")
@@ -43,16 +45,22 @@ export default function TransferirModal({
   const submit = async () => {
     if (!destinoId) return toast.warning("Escolha a comanda de destino.");
     if (modo === "ITENS" && itemIds.length === 0) return toast.warning("Selecione os itens.");
-    if (!adminEmail.trim() || !adminPassword.trim()) return toast.warning("Informe e-mail e senha do administrador.");
 
     setSaving(true);
     try {
-      const res = await fetch(`/api/pdv/atendimentos/${origem.id}/transferir`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ destinoSessionId: destinoId, modo, itemIds, adminEmail: adminEmail.trim(), adminPassword }),
-      });
-      const data = await res.json();
+      const data: any = await withCriticalAuthorization(
+        (authorizationId) =>
+          fetch(`/api/pdv/atendimentos/${origem.id}/transferir`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ destinoSessionId: destinoId, modo, itemIds, authorizationId }),
+          }).then((r) => r.json()),
+        requestAuthorization
+      );
+      if (data.cancelado) {
+        toast.info("Transferência não autorizada: nada foi movido.");
+        return;
+      }
       if (!data.success) {
         toast.error(data.error || "Não foi possível transferir.");
         return;
@@ -118,27 +126,9 @@ export default function TransferirModal({
         <span className="font-mono font-bold text-sky-500">{money(movingTotal)}</span>
       </div>
 
-      <div className={`rounded-xl border p-3 space-y-2 ${isDark ? "border-amber-500/30 bg-amber-500/5" : "border-amber-300 bg-amber-50"}`}>
-        <p className="text-[11px] font-semibold flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-          <ShieldCheck className="w-3.5 h-3.5" /> Transferência exige autorização de administrador
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <input
-            type="email"
-            placeholder="E-mail do admin"
-            value={adminEmail}
-            onChange={(e) => setAdminEmail(e.target.value)}
-            className={inputCls(isDark)}
-          />
-          <input
-            type="password"
-            placeholder="Senha"
-            value={adminPassword}
-            onChange={(e) => setAdminPassword(e.target.value)}
-            className={inputCls(isDark)}
-          />
-        </div>
-      </div>
+      <p className="text-[11px] font-semibold flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+        <ShieldCheck className="w-3.5 h-3.5" /> A transferência pede autorização ao confirmar (quando você não é autorizador).
+      </p>
 
       <div className="flex items-center justify-end gap-3">
         <button onClick={onClose} className={ghostBtn(isDark)}>
@@ -148,6 +138,7 @@ export default function TransferirModal({
           <ArrowRightLeft className="w-4 h-4" /> Transferir
         </button>
       </div>
+      {authorizationModal}
     </Modal>
   );
 }

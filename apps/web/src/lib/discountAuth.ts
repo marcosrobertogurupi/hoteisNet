@@ -80,7 +80,7 @@ interface AuthorizeDiscountArgs {
   fingerprint: Record<string, unknown>;
   /** Linhas extras exibidas ao autorizador (hóspede, quarto…). */
   details?: Record<string, string>;
-  authorizationId?: string | null;
+  authorizationId?: string | string[] | null;
 }
 
 export async function discountLimitPercent(tenantId: string): Promise<number> {

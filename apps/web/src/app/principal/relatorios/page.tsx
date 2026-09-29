@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart, ListChecks, LogOut, PackageSearch, ClipboardCheck } from "lucide-react";
+import { CalendarClock, Sparkles, BedDouble, ChevronRight, FileBarChart, ListChecks, LogOut, PackageSearch, ClipboardCheck, ShieldCheck } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 
 const REPORTS = [
@@ -53,6 +53,13 @@ const REPORTS = [
     description: "Folha para o funcionário conferir o estoque físico de cada PDV — produto, saldo do sistema e espaço para anotar a contagem. Geral ou por PDV.",
     icon: ClipboardCheck,
     color: "#14B8A6",
+  },
+  {
+    href: "/principal/relatorios/autorizacoes",
+    title: "Autorizações",
+    description: "Quem pediu e quem autorizou ou recusou cada evento crítico — desconto acima do limite, anulação no caixa, cortesia, comandas do PDV. Só administradores e autorizadores.",
+    icon: ShieldCheck,
+    color: "#D97706",
   },
 ];
 
