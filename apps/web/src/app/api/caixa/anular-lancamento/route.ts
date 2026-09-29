@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { txWithRetry } from "@/lib/dbTx";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { logActivity } from "@/lib/audit";
-import { gateCriticalEvent, releaseCriticalAuthorization, formatBRL } from "@/lib/criticalAuth";
+import { gateCriticalEvent, releaseCriticalAuthorization, formatBRL, describeStay } from "@/lib/criticalAuth";
 
 // Mesma constante usada em /api/stay/transfer-debit — forma pré-cadastrada usada para "quitar" no
 // quarto de origem o valor movido para outro quarto.
@@ -75,13 +75,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Quarto/hóspede ATUAIS da hospedagem: o roomNumber gravado no lançamento é o do momento do
+    // pagamento (ex.: adiantamento feito antes de uma transferência de quarto).
+    const atual = await describeStay(tenantId, alvo.stayCheckinId);
+    const quartoAtual = atual.Quarto || alvo.roomNumber || "-";
     const gate = await gateCriticalEvent(req, session, {
       eventType: "ANULAR_LANCAMENTO_CAIXA",
       fingerprint: { cashTransactionId: alvo.id },
-      summary: `Anular lançamento de ${formatBRL(Number(alvo.amount))} (${alvo.paymentMethod}) no caixa${alvo.roomNumber ? ` — quarto ${alvo.roomNumber}` : ""}.`,
+      summary: `Anular lançamento de ${formatBRL(Number(alvo.amount))} (${alvo.paymentMethod}) no caixa — quarto ${quartoAtual}.`,
       details: {
-        Quarto: alvo.roomNumber || "-",
-        Hóspede: alvo.guestName || "-",
+        Quarto: quartoAtual,
+        ...(alvo.roomNumber && alvo.roomNumber !== quartoAtual ? { "Quarto no lançamento": alvo.roomNumber } : {}),
+        Hóspede: atual.Hóspede || alvo.guestName || "-",
         Valor: formatBRL(Number(alvo.amount)),
         "Forma de pagamento": alvo.paymentMethod,
         "Lançado em": alvo.createdAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),

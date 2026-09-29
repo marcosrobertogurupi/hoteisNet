@@ -1402,7 +1402,7 @@ export default function LancarPagamentoHospedagemModal({
                 </button>
 
                 <p className="text-[10px] text-red-500 italic font-semibold">
-                  *Para excluir um lançamento clica duas vezes com o botao esquerdo no mouse em cima do lançamento.
+                  *Para anular um lançamento clique duas vezes em cima dele (ou na lixeira). Lançamento já gravado no caixa não é excluído: fica anulado, visível para consulta.
                 </p>
               </div>
             </div>
