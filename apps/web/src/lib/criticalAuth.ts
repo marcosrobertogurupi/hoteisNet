@@ -93,7 +93,11 @@ function toPayload(row: {
     id: row.id,
     evento: CRITICAL_EVENT_LABELS[row.eventType as CriticalEventType] || row.eventType,
     resumo: row.summary,
-    detalhes: (row.details as Record<string, string>) || {},
+    // Gravado como lista de pares [rótulo, valor]: o jsonb do Postgres reordena as chaves de um
+    // objeto (por tamanho), o que embaralhava a ordem em que o autorizador lê os dados.
+    detalhes: Array.isArray(row.details)
+      ? Object.fromEntries(row.details as [string, string][])
+      : (row.details as Record<string, string>) || {},
     expiraEm: row.expiresAt.toISOString(),
   };
 }
@@ -124,7 +128,7 @@ export async function gateCriticalEvent(
         status: "EXECUTADA",
         fingerprintHash: hash,
         summary: input.summary,
-        details: input.details,
+        details: Object.entries(input.details),
         requestedById: me.id,
         requestedByName: me.name,
         requestedTerminal: terminal,
@@ -207,7 +211,7 @@ export async function gateCriticalEvent(
         status: "PENDENTE",
         fingerprintHash: hash,
         summary: input.summary,
-        details: input.details,
+        details: Object.entries(input.details),
         requestedById: session.userId,
         requestedByName: session.name,
         requestedTerminal: terminal,
