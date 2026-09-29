@@ -19,6 +19,8 @@ import {
 } from "@/utils/pdfGenerator";
 import CustomDatePicker from "@/components/CustomDatePicker";
 import { renderWhatsappTemplate } from "@/lib/whatsappMessages";
+import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
+import { countDailies } from "@/lib/dailyCountCore";
 
 // ─── Helpers (data local, mesmo padrão do LancarReservaModal) ─────────────────
 function getTodayDateStr(): string {
@@ -149,7 +151,7 @@ export default function ReservasMultiplasModal({
   // Desconto acima do limite em qualquer reserva do lote é evento crítico (lib/criticalAuth.ts):
   // uma única autorização cobre o lote inteiro.
   const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
-  const { theme, hotelName, defaultCheckInTime, defaultCheckOutTime } = useTheme();
+  const { theme, hotelName, defaultCheckInTime, defaultCheckOutTime, dailyCountRules } = useTheme();
   const toast = useToast();
   const { operatorId } = useOperator();
   const isDark = theme.isDark;
@@ -207,15 +209,13 @@ export default function ReservasMultiplasModal({
     if (selectedTariff && selectedTariff.pax) setAdults(selectedTariff.pax);
   }, [selectedTariff]);
 
-  // Recalcular diárias (noites)
+  // Diárias pelas horas e viradas de diária do hotel (countDailies, lib/dailyCountCore.ts) — nunca
+  // ceil(horas / 24). Mesma conta da base do desconto no servidor (reservationDiscountBase).
   useEffect(() => {
     try {
-      const d1 = new Date(dtChegadaLocal);
-      const d2 = new Date(dtSaidaLocal);
-      const diff = Math.max(1, Math.ceil((d2.getTime() - d1.getTime()) / 86400000));
-      setNights(diff);
+      setNights(countDailies(parseBrasiliaDateTime(dtChegadaLocal), parseBrasiliaDateTime(dtSaidaLocal), dailyCountRules));
     } catch { setNights(1); }
-  }, [dtChegadaLocal, dtSaidaLocal]);
+  }, [dtChegadaLocal, dtSaidaLocal, dailyCountRules]);
 
   // Carregar quartos
   useEffect(() => {

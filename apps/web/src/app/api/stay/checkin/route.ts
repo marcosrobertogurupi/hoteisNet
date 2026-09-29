@@ -12,6 +12,7 @@ import { dateOnlyBrasilia, parseBrasiliaDateTime, brDateKey, brTimeHHMM } from "
 import { gateCriticalEvent, releaseCriticalAuthorization, formatBRL } from "@/lib/criticalAuth";
 import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
 import { resolveOperator } from "@/lib/operator";
+import { countStayDailies, getTenantDailyRules, normalizeDailyRules } from "@/lib/dailyCount";
 import { syncHousekeepingTasksWithRoomStatus, ARRUMACAO_INTERRUPTED_NOTE } from "@/lib/housekeeping";
 
 const DEFAULT_TENANT_ID = "tenant-hoteisnet-demo";
@@ -298,11 +299,12 @@ export async function POST(req: NextRequest) {
     const discountValue = Math.max(0, Number(discount) || 0);
     if (discountValue > 0) {
       const dailyRateNumPre = Number(dailyRate) || 0;
-      const nightsPre = Math.max(
-        1,
-        Math.round(
-          (dateOnlyBrasilia(parseBrasiliaDateTime(checkOutDate)).getTime() - dateOnlyBrasilia(parseBrasiliaDateTime(checkInDate)).getTime()) / 86_400_000
-        )
+      // Diárias pelas horas e viradas do hotel (lib/dailyCountCore.ts), sem a da chegada antecipada,
+      // que entra à parte em earlyChargePre — igual ao nightsBackend da transação.
+      const nightsPre = countStayDailies(
+        parseBrasiliaDateTime(checkInDate),
+        parseBrasiliaDateTime(checkOutDate),
+        await getTenantDailyRules(prisma, session.tenantId)
       );
       let earlyChargePre = 0;
       const eaChoicePre: string | null = earlyArrival?.choice || null;
@@ -412,6 +414,7 @@ export async function POST(req: NextRequest) {
           fnrhMandatoryBeforeCheckin: true,
           standardCheckInTime: true,
           earlyCheckinToleranceMinutes: true,
+          dailyRolloverTime: true,
         },
       });
 
@@ -546,12 +549,12 @@ export async function POST(req: NextRequest) {
       // Valor total da hospedagem para o débito automático no saldo do hóspede. Nunca fica abaixo
       // de (diárias do período + chegada antecipada) — protege contra um body que mande a escolha
       // de chegada antecipada mas um totalAmount sem ela.
-      const nightsBackend = Math.max(
-        1,
-        Math.round(
-          (dateOnlyBrasilia(checkOutAt).getTime() - dateOnlyBrasilia(checkInAt).getTime()) / 86_400_000
-        )
-      );
+      // Diárias do período pelas horas e viradas do hotel (countDailies, lib/dailyCountCore.ts) —
+      // nunca pela diferença de datas. A diária da chegada antecipada/madrugada fica FORA desta
+      // conta (countStayDailies): ela já é cobrada à parte pela decisão do painel
+      // (earlyArrivalChargeAmount / EARLY_ARRIVAL), e contá-la aqui cobraria em dobro. É a mesma
+      // base que o rollover usa para separar diária prevista (debitada aqui) de diária extra.
+      const nightsBackend = countStayDailies(checkInAt, checkOutAt, normalizeDailyRules(tenantSettings));
       const guestDebitTotal = Math.max(
         Number(totalAmount || dailyRate || 0),
         nightsBackend * dailyRateNum + earlyArrivalChargeAmount

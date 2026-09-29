@@ -5,16 +5,10 @@ import { logActivity } from "@/lib/audit";
 import { getSessionUser, getClientIp, getTerminalName } from "@/lib/auth";
 import { findConflictingReservation, lockRoomsForReservation } from "@/lib/reservationHelpers";
 import { adjustGuestStayDebit } from "@/lib/guestStayDebit";
-import { dateOnlyBrasilia, parseBrasiliaDateTime } from "@/lib/brasiliaDate";
+import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
 import { authorizeDiscount, releaseDiscountAuthorization, type DiscountAuthResult } from "@/lib/discountAuth";
 import { describeStay } from "@/lib/criticalAuth";
-
-function nightsBetween(from: Date, to: Date): number {
-  return Math.max(
-    0,
-    Math.round((dateOnlyBrasilia(to).getTime() - dateOnlyBrasilia(from).getTime()) / 86_400_000)
-  );
-}
+import { countStayDailies, getTenantDailyRules } from "@/lib/dailyCount";
 
 // PATCH /api/stay/period — grava no banco a previsão de saída (e, se informada, a tarifa da
 // diária corrente) escolhida no modal "Alterar Período da Hospedagem". Esta é a ÚNICA fonte de
@@ -107,7 +101,20 @@ export async function PATCH(req: NextRequest) {
     }
 
     const result = await txWithRetry(async (tx) => {
-      const stay = await tx.stayCheckin.findFirst({ where: { id: stayCheckinId, tenantId: session.tenantId! } });
+      const stay = await tx.stayCheckin.findFirst({
+        where: { id: stayCheckinId, tenantId: session.tenantId! },
+        select: {
+          id: true,
+          tenantId: true,
+          roomId: true,
+          reservationId: true,
+          primaryGuestId: true,
+          checkInDate: true,
+          expectedCheckOut: true,
+          dailiesCount: true,
+          isClosed: true,
+        },
+      });
       if (!stay) {
         throw new Error(`Hospedagem ${stayCheckinId} não encontrada.`);
       }
@@ -185,9 +192,21 @@ export async function PATCH(req: NextRequest) {
       //    debita o que passa da previsão de saída, que já é a nova — e sobraria crédito no
       //    check-out. Encurtar a previsão NÃO credita nada automaticamente: reduzir a conta de uma
       //    hospedagem é ato deliberado (desconto/estorno pelo operador), não efeito colateral.
+      // Diárias de cada previsão pelas horas e viradas do hotel (countDailies, lib/dailyCountCore.ts)
+      // — nunca pela diferença de datas: prorrogar a saída de 12:00 para 16:00 do mesmo dia passa da
+      // virada e é +1 diária, que a virada automática vai lançar sem debitar (está dentro da nova
+      // previsão). Mesma base do check-in (countStayDailies, sem a diária da chegada antecipada).
+      // Diárias já lançadas além da previsão antiga (overstay) já foram debitadas pela virada como
+      // extras: a base é o maior entre a previsão antiga e o que já foi lançado (dailiesCount), senão
+      // prorrogar uma hospedagem vencida debitava essas diárias pela segunda vez.
+      const dailyRules = await getTenantDailyRules(tx, stay.tenantId);
+      const alreadyDebited = Math.max(
+        countStayDailies(stay.checkInDate, prevExpectedCheckOut, dailyRules),
+        stay.dailiesCount
+      );
       const addedNights = Math.max(
         0,
-        nightsBetween(stay.checkInDate, newExpectedCheckOut) - nightsBetween(stay.checkInDate, prevExpectedCheckOut)
+        countStayDailies(stay.checkInDate, newExpectedCheckOut, dailyRules) - alreadyDebited
       );
       const periodDelta = addedNights * effectiveRate;
       const totalBalanceDelta = dailyRateDelta + periodDelta;

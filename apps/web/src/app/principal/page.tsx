@@ -61,6 +61,7 @@ import SelecaoReservaQuartoModal, { ReservaItemQuarto } from "@/components/Selec
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { usePolling } from "@/lib/usePolling";
 import { brDateKey } from "@/lib/brasiliaDate";
+import { countStayDailies } from "@/lib/dailyCountCore";
 import AbrirOsManutencaoModal from "@/components/manutencao/AbrirOsManutencaoModal";
 import OsManutencaoModal from "@/components/manutencao/OsManutencaoModal";
 import { useCriticalAuthorization, withCriticalAuthorization } from "@/components/CriticalAuthorizationModal";
@@ -136,7 +137,7 @@ export default function TenantDashboardPage() {
   // Janela de autorização de evento crítico (desconto acima do limite no check-in e na alteração
   // de período) — ver lib/criticalAuth.ts.
   const { requestAuthorization, authorizationModal } = useCriticalAuthorization();
-  const { theme, hotelLogo, hotelName, showLogoInPrint, whatsappSoundEnabled } = useTheme();
+  const { theme, hotelLogo, hotelName, showLogoInPrint, whatsappSoundEnabled, dailyCountRules } = useTheme();
   const toast = useToast();
   const { operatorId: activeOperatorId, operatorName: activeOperatorName } = useOperator();
 
@@ -826,7 +827,9 @@ export default function TenantDashboardPage() {
     // configurado em Tenant.dailyRolloverTime — ver /api/stay/rollover) além das diárias originalmente
     // reservadas (diferença entre check-in e a saída prevista). Nunca recalculado por diferença de
     // datas/horas no front, que ignorava o horário de virada e gerava diárias extras precoces.
-    const reservedNights = Math.max(1, Math.round((expectedCheckOut.getTime() - checkIn.getTime()) / msPerNight));
+    // Diárias previstas = contagem canônica pelas horas e viradas do hotel (countStayDailies, sem a
+    // da chegada antecipada, que não entra em `nights`) — a mesma régua do rollover para "extra".
+    const reservedNights = countStayDailies(checkIn, expectedCheckOut, dailyCountRules);
     const extraDays = Math.max(0, nights - reservedNights);
 
     // Cobrança de chegada de madrugada/antecipada: já está somada em totalDaily (o backend a
@@ -899,7 +902,7 @@ export default function TenantDashboardPage() {
       totalPago,
       totalFaturado,
     };
-  }, [activeStayDetail, activeStayPayments, installmentPaymentMethodNames]);
+  }, [activeStayDetail, activeStayPayments, installmentPaymentMethodNames, dailyCountRules]);
 
   // Quartos elegíveis como destino na Transferência de Débitos: ocupados, com hóspede, exceto o
   // próprio quarto de origem (o menu que abre o modal já garante que a origem está ocupada).

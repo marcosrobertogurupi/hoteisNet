@@ -21,6 +21,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
 import { generateReservaPdfBase64, PdfReservaData } from "@/utils/pdfGenerator";
 import { ReservationItem } from "@/components/ReservationGridMap";
+import { parseBrasiliaDateTime } from "@/lib/brasiliaDate";
+import { countDailies } from "@/lib/dailyCountCore";
 
 interface VisualizarReservaModalProps {
   isOpen: boolean;
@@ -40,6 +42,7 @@ export const VisualizarReservaModal: React.FC<VisualizarReservaModalProps> = ({
     hotelName,
     defaultCheckInTime,
     defaultCheckOutTime,
+    dailyCountRules,
   } = useTheme();
 
   const hotelCnpj = "40.904.811/0001-31";
@@ -64,14 +67,17 @@ export const VisualizarReservaModal: React.FC<VisualizarReservaModalProps> = ({
     return dateStr;
   };
 
-  // Calculate total nights
+  // Diárias previstas pelas horas e viradas de diária do hotel (countDailies, lib/dailyCountCore.ts)
+  // — nunca pela diferença de datas. Data e hora da reserva são horário de Brasília.
   const calcNights = () => {
     try {
-      const d1 = new Date(reservation.checkInDate);
-      const d2 = new Date(reservation.checkOutDate);
-      const diffTime = Math.abs(d2.getTime() - d1.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      return diffDays > 0 ? diffDays : 1;
+      const checkIn = parseBrasiliaDateTime(
+        `${reservation.checkInDate}T${reservation.checkInTime || defaultCheckInTime || "14:00"}`
+      );
+      const checkOut = parseBrasiliaDateTime(
+        `${reservation.checkOutDate}T${reservation.checkOutTime || defaultCheckOutTime || "12:00"}`
+      );
+      return countDailies(checkIn, checkOut, dailyCountRules);
     } catch (e) {
       return 1;
     }
