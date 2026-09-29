@@ -667,8 +667,8 @@ const KB_AUTOFIX_TOPIC_KEYS: KnowledgeTopicKey[] = [
   KnowledgeTopicKey.CHECKIN_CHECKOUT,
 ];
 
-// Horários padrão de check-in/out — mesma constante assumida em todo o sistema quando não há
-// horário definido (ver apps/web/src/lib/aiAgent/tools.ts).
+// Fallback dos horários padrão de check-in/out quando Tenant.standardCheckInTime/OutTime vier vazio
+// (a fonte de verdade são as Configurações — ver apps/web/src/lib/aiAgent/tools.ts).
 const KB_DEFAULT_CHECK_IN_TIME = "14:00";
 const KB_DEFAULT_CHECK_OUT_TIME = "12:00";
 
@@ -693,7 +693,14 @@ async function buildKnowledgeFacts(tenantId: string): Promise<KnowledgeFact[]> {
   const [tenant, services, cheapestTariff] = await Promise.all([
     prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { phone: true, address: true, breakfastHours: true, breakfastHoursHoliday: true },
+      select: {
+        phone: true,
+        address: true,
+        breakfastHours: true,
+        breakfastHoursHoliday: true,
+        standardCheckInTime: true,
+        standardCheckOutTime: true,
+      },
     }),
     prisma.hotelService.findMany({ where: { tenantId, active: true }, select: { description: true, price: true } }),
     prisma.tariff.findFirst({ where: { tenantId, active: true }, orderBy: { price: "asc" }, select: { price: true } }),
@@ -706,8 +713,8 @@ async function buildKnowledgeFacts(tenantId: string): Promise<KnowledgeFact[]> {
 
   push("cafe_semana", "Horário do café da manhã (segunda a sábado)", tenant?.breakfastHours);
   push("cafe_domingo", "Horário do café da manhã (domingos e feriados)", tenant?.breakfastHoursHoliday);
-  push("checkin", "Horário padrão de check-in", KB_DEFAULT_CHECK_IN_TIME);
-  push("checkout", "Horário padrão de check-out", KB_DEFAULT_CHECK_OUT_TIME);
+  push("checkin", "Horário padrão de check-in", tenant?.standardCheckInTime || KB_DEFAULT_CHECK_IN_TIME);
+  push("checkout", "Horário padrão de check-out", tenant?.standardCheckOutTime || KB_DEFAULT_CHECK_OUT_TIME);
   push("telefone", "Telefone do hotel", tenant?.phone);
   push("endereco", "Endereço do hotel", tenant?.address);
   if (cheapestTariff) push("diaria_minima", "Diária a partir de", brl(Number(cheapestTariff.price)));
@@ -870,7 +877,7 @@ async function runKnowledgeDrift(
     `- valorCorreto: o valor EXATO do fato, sem mudar a formatação`,
     `- confianca: número de 0 a 1`,
     ``,
-    `Regras: só reporte divergência de VALOR concreto (horário, preço, telefone, endereço). NUNCA reporte diferença de redação, política, estilo ou informação que está apenas faltando. Se não houver divergência clara, devolva "divergencias": [].`,
+    `Regras: só reporte divergência de VALOR concreto (horário, preço, telefone, endereço). NUNCA reporte diferença de redação, política, estilo ou informação que está apenas faltando. Um texto que apenas remete ao cadastro/configurações (ex.: "horário definido em configurações") NÃO é divergência. Se não houver divergência clara, devolva "divergencias": [].`,
   ].join("\n");
 
   let result: { divergencias: DriftDivergence[] };
@@ -912,6 +919,9 @@ async function runKnowledgeDrift(
     if (d.valorCorreto.trim() !== fact.value.trim()) continue; // tem que usar o valor real do cadastro
     const stale = (d.valorNoTexto || "").trim();
     if (!stale || stale === fact.value.trim()) continue;
+    // O trecho tem que ser um VALOR (horário/preço/telefone). Um texto que só remete ao cadastro
+    // ("horário já definido em configurações") não diverge de nada — é o hotel usando a fonte única.
+    if (!KB_VALUE_TOKEN_RE.test(stale)) continue;
     if (!topic.content.includes(stale)) continue; // o valor antigo tem que existir literalmente no texto
     const newContent = topic.content.split(stale).join(fact.value);
     if (newContent === topic.content) continue;

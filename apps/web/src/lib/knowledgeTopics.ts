@@ -32,7 +32,7 @@ export const KNOWLEDGE_TOPIC_SEEDS: KnowledgeTopicSeed[] = [
     key: "CHECKIN_CHECKOUT",
     title: "Check-in e check-out",
     guide:
-      "O agente assume check-in às 14:00 e check-out às 12:00. Preencha aqui se o seu hotel usa outros horários, e o resto:\n- Se dá para fazer early check-in / late check-out, com que custo e se depende de disponibilidade\n- Documentos exigidos na chegada e idade mínima para se hospedar\n- Como o hóspede entra se chegar de madrugada\n- Se existe check-in online / pré-check-in",
+      "O agente já sabe os horários padrão de check-in e check-out das Configurações — não repita isso aqui (se mudar, mude só lá).\n\nPreencha o resto:\n- Se dá para fazer early check-in / late check-out, com que custo e se depende de disponibilidade\n- Documentos exigidos na chegada e idade mínima para se hospedar\n- Como o hóspede entra se chegar de madrugada\n- Se existe check-in online / pré-check-in",
   },
   {
     key: "LOCALIZACAO_ACESSO",
