@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Building2, Plus, Search, X, Check, Loader2, Copy, KeyRound, Pencil, LogIn } from "lucide-react";
+import { Building2, Plus, Search, X, Check, Loader2, Copy, KeyRound, Pencil, LogIn, Users } from "lucide-react";
 import { useToast } from "@/context/ToastContext";
+import TenantUsersModal from "./TenantUsersModal";
 import { cadastroUI } from "../../principal/cadastros/_ui";
 
 const c = cadastroUI(false); // painel admin: tema claro fixo
@@ -105,6 +106,7 @@ export default function AdminTenantsPage() {
   const pageSize = 25;
 
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
+  const [usersFor, setUsersFor] = useState<null | { id: string; label: string }>(null);
 
   useEffect(() => {
     fetch("/api/admin/auth/me").then((r) => r.json()).then((d) => {
@@ -378,6 +380,13 @@ export default function AdminTenantsPage() {
                           </button>
                         )}
                         <button
+                          onClick={() => setUsersFor({ id: t.id, label: t.tradeName || t.name })}
+                          className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-emerald-600 hover:text-white transition"
+                          title="Usuários do assinante"
+                        >
+                          <Users className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => openEdit(t.id)}
                           className="p-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-sky-600 hover:text-white transition"
                           title={canEdit ? "Editar" : "Ver ficha"}
@@ -401,6 +410,8 @@ export default function AdminTenantsPage() {
           </div>
         </div>
       </div>
+
+      {usersFor && <TenantUsersModal tenant={usersFor} canEdit={canEdit} onClose={() => setUsersFor(null)} onChanged={load} />}
 
       {modal && (
         <div className={c.modalBackdrop}>
