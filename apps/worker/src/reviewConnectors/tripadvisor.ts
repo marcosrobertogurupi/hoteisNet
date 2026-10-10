@@ -11,7 +11,7 @@
 // APIFY_TOKEN precisa ser configurado (Railway) para este conector funcionar; sem ele, retorna erro
 // tratado (não lança exceção) para reviewsSync.ts registrar no conector como qualquer outra falha.
 import type { NormalizedReviewInput, ReviewConnectorResult } from "./types";
-import { apifyHttpErrorResult } from "./apifyErrors";
+import { runApifyActorSync } from "./apifyRun";
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN || "";
 const ACTOR_ID = "web_wanderer~tripadvisor-reviews-scraper";
@@ -81,30 +81,9 @@ export async function fetchTripAdvisorReviews(params: {
     dateFrom: reviewsStartDate,
   };
 
-  const url = `https://api.apify.com/v2/acts/${ACTOR_ID}/run-sync-get-dataset-items?token=${encodeURIComponent(APIFY_TOKEN)}`;
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-      signal: AbortSignal.timeout(APIFY_TIMEOUT_MS),
-    });
-  } catch (err: any) {
-    return { reviewsFetched: 0, reviews: [], errorMessage: `Falha de rede ao chamar Apify: ${err?.message || err}` };
-  }
-
-  if (!response.ok) {
-    return apifyHttpErrorResult(response.status, await response.text().catch(() => ""));
-  }
-
-  let items: ApifyTripAdvisorReviewItem[];
-  try {
-    items = (await response.json()) as ApifyTripAdvisorReviewItem[];
-  } catch (err: any) {
-    return { reviewsFetched: 0, reviews: [], errorMessage: `Resposta do Apify não é JSON válido: ${err?.message || err}` };
-  }
+  const run = await runApifyActorSync<ApifyTripAdvisorReviewItem>(ACTOR_ID, input, APIFY_TIMEOUT_MS);
+  if ("error" in run) return run.error;
+  const items = run.items;
 
   const reviews: NormalizedReviewInput[] = [];
   for (const item of items) {

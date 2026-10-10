@@ -26,4 +26,8 @@ export interface ReviewConnectorResult {
   // apifyErrors.ts) — reviewsSync.ts pausa todas as coletas via Apify em vez de contar como erro
   // deste conector.
   apifyQuotaExceeded?: boolean;
+  // A coleta falhou DEPOIS de o ator rodar na Apify (timeout, falha dentro do ator) — a execução já
+  // foi cobrada, então reviewsSync.ts só tenta de novo na cadência normal do canal, nunca no retry
+  // curto (ver apifyRun.ts).
+  apifyRunCharged?: boolean;
 }

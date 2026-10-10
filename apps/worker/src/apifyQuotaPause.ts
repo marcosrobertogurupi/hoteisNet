@@ -1,9 +1,10 @@
 import type { PrismaClient } from "@prisma/client";
 import { sendPlatformWhatsApp } from "./uazapiSend";
-import { APIFY_ACCOUNT_BLOCKED_ERROR_TYPE } from "./reviewConnectors/apifyErrors";
+import { APIFY_OUT_OF_BUDGET_ERROR_TYPES } from "./reviewConnectors/apifyErrors";
 
 // Pausa global das coletas de reviews via Apify quando a conta da plataforma estoura a cota mensal
-// (HTTP 403 `platform-feature-disabled`, ver reviewConnectors/apifyErrors.ts). Incidente real de
+// (HTTP 403 `platform-feature-disabled`, ou o 402/400 de saldo insuficiente que vem antes dele — ver
+// APIFY_OUT_OF_BUDGET_ERROR_TYPES em reviewConnectors/apifyErrors.ts). Incidente real de
 // 22-24/09/2026: com a cota estourada, cada ciclo de 30min do cron tentava de novo todo conector
 // Apify — 96 ReviewSyncJob falhos por dia, sem nenhum aviso ao dono da plataforma, e os conectores
 // ainda caminhavam para fora da janela de retry de 72h (ficariam parados para sempre mesmo depois da
@@ -193,7 +194,10 @@ export async function pauseApifyForQuota(
   // com a mensagem amigável na tela do assinante.
   await prisma.reviewChannelConnector
     .updateMany({
-      where: { status: "ERROR", errorMessage: { contains: APIFY_ACCOUNT_BLOCKED_ERROR_TYPE } },
+      where: {
+        status: "ERROR",
+        OR: APIFY_OUT_OF_BUDGET_ERROR_TYPES.map((type) => ({ errorMessage: { contains: type } })),
+      },
       data: { status: "ACTIVE", errorMessage: APIFY_PAUSED_CONNECTOR_MESSAGE, errorCount: 0, firstErrorAt: null },
     })
     .catch((err: any) => console.error("[reviews-sync] falha ao normalizar conectores pausados:", err?.message || err));
