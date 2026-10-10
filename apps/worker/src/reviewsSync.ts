@@ -22,7 +22,7 @@ import {
   pauseApifyForQuota,
   type ApifyQuotaGate,
 } from "./apifyQuotaPause";
-import { APIFY_ACCOUNT_BLOCKED_ERROR_TYPE } from "./reviewConnectors/apifyErrors";
+import { APIFY_OUT_OF_BUDGET_ERROR_TYPES } from "./reviewConnectors/apifyErrors";
 import type { NormalizedReviewInput, ReviewConnectorResult } from "./reviewConnectors/types";
 
 const prisma = new PrismaClient();
@@ -34,6 +34,17 @@ const SYNC_BATCH_SIZE = 10;
 // anterior não pegou todos — MIN_SYNC_INTERVAL_MINUTES é quem de fato espaça as chamadas pagas ao
 // Apify/Graph API).
 const MIN_SYNC_INTERVAL_MINUTES = 12 * 60;
+// Canais com cadência própria, mais espaçada que MIN_SYNC_INTERVAL_MINUTES. Reclame Aqui: 1x por
+// semana — o ator custa ~US$ 0,25 por execução mesmo sem nada novo (ver reclameAqui.ts) e foi ~96%
+// da conta da Apify no ciclo de 04-08/10/2026; reviews é recurso não essencial e não pode pesar no
+// custo da plataforma (decisão do dono da plataforma em 10/10/2026).
+const SYNC_INTERVAL_MINUTES_BY_CHANNEL: Partial<Record<ReviewChannel, number>> = {
+  [ReviewChannel.RECLAME_AQUI]: 7 * 24 * 60,
+};
+const LONG_INTERVAL_CHANNELS = Object.keys(SYNC_INTERVAL_MINUTES_BY_CHANNEL) as ReviewChannel[];
+function syncIntervalMs(channel: ReviewChannel): number {
+  return (SYNC_INTERVAL_MINUTES_BY_CHANNEL[channel] ?? MIN_SYNC_INTERVAL_MINUTES) * 60 * 1000;
+}
 // Nenhum canal importa histórico — pedido explícito do assinante: "o comportamento de todos os
 // canais é procurar reviews recentes e nunca histórico ... isso não importa para o hotel". Reviews
 // publicados antes desta janela são descartados no pós-processamento (filterRecentReviews), mesmo
@@ -49,6 +60,12 @@ const RUNNING_TIMEOUT_MINUTES = 20;
 // referência que originou este módulo).
 const RETRY_WINDOW_HOURS = 72;
 const ERROR_BACKOFF_MINUTES = 30;
+// Canal de cadência longa ganha janela proporcional (3 tentativas na cadência dele) — com a janela
+// fixa de 72h, uma única falha do Reclame Aqui (próxima tentativa só 7 dias depois) já o deixaria
+// parado para sempre.
+function retryWindowMs(channel: ReviewChannel): number {
+  return Math.max(RETRY_WINDOW_HOURS * 60 * 60 * 1000, 3 * syncIntervalMs(channel));
+}
 
 // Só as colunas que o ciclo de sincronização usa — o token OAuth cifrado entra porque decide o
 // caminho do Facebook/Instagram (Graph API x Apify).
@@ -148,11 +165,16 @@ async function runReviewsSyncInner(): Promise<void> {
         {
           OR: [
             { status: "ACTIVE" },
-            { status: "ERROR", firstErrorAt: { gte: retryWindowStart } },
+            { status: "ERROR", channel: { notIn: LONG_INTERVAL_CHANNELS }, firstErrorAt: { gte: retryWindowStart } },
+            ...LONG_INTERVAL_CHANNELS.map((channel) => ({
+              status: "ERROR" as const,
+              channel,
+              firstErrorAt: { gte: new Date(now.getTime() - retryWindowMs(channel)) },
+            })),
             // Cota da Apify estourada não é defeito do conector: um conector que saiu da janela de
             // 72h por causa dela (caso real de 22-26/09/2026, antes desta pausa existir) não pode
             // ficar parado para sempre — volta a ser devido e é normalizado por pauseApifyForQuota.
-            { status: "ERROR", errorMessage: { contains: APIFY_ACCOUNT_BLOCKED_ERROR_TYPE } },
+            ...APIFY_OUT_OF_BUDGET_ERROR_TYPES.map((type) => ({ status: "ERROR" as const, errorMessage: { contains: type } })),
           ],
         },
         ...(apifyPaused ? [NOT_APIFY_WHERE] : []),
@@ -324,12 +346,17 @@ async function syncConnector(connector: DueConnector, apifyGate: ApifyQuotaGate)
     select: { id: true },
   });
 
+  // Falha comum (nada foi cobrado): retry curto. Falha depois de o ator já ter rodado na Apify
+  // (timeout etc., ver apifyRun.ts): só na cadência normal do canal — o retry de 30min sobre uma
+  // execução já paga foi o que gastou a cota mensal inteira da Apify em 4 dias (04-08/10/2026).
+  let retryAfterMs = ERROR_BACKOFF_MINUTES * 60 * 1000;
   try {
     const result = await fetchChannelReviews(connector);
     if (result.apifyQuotaExceeded && result.errorMessage) {
       await handleApifyQuotaExceeded(connector, job.id, result.errorMessage, apifyGate);
       return;
     }
+    if (result.apifyRunCharged) retryAfterMs = syncIntervalMs(connector.channel);
     if (result.errorMessage) throw new Error(result.errorMessage);
     if (usesApify(connector)) await markApifyResumed(prisma, apifyGate);
 
@@ -447,7 +474,7 @@ async function syncConnector(connector: DueConnector, apifyGate: ApifyQuotaGate)
       data: {
         status: "ACTIVE",
         lastSyncAt: new Date(),
-        nextSyncAt: new Date(Date.now() + MIN_SYNC_INTERVAL_MINUTES * 60 * 1000),
+        nextSyncAt: new Date(Date.now() + syncIntervalMs(connector.channel)),
         errorMessage: null,
         errorCount: 0,
         firstErrorAt: null,
@@ -467,7 +494,7 @@ async function syncConnector(connector: DueConnector, apifyGate: ApifyQuotaGate)
         errorMessage: message,
         errorCount: { increment: 1 },
         firstErrorAt: connector.firstErrorAt ?? new Date(),
-        nextSyncAt: new Date(Date.now() + ERROR_BACKOFF_MINUTES * 60 * 1000),
+        nextSyncAt: new Date(Date.now() + retryAfterMs),
       },
     });
     console.error(`[reviews-sync] falha — tenant=${connector.tenantId} canal=${connector.channel}:`, message);

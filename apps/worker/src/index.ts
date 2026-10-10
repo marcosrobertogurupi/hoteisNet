@@ -100,8 +100,8 @@ cron.schedule("17 * * * *", () => {
 
 // Monitoramento de reviews (Google Maps, TripAdvisor, Booking, Facebook, Instagram, Reclame Aqui).
 // O cron dispara a cada 30min só para não deixar um conector devido esperando demais; a cadência
-// real de coleta é 2x ao dia por conector (pedido explícito do assinante), imposta por
-// MIN_SYNC_INTERVAL_MINUTES dentro de reviewsSync.ts, não por este intervalo do cron.
+// real de coleta é 2x ao dia por conector (pedido explícito do assinante; Reclame Aqui 1x por semana,
+// por custo), imposta por syncIntervalMs dentro de reviewsSync.ts, não por este intervalo do cron.
 cron.schedule("*/30 * * * *", () => {
   runReviewsSync().catch((err) => {
     console.error("[worker] Erro ao rodar sincronização de reviews:", err);
