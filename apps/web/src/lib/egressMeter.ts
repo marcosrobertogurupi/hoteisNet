@@ -83,6 +83,7 @@ export async function flushEgress(): Promise<void> {
         } catch (err) {
           // Tenant removido → descarta; qualquer outro erro re-coloca no buffer para o próximo flush.
           if (isForeignKeyViolation(err)) return;
+          console.error(`[egressMeter] falha ao gravar egress do tenant ${tenantId}; recolocado no buffer:`, err);
           const back = buffer.get(tenantId) ?? { bytes: 0, count: 0 };
           back.bytes += b.bytes;
           back.count += b.count;
