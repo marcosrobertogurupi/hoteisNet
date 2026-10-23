@@ -3,6 +3,14 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser, requireAdmin } from "@/lib/auth";
 import { ReviewChannel } from "@prisma/client";
 
+// Canais coletados por scraping pago — mesmo critério de APIFY_CHANNELS em apps/worker/src/reviewsSync.ts.
+const APIFY_CHANNELS: ReviewChannel[] = [
+  ReviewChannel.GOOGLE_MAPS,
+  ReviewChannel.TRIPADVISOR,
+  ReviewChannel.BOOKING,
+  ReviewChannel.RECLAME_AQUI,
+];
+
 // GET /api/tenant/reviews/connectors — lista os 6 canais possíveis do módulo de reviews, com a
 // config já salva (quando existe). Sempre devolve as 6 linhas de uma vez (uma sintética,
 // PENDING_AUTH, para o canal ainda não configurado) para a tela desenhar os cards sem um segundo
@@ -74,6 +82,26 @@ export async function PATCH(req: NextRequest) {
         { success: false, error: "Identificador do negócio no canal é obrigatório." },
         { status: 400 }
       );
+    }
+
+    // Tenant de demonstração não pode ativar coleta paga (Apify) — ver reviewsSync.ts. Facebook só
+    // usa Apify quando não há OAuth conectado; Instagram nunca usa.
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { isDemo: true } });
+    if (tenant?.isDemo) {
+      let paid = APIFY_CHANNELS.includes(channel);
+      if (channel === ReviewChannel.FACEBOOK) {
+        const existing = await prisma.reviewChannelConnector.findUnique({
+          where: { tenantId_channel: { tenantId, channel } },
+          select: { oauthAccessTokenEnc: true },
+        });
+        paid = !existing?.oauthAccessTokenEnc;
+      }
+      if (paid) {
+        return NextResponse.json(
+          { success: false, error: "Hotel de demonstração não coleta reviews por serviço pago (Apify)." },
+          { status: 403 }
+        );
+      }
     }
 
     const connector = await prisma.reviewChannelConnector.upsert({

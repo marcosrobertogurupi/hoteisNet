@@ -178,6 +178,8 @@ async function runReviewsSyncInner(): Promise<void> {
           ],
         },
         ...(apifyPaused ? [NOT_APIFY_WHERE] : []),
+        // Tenant de demonstração nunca gasta Apify, mesmo que alguém reative um conector dele.
+        { OR: [{ tenant: { isDemo: false } }, NOT_APIFY_WHERE] },
       ],
       tenant: { status: { notIn: [TenantStatus.SUSPENDED, TenantStatus.CANCELLED] } },
     },

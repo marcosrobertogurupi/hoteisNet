@@ -186,6 +186,10 @@ model Tenant {
   // exclusivo do Painel SuperAdmin, distinto da cota mensal: um assinante pode ter cota > 0 e
   // ainda assim estar com o recurso desabilitado no plano contratado.
   cpfQueryEnabled            Boolean                 @default(true)
+  // Tenant de demonstração/teste: nunca coleta reviews por scraping pago (Apify). Sem isso, um conector
+  // de demo apontado para um negócio real gasta a cota da plataforma e gera alertas de review crítico
+  // de terceiros (incidente de 04-10/10/2026). Só travado/destravado por SQL/painel da plataforma.
+  isDemo                     Boolean                 @default(false)
   // Percentual máximo de desconto que um operador comum pode aplicar no check-in sem autorização
   // de administrador (ShieldCheck/AdminAuthorizationModal). Configurável pelo próprio assinante em
   // Configurações — acima desse percentual, exige senha de admin, igual à cortesia de madrugada.
