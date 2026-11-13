@@ -25,10 +25,9 @@ async function main() {
       tenantId: true,
       roomId: true,
       reservationId: true,
-      totalDaily: true,
       totalConsumption: true,
+      otherDebits: true,
       discount: true,
-      totalAdvance: true,
     },
   });
   console.log(`Hospedagens abertas encontradas: ${stays.length}`);
@@ -40,12 +39,17 @@ async function main() {
   for (const s of stays) {
     try {
       await prisma.$transaction(async (tx) => {
-        const pagos = await tx.cashTransaction.aggregate({
-          where: { stayCheckinId: s.id, annulledAt: null, countsInCashTotal: true, type: "ENTRADA" },
-          _sum: { amount: true },
-        });
+        // Mesmas fórmulas do check-out normal (PATCH /api/stay/checkin).
+        const [cargas, pagos] = await Promise.all([
+          tx.stayCharge.aggregate({ where: { stayCheckinId: s.id }, _sum: { amount: true } }),
+          tx.cashTransaction.aggregate({
+            where: { stayCheckinId: s.id, type: "ENTRADA", annulledAt: null },
+            _sum: { amount: true },
+          }),
+        ]);
         const totalPago = Number(pagos._sum.amount ?? 0);
-        const bruto = Number(s.totalDaily) + Number(s.totalConsumption) - Number(s.discount);
+        const bruto =
+          Number(cargas._sum.amount ?? 0) + Number(s.totalConsumption) + Number(s.otherDebits) - Number(s.discount);
         const saldo = Math.max(0, bruto - totalPago);
 
         await tx.stayCheckin.updateMany({
